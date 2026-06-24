@@ -1,0 +1,31 @@
+# Deployment configuration for mStocks protocol.
+# Read natively by `script/Deploy.s.sol` via Foundry's vm.parseToml* cheatcodes.
+#
+# Address fields set to the zero address (0x0000...0000) fall back to the
+# broadcaster (the EOA signing the transactions).
+
+admin = "0x0000000000000000000000000000000000000000"
+proxyAdmin = "0x0000000000000000000000000000000000000000"
+
+# Optional role grants performed after each contract is deployed.
+# Each list contains addresses that will be granted the named role.
+# Role admin for every role below is DEFAULT_ADMIN_ROLE — grants are only emitted
+# when the broadcaster IS the admin; otherwise the script skips them and prints
+# a hint so the operator can grant them manually from the admin account.
+[compliance]
+opsRole = []        # OPS_ROLE on Compliance        — manage blocklist + sanctions
+complianceRole = [] # COMPLIANCE_ROLE on Compliance — manage blocklist + sanctions
+
+[pauseManager]
+opsRole = []        # OPS_ROLE on PauseManager      — pause/unpause tokens
+
+# Optional initial-token deployment.
+# Remove the entire `[token]` block to skip the first token deploy.
+[token]
+name = "Apple Inc."
+symbol = "AAPL"
+identifier = "US0378331005"
+# Defaults to top-level `admin` if zero.
+admin = "0x0000000000000000000000000000000000000000"
+# Addresses granted ISSUER_ROLE on the new token.
+issuers = []
