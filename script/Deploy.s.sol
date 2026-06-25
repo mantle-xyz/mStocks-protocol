@@ -10,26 +10,39 @@ import {SecuritiesToken} from "../src/securitiesToken/SecuritiesToken.sol";
 
 /**
  * @title  Deploy
- * @notice Full-stack deployment script driven by config.toml.
+ * @notice Deployment entry points, driven by config.toml.
  *
- *         Usage:
+ *         Entry points (use --sig to pick which one):
+ *
+ *           run()
+ *             Deploys the full stack: Compliance, PauseManager, Factory, and (if a
+ *             [token] section exists) one initial BeaconProxy token. Role grants /
+ *             initial token are skipped gracefully when broadcaster != admin.
+ *
+ *           deployCompliance()                    → Compliance
+ *           deployPauseManager()                  → PauseManager
+ *           deployFactory(address, address)       → SecuritiesTokenFactory
+ *             args: compliance, pauseManager
+ *           deployToken(address)                  → BeaconProxy address
+ *             arg:  factory
+ *
+ *         All address fields set to address(0) in config.toml fall back to the broadcaster.
+ *         Role grants and the initial token deploy require DEFAULT_ADMIN_ROLE on the target
+ *         and are skipped (not reverted) when the broadcaster is not the admin.
+ *
+ *         Examples:
  *           forge script script/Deploy.s.sol:Deploy --rpc-url $RPC --broadcast
- *           forge script script/Deploy.s.sol:Deploy --rpc-url $RPC --private-key $PK --broadcast
  *
- *         Steps:
- *           1. Compliance        (non-upgradeable)
- *              - grant OPS_ROLE / COMPLIANCE_ROLE per config (if broadcaster == admin)
- *           2. PauseManager      (non-upgradeable)
- *              - grant OPS_ROLE per config (if broadcaster == admin)
- *           3. SecuritiesTokenFactory
- *              - internally deploys the SecuritiesToken implementation + UpgradeableBeacon
- *              - beacon owner = config.proxyAdmin
- *           4. (optional) factory.deployToken() → BeaconProxy for the first token
- *              triggered when config.toml contains a `[token]` section
+ *           forge script script/Deploy.s.sol:Deploy --sig "deployCompliance()" \
+ *             --rpc-url $RPC --broadcast
  *
- *         Any address field set to address(0) in the config is replaced with the broadcaster.
- *         Role grants and the initial token deploy require DEFAULT_ADMIN_ROLE, so they only
- *         run when the broadcaster is the admin; otherwise the script prints a hint.
+ *           forge script script/Deploy.s.sol:Deploy \
+ *             --sig "deployFactory(address,address)" 0xCompliance 0xPauseManager \
+ *             --rpc-url $RPC --broadcast
+ *
+ *           forge script script/Deploy.s.sol:Deploy \
+ *             --sig "deployToken(address)" 0xFactory \
+ *             --rpc-url $RPC --broadcast
  */
 contract Deploy is Script {
     using stdToml for string;
@@ -48,6 +61,11 @@ contract Deploy is Script {
         address[] issuers;
     }
 
+    // ═══════════════════════════════════════════════
+    //                Public entry points
+    // ═══════════════════════════════════════════════
+
+    /// Full-stack deploy: Compliance → PauseManager → Factory → (optional) initial token.
     function run()
         external
         returns (
@@ -58,16 +76,73 @@ contract Deploy is Script {
         )
     {
         Config memory cfg = _loadConfig();
-        address broadcaster = _broadcaster();
-        bool broadcasterIsAdmin = broadcaster == cfg.admin;
-
-        console.log("=== Deployment ===");
-        console.log("Broadcaster:    ", broadcaster);
-        console.log("Admin:          ", cfg.admin);
-        console.log("Proxy admin:    ", cfg.proxyAdmin);
+        bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
+        _printHeader(cfg);
 
         vm.startBroadcast();
+        compliance = _deployCompliance(cfg, broadcasterIsAdmin);
+        pauseManager = _deployPauseManager(cfg, broadcasterIsAdmin);
+        factory = _deployFactory(cfg, address(compliance), address(pauseManager));
+        if (cfg.deployInitialToken) {
+            initialToken = _deployToken(cfg, factory, broadcasterIsAdmin);
+        }
+        vm.stopBroadcast();
+    }
 
+    /// Deploy Compliance + apply role grants from config.
+    function deployCompliance() external returns (Compliance compliance) {
+        Config memory cfg = _loadConfig();
+        bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
+
+        vm.startBroadcast();
+        compliance = _deployCompliance(cfg, broadcasterIsAdmin);
+        vm.stopBroadcast();
+    }
+
+    /// Deploy PauseManager + apply role grants from config.
+    function deployPauseManager() external returns (PauseManager pauseManager) {
+        Config memory cfg = _loadConfig();
+        bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
+
+        vm.startBroadcast();
+        pauseManager = _deployPauseManager(cfg, broadcasterIsAdmin);
+        vm.stopBroadcast();
+    }
+
+    /// Deploy the factory, pointing at already-deployed compliance + pauseManager.
+    function deployFactory(address compliance, address pauseManager)
+        external
+        returns (SecuritiesTokenFactory factory)
+    {
+        require(compliance != address(0), "Deploy: compliance is zero");
+        require(pauseManager != address(0), "Deploy: pauseManager is zero");
+        Config memory cfg = _loadConfig();
+
+        vm.startBroadcast();
+        factory = _deployFactory(cfg, compliance, pauseManager);
+        vm.stopBroadcast();
+    }
+
+    /// Deploy a single BeaconProxy token through an existing factory, using the [token] config.
+    function deployToken(address factory) external returns (address proxy) {
+        require(factory != address(0), "Deploy: factory is zero");
+        Config memory cfg = _loadConfig();
+        require(cfg.deployInitialToken, "Deploy: [token] section missing from config");
+        bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
+
+        vm.startBroadcast();
+        proxy = _deployToken(cfg, SecuritiesTokenFactory(factory), broadcasterIsAdmin);
+        vm.stopBroadcast();
+    }
+
+    // ═══════════════════════════════════════════════
+    //                Internal deploys
+    // ═══════════════════════════════════════════════
+
+    function _deployCompliance(Config memory cfg, bool broadcasterIsAdmin)
+        internal
+        returns (Compliance compliance)
+    {
         compliance = new Compliance(cfg.admin);
         console.log("Compliance:     ", address(compliance));
         _grantRoles(
@@ -84,7 +159,12 @@ contract Deploy is Script {
             cfg.complianceCompliance,
             broadcasterIsAdmin
         );
+    }
 
+    function _deployPauseManager(Config memory cfg, bool broadcasterIsAdmin)
+        internal
+        returns (PauseManager pauseManager)
+    {
         pauseManager = new PauseManager(cfg.admin);
         console.log("PauseManager:   ", address(pauseManager));
         _grantRoles(
@@ -94,38 +174,40 @@ contract Deploy is Script {
             cfg.pauseManagerOps,
             broadcasterIsAdmin
         );
-
-        factory = new SecuritiesTokenFactory(
-            address(compliance),
-            address(pauseManager),
-            cfg.admin,
-            cfg.proxyAdmin
-        );
-        console.log("Factory:        ", address(factory));
-        console.log("Beacon:         ", address(factory.beacon()));
-
-        // factory.deployToken requires DEFAULT_ADMIN_ROLE on the factory.
-        if (cfg.deployInitialToken) {
-            if (broadcasterIsAdmin) {
-                initialToken = factory.deployToken(
-                    cfg.tokenName,
-                    cfg.tokenSymbol,
-                    cfg.tokenIdentifier,
-                    cfg.tokenAdmin,
-                    cfg.issuers
-                );
-                console.log("Token (proxy):  ", initialToken);
-            } else {
-                console.log("Skipping initial token: broadcaster != admin.");
-                console.log("Run factory.deployToken(...) from admin to mint the first token.");
-            }
-        }
-
-        vm.stopBroadcast();
     }
 
-    /// Grants `role` on `target` (via AccessControl) to every address in `grantees`.
-    /// Falls back to a printed hint when the broadcaster is not the admin.
+    function _deployFactory(Config memory cfg, address compliance, address pauseManager)
+        internal
+        returns (SecuritiesTokenFactory factory)
+    {
+        factory = new SecuritiesTokenFactory(compliance, pauseManager, cfg.admin, cfg.proxyAdmin);
+        console.log("Factory:        ", address(factory));
+        console.log("Beacon:         ", address(factory.beacon()));
+    }
+
+    /// Mints the initial token via `factory.deployToken`. Requires DEFAULT_ADMIN_ROLE on
+    /// the factory, so it skips with a hint when broadcaster != admin.
+    function _deployToken(Config memory cfg, SecuritiesTokenFactory factory, bool broadcasterIsAdmin)
+        internal
+        returns (address proxy)
+    {
+        if (!broadcasterIsAdmin) {
+            console.log("Skipping token deploy: broadcaster != admin.");
+            console.log("Run factory.deployToken(...) from admin instead.");
+            return address(0);
+        }
+        proxy = factory.deployToken(
+            cfg.tokenName, cfg.tokenSymbol, cfg.tokenIdentifier, cfg.tokenAdmin, cfg.issuers
+        );
+        console.log("Token (proxy):  ", proxy);
+    }
+
+    // ═══════════════════════════════════════════════
+    //                Helpers
+    // ═══════════════════════════════════════════════
+
+    /// Grants `role` on `target` to every address in `grantees`. Skips with a hint when
+    /// the broadcaster is not the admin (since AccessControl will reject the call).
     function _grantRoles(
         address target,
         bytes32 role,
@@ -138,13 +220,18 @@ contract Deploy is Script {
             console.log("Skipping role grants for", roleName, "- broadcaster != admin.");
             return;
         }
-        // AccessControl exposes grantRole(bytes32,address). Encode the call rather than
-        // importing the interface so this helper works for both Compliance and PauseManager.
         for (uint256 i = 0; i < grantees.length; ++i) {
             (bool ok,) = target.call(abi.encodeWithSignature("grantRole(bytes32,address)", role, grantees[i]));
             require(ok, string.concat("grantRole failed: ", roleName));
             console.log("  granted", roleName, "to", grantees[i]);
         }
+    }
+
+    function _printHeader(Config memory cfg) internal view {
+        console.log("=== Deployment ===");
+        console.log("Broadcaster:    ", _broadcaster());
+        console.log("Admin:          ", cfg.admin);
+        console.log("Proxy admin:    ", cfg.proxyAdmin);
     }
 
     function _loadConfig() internal view returns (Config memory cfg) {
