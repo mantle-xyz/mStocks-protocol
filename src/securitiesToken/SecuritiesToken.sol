@@ -2,7 +2,9 @@
 pragma solidity ^0.8.20;
 
 import "../ERC8056/ERC8056BaseUpgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../compliance/ComplianceClientUpgradeable.sol";
 import "../pauseManager/PauseManagerClientUpgradeable.sol";
 
@@ -78,6 +80,8 @@ contract SecuritiesToken is
     error EmptyString();
     /// Error emitted when a zero address is provided
     error ZeroAddress();
+    /// Error emitted when an account attempts to grant a role to itself
+    error SelfGrantNotAllowed();
 
     /**
      * @notice Checks that the caller has DEFAULT_ADMIN_ROLE or ISSUER_ROLE
@@ -406,6 +410,27 @@ contract SecuritiesToken is
     {
         return ERC8056BaseUpgradeable.supportsInterface(interfaceId)
             || AccessControlEnumerableUpgradeable.supportsInterface(interfaceId);
+    }
+
+    // ═══════════════════════════════════════════════
+    //                Role-grant guard
+    // ═══════════════════════════════════════════════
+
+    /**
+     * @notice Grants `role` to `account`, with an extra constraint: the caller cannot
+     *         grant any role to itself. Forces separation of duties — an admin must
+     *         delegate operational roles (ISSUER_ROLE / OPS_ROLE) to a different
+     *         account before those roles can be exercised.
+     * @dev    Internal `_grantRole` is NOT overridden, so the constructor / initializer
+     *         can still seed the admin and the initial issuer / operator lists.
+     */
+    function grantRole(bytes32 role, address account)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
+        if (account == _msgSender()) revert SelfGrantNotAllowed();
+        super.grantRole(role, account);
     }
 
     /**

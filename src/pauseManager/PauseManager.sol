@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.20;
 
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import "./IPauseManager.sol";
 
 /**
@@ -56,6 +58,9 @@ contract PauseManager is IPauseManager, AccessControlEnumerable {
 
     /// Error thrown when the admin address is zero
     error ZeroAddress();
+
+    /// Error thrown when an account attempts to grant a role to itself
+    error SelfGrantNotAllowed();
 
     /**
      * @param admin The address which will be granted the default admin role
@@ -127,5 +132,21 @@ contract PauseManager is IPauseManager, AccessControlEnumerable {
      */
     function isTokenPaused(address _token) external view override returns (bool) {
         return pausedTokens[_token] || allTokensPaused;
+    }
+
+    /**
+     * @notice Grants `role` to `account`, with an extra constraint: the caller cannot
+     *         grant any role to itself. Forces separation of duties — admin must
+     *         delegate OPS_ROLE to a different account.
+     * @dev    Internal `_grantRole` is NOT overridden, so the constructor can still
+     *         seed the admin with DEFAULT_ADMIN_ROLE.
+     */
+    function grantRole(bytes32 role, address account)
+        public
+        virtual
+        override(AccessControl, IAccessControl)
+    {
+        if (account == _msgSender()) revert SelfGrantNotAllowed();
+        super.grantRole(role, account);
     }
 }

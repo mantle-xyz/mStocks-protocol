@@ -33,6 +33,8 @@ contract SecuritiesTokenTest is Test {
     bytes32 internal ISSUER_ROLE;
     bytes32 internal OPS_ROLE;
     bytes32 internal DEFAULT_ADMIN_ROLE;
+    bytes32 internal COMPLIANCE_OPS_ROLE;
+    bytes32 internal PAUSE_MANAGER_OPS_ROLE;
 
     function setUp() public {
         vm.startPrank(admin);
@@ -53,6 +55,8 @@ contract SecuritiesTokenTest is Test {
 
         ISSUER_ROLE = token.ISSUER_ROLE();
         OPS_ROLE = token.OPS_ROLE();
+        COMPLIANCE_OPS_ROLE = compliance.OPS_ROLE();
+        PAUSE_MANAGER_OPS_ROLE = pauseManager.OPS_ROLE();
         DEFAULT_ADMIN_ROLE = 0x00;
     }
 
@@ -439,6 +443,43 @@ contract SecuritiesTokenTest is Test {
         vm.prank(stranger);
         vm.expectRevert();
         token.grantRole(ISSUER_ROLE, user1);
+    }
+
+    // ═══════════════════════════════════════════════
+    //                  Self-grant guard
+    // ═══════════════════════════════════════════════
+
+    function test_AdminCannotSelfGrantOnToken() public {
+        vm.prank(admin);
+        vm.expectRevert(SecuritiesToken.SelfGrantNotAllowed.selector);
+        token.grantRole(ISSUER_ROLE, admin);
+    }
+
+    function test_AdminCannotSelfGrantOnCompliance() public {
+        vm.prank(admin);
+        vm.expectRevert(Compliance.SelfGrantNotAllowed.selector);
+        compliance.grantRole(COMPLIANCE_OPS_ROLE, admin);
+    }
+
+    function test_AdminCannotSelfGrantOnPauseManager() public {
+        vm.prank(admin);
+        vm.expectRevert(PauseManager.SelfGrantNotAllowed.selector);
+        pauseManager.grantRole(PAUSE_MANAGER_OPS_ROLE, admin);
+    }
+
+    function test_AdminCanStillGrantToOthers() public {
+        // Sanity: the guard does NOT block grants to other accounts.
+        vm.prank(admin);
+        token.grantRole(OPS_ROLE, user1);
+        assertTrue(token.hasRole(OPS_ROLE, user1));
+    }
+
+    function test_InitialAdminRoleStillSetByConstructor() public view {
+        // The guard only affects public grantRole(); the constructor / initialize
+        // uses the internal _grantRole and is unaffected.
+        assertTrue(token.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(compliance.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(pauseManager.hasRole(DEFAULT_ADMIN_ROLE, admin));
     }
 
     // ═══════════════════════════════════════════════
