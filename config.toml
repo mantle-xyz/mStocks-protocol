@@ -18,6 +18,13 @@ opsRole = []        # OPS_ROLE on Compliance        — manage blocklist + sanct
 [pauseManager]
 opsRole = []        # OPS_ROLE on PauseManager      — pause/unpause tokens
 
+# OperatorWallet (optional — only used when calling deployOperatorWallet()).
+# - opsRole: addresses granted OPS_ROLE on the wallet (mint/burn/transfer through it)
+# - hotWallets: addresses pre-registered as outbound hot-wallet recipients
+[operatorWallet]
+opsRole = []
+hotWallets = []
+
 # Optional initial-token deployment.
 # Remove the entire `[token]` block to skip the first token deploy.
 [token]

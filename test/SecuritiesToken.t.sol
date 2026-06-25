@@ -8,6 +8,11 @@ import {SecuritiesTokenFactory} from "../src/securitiesToken/SecuritiesTokenFact
 import {Compliance} from "../src/compliance/Compliance.sol";
 import {PauseManager} from "../src/pauseManager/PauseManager.sol";
 
+/// Minimal contract used wherever the tests need an ISSUER_ROLE holder. The token
+/// rejects EOA issuers (must be a contract with non-empty code) so we deploy this
+/// stub to play the role.
+contract IssuerStub {}
+
 /**
  * Forge unit/integration tests for SecuritiesToken and its dependencies.
  * Run with: forge test -vv
@@ -24,7 +29,7 @@ contract SecuritiesTokenTest is Test {
 
     address internal admin = makeAddr("admin");
     address internal proxyAdmin = makeAddr("proxyAdmin");
-    address internal issuer = makeAddr("issuer");
+    address internal issuer;                              // set in setUp — must be a contract
     address internal operator = makeAddr("operator");
     address internal complianceOps = makeAddr("complianceOps");
     address internal pauseOps = makeAddr("pauseOps");
@@ -39,6 +44,10 @@ contract SecuritiesTokenTest is Test {
     bytes32 internal PAUSE_MANAGER_OPS_ROLE;
 
     function setUp() public {
+        // ISSUER_ROLE must be a contract — deploy a stub outside the prank so msg.sender
+        // doesn't get spoofed during construction.
+        issuer = address(new IssuerStub());
+
         vm.startPrank(admin);
 
         compliance = new Compliance(admin);
@@ -438,13 +447,42 @@ contract SecuritiesTokenTest is Test {
     // ═══════════════════════════════════════════════
 
     function test_AdminCanGrantAndRevokeIssuer() public {
+        // ISSUER_ROLE must be a contract — deploy a stub to grant to
+        address newIssuer = address(new IssuerStub());
         vm.prank(admin);
-        token.grantRole(ISSUER_ROLE, user1);
-        assertTrue(token.hasRole(ISSUER_ROLE, user1));
+        token.grantRole(ISSUER_ROLE, newIssuer);
+        assertTrue(token.hasRole(ISSUER_ROLE, newIssuer));
 
         vm.prank(admin);
-        token.revokeRole(ISSUER_ROLE, user1);
-        assertFalse(token.hasRole(ISSUER_ROLE, user1));
+        token.revokeRole(ISSUER_ROLE, newIssuer);
+        assertFalse(token.hasRole(ISSUER_ROLE, newIssuer));
+    }
+
+    function test_GrantingIssuerRoleToEoaReverts() public {
+        // EOA can't hold ISSUER_ROLE — must be a contract
+        address eoa = makeAddr("someEoa");
+        vm.prank(admin);
+        vm.expectRevert(SecuritiesToken.IssuerMustBeContract.selector);
+        token.grantRole(ISSUER_ROLE, eoa);
+    }
+
+    function test_GrantingOpsRoleToEoaIsAllowed() public {
+        // OPS_ROLE has no contract-only constraint — EOA is fine
+        address eoa = makeAddr("opsEoa");
+        vm.prank(admin);
+        token.grantRole(OPS_ROLE, eoa);
+        assertTrue(token.hasRole(OPS_ROLE, eoa));
+    }
+
+    function test_FactoryDeployTokenRejectsEoaIssuer() public {
+        // Same check applies at init time via the factory
+        address eoa = makeAddr("eoaIssuer");
+        address[] memory issuers = new address[](1);
+        issuers[0] = eoa;
+        address[] memory empty = new address[](0);
+        vm.prank(admin);
+        vm.expectRevert(SecuritiesToken.IssuerMustBeContract.selector);
+        factory.deployToken("Tesla Inc.", "TSLA", "US88160R1014", admin, issuers, empty);
     }
 
     function test_AdminCanGrantAndRevokeOperator() public {

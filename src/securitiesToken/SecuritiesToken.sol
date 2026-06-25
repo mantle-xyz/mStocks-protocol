@@ -82,6 +82,10 @@ contract SecuritiesToken is
     error ZeroAddress();
     /// Error emitted when an account attempts to grant a role to itself
     error SelfGrantNotAllowed();
+    /// Error emitted when ISSUER_ROLE is granted to a non-contract address. ISSUER_ROLE
+    /// controls mint/burn and must be held by a contract whose internal access control
+    /// (and ideally audit / governance) is known.
+    error IssuerMustBeContract();
 
     /**
      * @notice Checks that the caller has ISSUER_ROLE.
@@ -430,6 +434,22 @@ contract SecuritiesToken is
     {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
+    }
+
+    /**
+     * @dev Internal hook covering BOTH the public grantRole flow AND the constructor /
+     *      initializer paths (factory passes initial issuers via internal _grantRole,
+     *      bypassing the public override). Enforces: ISSUER_ROLE may only be granted to
+     *      a contract address (code.length > 0).
+     */
+    function _grantRole(bytes32 role, address account)
+        internal
+        virtual
+        override(AccessControlEnumerableUpgradeable)
+        returns (bool)
+    {
+        if (role == ISSUER_ROLE && account.code.length == 0) revert IssuerMustBeContract();
+        return super._grantRole(role, account);
     }
 
     /**
