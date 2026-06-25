@@ -74,7 +74,7 @@ contract SecuritiesToken is
     error MintDisabled();
     /// Error emitted when burning is disabled
     error BurnDisabled();
-    /// Error emitted when sender lacks admin or issuer permissions
+    /// Error emitted when sender lacks the required operational role (ISSUER_ROLE or OPS_ROLE)
     error UnauthorizedRole();
     /// Error emitted when an empty string is provided
     error EmptyString();
@@ -84,23 +84,22 @@ contract SecuritiesToken is
     error SelfGrantNotAllowed();
 
     /**
-     * @notice Checks that the caller has DEFAULT_ADMIN_ROLE or ISSUER_ROLE
+     * @notice Checks that the caller has ISSUER_ROLE.
+     * @dev    Admin is intentionally NOT accepted — separation of duties means admin
+     *         only grants roles, ISSUER_ROLE actually mints / burns.
      */
-    modifier onlyAdminOrIssuer() {
-        _checkAdminOrIssuer();
+    modifier onlyIssuer() {
+        _checkIssuer();
         _;
     }
 
-    function _checkAdminOrIssuer() private view {
-        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(ISSUER_ROLE, msg.sender)) {
-            revert UnauthorizedRole();
-        }
+    function _checkIssuer() private view {
+        if (!hasRole(ISSUER_ROLE, msg.sender)) revert UnauthorizedRole();
     }
 
-    function _checkAdminOrOperator() private view {
-        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(OPS_ROLE, msg.sender)) {
-            revert UnauthorizedRole();
-        }
+    /// @dev Admin is intentionally NOT accepted — OPS_ROLE actually schedules multiplier changes.
+    function _checkOperator() private view {
+        if (!hasRole(OPS_ROLE, msg.sender)) revert UnauthorizedRole();
     }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -277,9 +276,9 @@ contract SecuritiesToken is
     /**
      * @notice Mints a specific amount of tokens to the caller
      * @param  amount The amount of tokens to be minted
-     * @dev    Callable by DEFAULT_ADMIN_ROLE and ISSUER_ROLE while minting is enabled
+     * @dev    Callable by ISSUER_ROLE only while minting is enabled (admin only grants the role)
      */
-    function mint(uint256 amount) external onlyAdminOrIssuer returns (bool) {
+    function mint(uint256 amount) external onlyIssuer returns (bool) {
         if (!mintEnabled) revert MintDisabled();
         _mint(msg.sender, amount);
         return true;
@@ -288,9 +287,9 @@ contract SecuritiesToken is
     /**
      * @notice Burns a specific amount of tokens from the caller
      * @param  amount The amount of tokens to be burned
-     * @dev    Callable by DEFAULT_ADMIN_ROLE and ISSUER_ROLE while burning is enabled
+     * @dev    Callable by ISSUER_ROLE only while burning is enabled (admin only grants the role)
      */
-    function burn(uint256 amount) external onlyAdminOrIssuer returns (bool) {
+    function burn(uint256 amount) external onlyIssuer returns (bool) {
         if (!burnEnabled) revert BurnDisabled();
         _burn(msg.sender, amount);
         return true;
@@ -321,11 +320,11 @@ contract SecuritiesToken is
     // ═══════════════════════════════════════════════
 
     /**
-     * @dev Restricts multiplier updates to accounts with DEFAULT_ADMIN_ROLE or OPS_ROLE.
+     * @dev Restricts multiplier updates to accounts with OPS_ROLE (admin only grants the role).
      *      Called by {ERC8056BaseUpgradeable-setUIMultiplier} before executing the update.
      */
     function _authorizeMultiplierUpdate() internal view override {
-        _checkAdminOrOperator();
+        _checkOperator();
     }
 
     /**

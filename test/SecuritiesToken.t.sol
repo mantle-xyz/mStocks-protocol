@@ -26,6 +26,8 @@ contract SecuritiesTokenTest is Test {
     address internal proxyAdmin = makeAddr("proxyAdmin");
     address internal issuer = makeAddr("issuer");
     address internal operator = makeAddr("operator");
+    address internal complianceOps = makeAddr("complianceOps");
+    address internal pauseOps = makeAddr("pauseOps");
     address internal user1 = makeAddr("user1");
     address internal user2 = makeAddr("user2");
     address internal stranger = makeAddr("stranger");
@@ -50,6 +52,10 @@ contract SecuritiesTokenTest is Test {
 
         address proxy = factory.deployToken("Apple Inc.", "AAPL", "US0378331005", admin, issuers, operators);
         token = SecuritiesToken(proxy);
+
+        // Admin's only operational role is granting OPS_ROLE on the auxiliary modules.
+        compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
+        pauseManager.grantRole(pauseManager.OPS_ROLE(), pauseOps);
 
         vm.stopPrank();
 
@@ -100,17 +106,18 @@ contract SecuritiesTokenTest is Test {
     //                  Mint / burn
     // ═══════════════════════════════════════════════
 
-    function test_AdminCanMint() public {
+    function test_AdminCannotMint() public {
+        // Admin is now strictly a role-granting authority — no operational power.
         vm.prank(admin);
+        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
         token.mint(1_000 ether);
-        assertEq(token.balanceOf(admin), 1_000 ether);
-        assertEq(token.totalSupply(), 1_000 ether);
     }
 
     function test_IssuerCanMint() public {
         vm.prank(issuer);
         token.mint(500 ether);
         assertEq(token.balanceOf(issuer), 500 ether);
+        assertEq(token.totalSupply(), 500 ether);
     }
 
     function test_StrangerCannotMint() public {
@@ -129,27 +136,36 @@ contract SecuritiesTokenTest is Test {
     function test_MintDisabledBlocksMint() public {
         vm.prank(admin);
         token.setMintEnabled(false);
-        vm.prank(admin);
+        vm.prank(issuer);
         vm.expectRevert(SecuritiesToken.MintDisabled.selector);
         token.mint(1 ether);
     }
 
-    function test_AdminCanBurn() public {
-        vm.startPrank(admin);
+    function test_IssuerCanBurn() public {
+        vm.startPrank(issuer);
         token.mint(1_000 ether);
         token.burn(400 ether);
         vm.stopPrank();
-        assertEq(token.balanceOf(admin), 600 ether);
+        assertEq(token.balanceOf(issuer), 600 ether);
         assertEq(token.totalSupply(), 600 ether);
     }
 
+    function test_AdminCannotBurn() public {
+        vm.prank(issuer);
+        token.mint(100 ether);
+        vm.prank(admin);
+        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        token.burn(1 ether);
+    }
+
     function test_BurnDisabledBlocksBurn() public {
-        vm.startPrank(admin);
+        vm.prank(issuer);
         token.mint(1 ether);
+        vm.prank(admin);
         token.setBurnEnabled(false);
+        vm.prank(issuer);
         vm.expectRevert(SecuritiesToken.BurnDisabled.selector);
         token.burn(1 ether);
-        vm.stopPrank();
     }
 
     // ═══════════════════════════════════════════════
@@ -157,12 +173,11 @@ contract SecuritiesTokenTest is Test {
     // ═══════════════════════════════════════════════
 
     function test_TransferHappyPath() public {
-        vm.prank(admin);
+        vm.startPrank(issuer);
         token.mint(1_000 ether);
-
-        vm.prank(admin);
         token.transfer(user1, 400 ether);
-        assertEq(token.balanceOf(admin), 600 ether);
+        vm.stopPrank();
+        assertEq(token.balanceOf(issuer), 600 ether);
         assertEq(token.balanceOf(user1), 400 ether);
 
         vm.prank(user1);
@@ -172,10 +187,10 @@ contract SecuritiesTokenTest is Test {
     }
 
     function test_ApproveAndTransferFrom() public {
-        vm.prank(admin);
+        vm.startPrank(issuer);
         token.mint(1_000 ether);
-        vm.prank(admin);
         token.transfer(user1, 500 ether);
+        vm.stopPrank();
 
         vm.prank(user1);
         token.approve(user2, 200 ether);
@@ -193,37 +208,45 @@ contract SecuritiesTokenTest is Test {
     // ═══════════════════════════════════════════════
 
     function test_PausedTokenBlocksTransfer() public {
-        vm.prank(admin);
+        vm.prank(issuer);
         token.mint(100 ether);
 
-        vm.prank(admin);
+        vm.prank(pauseOps);
         pauseManager.pauseToken(address(token));
 
-        vm.prank(admin);
+        vm.prank(issuer);
         vm.expectRevert();
         token.transfer(user1, 1 ether);
     }
 
     function test_GlobalPauseBlocksTransfer() public {
-        vm.prank(admin);
+        vm.prank(issuer);
         token.mint(100 ether);
 
-        vm.prank(admin);
+        vm.prank(pauseOps);
         pauseManager.pauseAllTokens();
 
-        vm.prank(admin);
+        vm.prank(issuer);
         vm.expectRevert();
         token.transfer(user1, 1 ether);
     }
 
     function test_UnpauseRestoresTransfer() public {
-        vm.startPrank(admin);
+        vm.prank(issuer);
         token.mint(100 ether);
+        vm.startPrank(pauseOps);
         pauseManager.pauseToken(address(token));
         pauseManager.unpauseToken(address(token));
-        token.transfer(user1, 1 ether);
         vm.stopPrank();
+        vm.prank(issuer);
+        token.transfer(user1, 1 ether);
         assertEq(token.balanceOf(user1), 1 ether);
+    }
+
+    function test_AdminCannotPause() public {
+        vm.prank(admin);
+        vm.expectRevert(PauseManager.MissingPauseRole.selector);
+        pauseManager.pauseToken(address(token));
     }
 
     // ═══════════════════════════════════════════════
@@ -231,36 +254,36 @@ contract SecuritiesTokenTest is Test {
     // ═══════════════════════════════════════════════
 
     function test_BlocklistBlocksTransfer() public {
-        vm.prank(admin);
+        vm.prank(issuer);
         token.mint(100 ether);
 
         address[] memory list = new address[](1);
         list[0] = user1;
-        vm.prank(admin);
+        vm.prank(complianceOps);
         compliance.addToBlocklist(address(token), list);
 
-        vm.prank(admin);
+        vm.prank(issuer);
         vm.expectRevert(Compliance.UserBlocked.selector);
         token.transfer(user1, 1 ether);
 
         // Removing from blocklist restores transfer
-        vm.prank(admin);
+        vm.prank(complianceOps);
         compliance.removeFromBlocklist(address(token), list);
-        vm.prank(admin);
+        vm.prank(issuer);
         token.transfer(user1, 1 ether);
         assertEq(token.balanceOf(user1), 1 ether);
     }
 
     function test_SanctionsBlockTransfer() public {
-        vm.prank(admin);
+        vm.prank(issuer);
         token.mint(100 ether);
 
         address[] memory list = new address[](1);
         list[0] = user1;
-        vm.prank(admin);
+        vm.prank(complianceOps);
         compliance.addToSanctionsList(list);
 
-        vm.prank(admin);
+        vm.prank(issuer);
         vm.expectRevert(Compliance.UserSanctioned.selector);
         token.transfer(user1, 1 ether);
     }
@@ -269,44 +292,47 @@ contract SecuritiesTokenTest is Test {
         address[] memory list = new address[](2);
         list[0] = user1;
         list[1] = user2;
-        vm.prank(admin);
+        vm.prank(complianceOps);
         compliance.addToSanctionsList(list);
         assertTrue(compliance.sanctionedAddresses(user1));
         assertTrue(compliance.sanctionedAddresses(user2));
 
-        vm.prank(admin);
+        vm.prank(complianceOps);
         compliance.resetSanctionedAddresses();
         assertFalse(compliance.sanctionedAddresses(user1));
         assertFalse(compliance.sanctionedAddresses(user2));
     }
 
     function test_BlocklistIsTokenScoped() public {
-        // Block user1 only for THIS token — they remain free on another token
-        vm.prank(admin);
+        vm.prank(issuer);
         token.mint(100 ether);
 
         address[] memory list = new address[](1);
         list[0] = user1;
-        vm.prank(admin);
+        vm.prank(complianceOps);
         compliance.addToBlocklist(address(token), list);
 
         assertTrue(compliance.blockedAddresses(address(token), user1));
-        // Same user, different token key → not blocked
         assertFalse(compliance.blockedAddresses(address(0xBEEF), user1));
+    }
+
+    function test_AdminCannotManageBlocklist() public {
+        address[] memory list = new address[](1);
+        list[0] = user1;
+        vm.prank(admin);
+        vm.expectRevert(Compliance.MissingBlocklistRole.selector);
+        compliance.addToBlocklist(address(token), list);
     }
 
     // ═══════════════════════════════════════════════
     //                  UI multiplier
     // ═══════════════════════════════════════════════
 
-    function test_AdminCanScheduleMultiplier() public {
+    function test_AdminCannotScheduleMultiplier() public {
         uint256 effective = block.timestamp + 1 hours;
         vm.prank(admin);
+        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2 ether, effective);
-
-        assertEq(token.newUIMultiplier(), 2 ether);
-        assertEq(token.effectiveAt(), effective);
-        assertTrue(token.hasPendingMultiplier());
     }
 
     function test_OperatorCanScheduleMultiplier() public {
@@ -314,6 +340,8 @@ contract SecuritiesTokenTest is Test {
         vm.prank(operator);
         token.setUIMultiplier(2 ether, effective);
         assertEq(token.newUIMultiplier(), 2 ether);
+        assertEq(token.effectiveAt(), effective);
+        assertTrue(token.hasPendingMultiplier());
     }
 
     function test_IssuerCannotScheduleMultiplier() public {
@@ -332,7 +360,7 @@ contract SecuritiesTokenTest is Test {
 
     function test_MultiplierActivatesAfterEffectiveAt() public {
         uint256 effective = block.timestamp + 1 hours;
-        vm.prank(admin);
+        vm.prank(operator);
         token.setUIMultiplier(2 ether, effective);
 
         // Before activation: live multiplier still old
@@ -344,38 +372,37 @@ contract SecuritiesTokenTest is Test {
     }
 
     function test_MultiplierBelowMinReverts() public {
-        vm.prank(admin);
+        vm.prank(operator);
         vm.expectRevert(bytes("SecuritiesToken: multiplier below minimum (1e-9x)"));
         token.setUIMultiplier(1e9 - 1, block.timestamp + 1 hours);
     }
 
     function test_MultiplierAboveMaxReverts() public {
-        vm.prank(admin);
+        vm.prank(operator);
         vm.expectRevert(bytes("SecuritiesToken: multiplier above maximum (1e9x)"));
         token.setUIMultiplier(1e27 + 1, block.timestamp + 1 hours);
     }
 
     function test_MultiplierBeyond365DaysReverts() public {
-        vm.prank(admin);
+        vm.prank(operator);
         vm.expectRevert(bytes("SecuritiesToken: effective time too far in future"));
         token.setUIMultiplier(2 ether, block.timestamp + 366 days);
     }
 
     function test_MultiplierPastTimestampReverts() public {
         vm.warp(1_000_000);
-        vm.prank(admin);
+        vm.prank(operator);
         vm.expectRevert(bytes("ERC8056: effective time must be in future"));
         token.setUIMultiplier(2 ether, block.timestamp);
     }
 
     function test_PendingMultiplierOverwriteEmitsAndUpdates() public {
         uint256 firstAt = block.timestamp + 1 hours;
-        vm.prank(admin);
+        vm.prank(operator);
         token.setUIMultiplier(2 ether, firstAt);
 
-        // Overwrite with a different schedule (still pending — not yet active)
         uint256 secondAt = block.timestamp + 2 hours;
-        vm.prank(admin);
+        vm.prank(operator);
         token.setUIMultiplier(3 ether, secondAt);
 
         assertEq(token.newUIMultiplier(), 3 ether);
@@ -386,24 +413,23 @@ contract SecuritiesTokenTest is Test {
         uint256 raw = 100 ether;
         assertEq(token.toUIAmount(raw), raw); // 1.0x
 
-        vm.prank(admin);
+        vm.prank(operator);
         token.setUIMultiplier(2 ether, block.timestamp + 1 hours);
         vm.warp(block.timestamp + 1 hours);
-        assertEq(token.toUIAmount(raw), raw * 2); // 2.0x
+        assertEq(token.toUIAmount(raw), raw * 2);
 
-        // fromUIAmount is inverse
         assertEq(token.fromUIAmount(raw * 2), raw);
     }
 
     function test_BalanceOfUIReflectsMultiplier() public {
-        vm.prank(admin);
+        vm.prank(issuer);
         token.mint(100 ether);
 
-        vm.prank(admin);
+        vm.prank(operator);
         token.setUIMultiplier(2 ether, block.timestamp + 1 hours);
         vm.warp(block.timestamp + 1 hours);
 
-        assertEq(token.balanceOfUI(admin), 200 ether);
+        assertEq(token.balanceOfUI(issuer), 200 ether);
         assertEq(token.totalSupplyUI(), 200 ether);
     }
 
@@ -422,19 +448,20 @@ contract SecuritiesTokenTest is Test {
     }
 
     function test_AdminCanGrantAndRevokeOperator() public {
+        address newOps = makeAddr("newOps");
         vm.prank(admin);
-        token.grantRole(OPS_ROLE, user1);
-        assertTrue(token.hasRole(OPS_ROLE, user1));
+        token.grantRole(OPS_ROLE, newOps);
+        assertTrue(token.hasRole(OPS_ROLE, newOps));
 
         // User can now schedule a multiplier change
-        vm.prank(user1);
+        vm.prank(newOps);
         token.setUIMultiplier(2 ether, block.timestamp + 1 hours);
 
         vm.prank(admin);
-        token.revokeRole(OPS_ROLE, user1);
+        token.revokeRole(OPS_ROLE, newOps);
 
         // Now they can't anymore
-        vm.prank(user1);
+        vm.prank(newOps);
         vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
         token.setUIMultiplier(3 ether, block.timestamp + 2 hours);
     }
