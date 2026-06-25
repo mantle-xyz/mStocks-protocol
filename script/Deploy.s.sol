@@ -51,7 +51,6 @@ contract Deploy is Script {
         address admin;
         address proxyAdmin;
         address[] complianceOps;
-        address[] complianceCompliance;
         address[] pauseManagerOps;
         bool deployInitialToken;
         string tokenName;
@@ -59,6 +58,7 @@ contract Deploy is Script {
         string tokenIdentifier;
         address tokenAdmin;
         address[] issuers;
+        address[] operators;
     }
 
     // ═══════════════════════════════════════════════
@@ -152,13 +152,6 @@ contract Deploy is Script {
             cfg.complianceOps,
             broadcasterIsAdmin
         );
-        _grantRoles(
-            address(compliance),
-            compliance.COMPLIANCE_ROLE(),
-            "COMPLIANCE_ROLE",
-            cfg.complianceCompliance,
-            broadcasterIsAdmin
-        );
     }
 
     function _deployPauseManager(Config memory cfg, bool broadcasterIsAdmin)
@@ -197,7 +190,12 @@ contract Deploy is Script {
             return address(0);
         }
         proxy = factory.deployToken(
-            cfg.tokenName, cfg.tokenSymbol, cfg.tokenIdentifier, cfg.tokenAdmin, cfg.issuers
+            cfg.tokenName,
+            cfg.tokenSymbol,
+            cfg.tokenIdentifier,
+            cfg.tokenAdmin,
+            cfg.issuers,
+            cfg.operators
         );
         console.log("Token (proxy):  ", proxy);
     }
@@ -246,7 +244,6 @@ contract Deploy is Script {
         if (cfg.proxyAdmin == address(0)) cfg.proxyAdmin = broadcaster;
 
         cfg.complianceOps = _readAddressArrayOr(toml, ".compliance.opsRole");
-        cfg.complianceCompliance = _readAddressArrayOr(toml, ".compliance.complianceRole");
         cfg.pauseManagerOps = _readAddressArrayOr(toml, ".pauseManager.opsRole");
 
         cfg.deployInitialToken = vm.keyExistsToml(toml, ".token");
@@ -261,6 +258,7 @@ contract Deploy is Script {
             if (cfg.tokenAdmin == address(0)) cfg.tokenAdmin = cfg.admin;
 
             cfg.issuers = _readAddressArrayOr(toml, ".token.issuers");
+            cfg.operators = _readAddressArrayOr(toml, ".token.operators");
         }
     }
 

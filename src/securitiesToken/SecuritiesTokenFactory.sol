@@ -57,6 +57,7 @@ contract SecuritiesTokenFactory is AccessControlEnumerable, ReentrancyGuard {
      * @param  identifier  The token identifier (e.g. ISIN, CUSIP)
      * @param  admin       The address that received DEFAULT_ADMIN_ROLE on the token
      * @param  issuers     The addresses that received ISSUER_ROLE on the token
+     * @param  operators   The addresses that received OPS_ROLE on the token
      * @param  deployer    The address that triggered the deployment
      */
     event TokenDeployed(
@@ -66,6 +67,7 @@ contract SecuritiesTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         string identifier,
         address indexed admin,
         address[] issuers,
+        address[] operators,
         address indexed deployer
     );
 
@@ -148,6 +150,8 @@ contract SecuritiesTokenFactory is AccessControlEnumerable, ReentrancyGuard {
      *                     never the deployer EOA.
      * @param  _issuers    Addresses that will receive ISSUER_ROLE on the new token.
      *                     May be an empty array if no issuers are needed at deployment time.
+     * @param  _operators  Addresses that will receive OPS_ROLE on the new token (manages
+     *                     UI multiplier scheduling). May be an empty array.
      * @return proxy       The address of the newly deployed BeaconProxy
      * @dev    The proxy's initialize() is called atomically during deployment.
      */
@@ -156,7 +160,8 @@ contract SecuritiesTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         string memory _symbol,
         string memory _identifier,
         address _admin,
-        address[] memory _issuers
+        address[] memory _issuers,
+        address[] memory _operators
     ) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant returns (address proxy) {
         if (bytes(_name).length == 0) revert EmptyString();
         if (bytes(_symbol).length == 0) revert EmptyString();
@@ -167,14 +172,15 @@ contract SecuritiesTokenFactory is AccessControlEnumerable, ReentrancyGuard {
 
         // Encode the initialize() call that will be executed on the new proxy
         bytes memory initData = abi.encodeWithSignature(
-            "initialize(string,string,string,address,address,address,address[])",
+            "initialize(string,string,string,address,address,address,address[],address[])",
             _name,
             _symbol,
             _identifier,
             compliance,
             pauseManager,
             _admin,
-            _issuers
+            _issuers,
+            _operators
         );
 
         // Deploy a new BeaconProxy pointing to our beacon
@@ -187,7 +193,7 @@ contract SecuritiesTokenFactory is AccessControlEnumerable, ReentrancyGuard {
 
         require(SecuritiesToken(proxy).hasRole(DEFAULT_ADMIN_ROLE, _admin), "SecuritiesToken: init check failed");
 
-        emit TokenDeployed(proxy, _name, _symbol, _identifier, _admin, _issuers, msg.sender);
+        emit TokenDeployed(proxy, _name, _symbol, _identifier, _admin, _issuers, _operators, msg.sender);
     }
 
     /**

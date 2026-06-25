@@ -21,15 +21,10 @@ import "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
  *              └── Manages blocklist and sanctions list
  *          - OPS_ROLE
  *              └── Manages blocklist and sanctions list
- *          - COMPLIANCE_ROLE
- *              └── Manages blocklist and sanctions list
  */
 contract Compliance is ICompliance, AccessControlEnumerable {
     /// Operational role for day-to-day management
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
-
-    /// Compliance-specific role for blocklist and sanctions list management
-    bytes32 public constant COMPLIANCE_ROLE = keccak256("COMPLIANCE_ROLE");
 
     /// Per-token mapping of blocked user addresses
     mapping(address /*token*/ => mapping(address /*user*/ => bool)) public blockedAddresses;
@@ -99,14 +94,13 @@ contract Compliance is ICompliance, AccessControlEnumerable {
         if (admin == address(0)) revert ZeroAddress();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(COMPLIANCE_ROLE, DEFAULT_ADMIN_ROLE);
         // Start at epoch 1 so epoch 0 (default mapping value) is never "active"
         sanctionEpoch = 1;
     }
 
     /**
      * @notice Modifier that restricts access to blocklist management roles
-     * @dev    Allows DEFAULT_ADMIN_ROLE, OPS_ROLE, or COMPLIANCE_ROLE
+     * @dev    Allows DEFAULT_ADMIN_ROLE, OPS_ROLE
      */
     modifier onlyBlocklistRole() {
         _checkBlocklistRole();
@@ -114,10 +108,9 @@ contract Compliance is ICompliance, AccessControlEnumerable {
     }
 
     function _checkBlocklistRole() private view {
-        if (
-            !hasRole(DEFAULT_ADMIN_ROLE, _msgSender()) && !hasRole(OPS_ROLE, _msgSender())
-                && !hasRole(COMPLIANCE_ROLE, _msgSender())
-        ) revert MissingBlocklistRole();
+        if (!hasRole(DEFAULT_ADMIN_ROLE, _msgSender()) && !hasRole(OPS_ROLE, _msgSender())) {
+            revert MissingBlocklistRole();
+        }
     }
 
     /**
@@ -146,7 +139,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
      * @notice Add addresses to the blocklist for a given token
      * @param  token     The token address
      * @param  addresses The addresses to add to the blocklist
-     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE, or COMPLIANCE_ROLE
+     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE
      */
     function addToBlocklist(address token, address[] calldata addresses) external onlyBlocklistRole {
         if (addresses.length == 0) revert EmptyAddressesArray();
@@ -162,7 +155,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
      * @notice Remove addresses from the blocklist for a given token
      * @param  token     The token address
      * @param  addresses The addresses to remove from the blocklist
-     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE, or COMPLIANCE_ROLE
+     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE
      */
     function removeFromBlocklist(address token, address[] calldata addresses) external onlyBlocklistRole {
         if (addresses.length == 0) revert EmptyAddressesArray();
@@ -177,7 +170,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
     /**
      * @notice Add addresses to the global sanctions list
      * @param  addresses The addresses to add to the sanctions list
-     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE, or COMPLIANCE_ROLE
+     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE
      */
     function addToSanctionsList(address[] calldata addresses) external onlyBlocklistRole {
         if (addresses.length == 0) revert EmptyAddressesArray();
@@ -198,7 +191,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
     /**
      * @notice Remove addresses from the global sanctions list
      * @param  addresses The addresses to remove from the sanctions list
-     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE, or COMPLIANCE_ROLE
+     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE
      */
     function removeFromSanctionsList(address[] calldata addresses) external onlyBlocklistRole {
         if (addresses.length == 0) revert EmptyAddressesArray();
@@ -223,7 +216,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
      * @notice Clears the entire sanctions list in O(1) gas
      * @dev    Bumps the internal epoch counter, instantly invalidating all previously
      *         sanctioned addresses regardless of list size. No new addresses are added.
-     *         Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE, or COMPLIANCE_ROLE.
+     *         Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE.
      */
     function resetSanctionedAddresses() external onlyBlocklistRole {
         sanctionEpoch++;
@@ -238,7 +231,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
      *         addresses in O(1) gas regardless of list size. Then writes only the new list.
      *         Duplicate entries in `newAddresses` are silently deduplicated.
      *         Zero address is not allowed.
-     *         Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE, or COMPLIANCE_ROLE.
+     *         Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE.
      */
     function setSanctionedAddresses(address[] calldata newAddresses) external onlyBlocklistRole {
         // O(1) invalidation of all previous sanctions

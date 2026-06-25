@@ -20,6 +20,8 @@ contract SecuritiesToken is
     /// Role for automated issuance and redemption tasks
     bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
 
+    bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
+
     /// Whether minting is enabled for ISSUER_ROLE operations
     bool public mintEnabled;
     /// Whether burning is enabled for ISSUER_ROLE operations
@@ -91,6 +93,12 @@ contract SecuritiesToken is
         }
     }
 
+    function _checkAdminOrOperator() private view {
+        if (!hasRole(DEFAULT_ADMIN_ROLE, msg.sender) && !hasRole(OPS_ROLE, msg.sender)) {
+            revert UnauthorizedRole();
+        }
+    }
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -105,6 +113,7 @@ contract SecuritiesToken is
      * @param  pauseManager_      The address of the token pause manager contract
      * @param  admin_             The address that will receive DEFAULT_ADMIN_ROLE
      * @param  issuers_           Addresses that will receive ISSUER_ROLE on deployment
+     * @param  operators_         Addresses that will receive OPS_ROLE on deployment
      * @dev    This function can only be called once during deployment via the proxy pattern
      */
     function initialize(
@@ -114,10 +123,11 @@ contract SecuritiesToken is
         address compliance_,
         address pauseManager_,
         address admin_,
-        address[] memory issuers_
+        address[] memory issuers_,
+        address[] memory operators_
     ) public initializer {
         __securitiesToken_init(
-            nameOverride_, symbolOverride_, identifier_, compliance_, pauseManager_, admin_, issuers_
+            nameOverride_, symbolOverride_, identifier_, compliance_, pauseManager_, admin_, issuers_, operators_
         );
     }
 
@@ -130,6 +140,7 @@ contract SecuritiesToken is
      * @param  pauseManager_      The address of the token pause manager contract
      * @param  admin_             The address that will receive DEFAULT_ADMIN_ROLE
      * @param  issuers_           Addresses that will receive ISSUER_ROLE on deployment
+     * @param  operators_         Addresses that will receive OPS_ROLE on deployment
      * @dev    Initializes all parent contracts and sets up the SecuritiesToken-specific state
      */
     function __securitiesToken_init(
@@ -139,7 +150,8 @@ contract SecuritiesToken is
         address compliance_,
         address pauseManager_,
         address admin_,
-        address[] memory issuers_
+        address[] memory issuers_,
+        address[] memory operators_
     ) internal onlyInitializing {
         if (bytes(nameOverride_).length == 0) revert EmptyString();
         if (bytes(symbolOverride_).length == 0) revert EmptyString();
@@ -153,9 +165,14 @@ contract SecuritiesToken is
         __PauseManagerClientInitializable_init_unchained(pauseManager_);
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _setRoleAdmin(ISSUER_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
         for (uint256 i = 0; i < issuers_.length; ++i) {
             if (issuers_[i] == address(0)) revert ZeroAddress();
             _grantRole(ISSUER_ROLE, issuers_[i]);
+        }
+        for (uint256 i = 0; i < operators_.length; ++i) {
+            if (operators_[i] == address(0)) revert ZeroAddress();
+            _grantRole(OPS_ROLE, operators_[i]);
         }
         mintEnabled = true;
         burnEnabled = true;
@@ -300,11 +317,11 @@ contract SecuritiesToken is
     // ═══════════════════════════════════════════════
 
     /**
-     * @dev Restricts multiplier updates to accounts with DEFAULT_ADMIN_ROLE or ISSUER_ROLE.
+     * @dev Restricts multiplier updates to accounts with DEFAULT_ADMIN_ROLE or OPS_ROLE.
      *      Called by {ERC8056BaseUpgradeable-setUIMultiplier} before executing the update.
      */
     function _authorizeMultiplierUpdate() internal view override {
-        _checkAdminOrIssuer();
+        _checkAdminOrOperator();
     }
 
     /**

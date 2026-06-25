@@ -14,7 +14,6 @@ proxyAdmin = "0x0000000000000000000000000000000000000000"
 # a hint so the operator can grant them manually from the admin account.
 [compliance]
 opsRole = []        # OPS_ROLE on Compliance        — manage blocklist + sanctions
-complianceRole = [] # COMPLIANCE_ROLE on Compliance — manage blocklist + sanctions
 
 [pauseManager]
 opsRole = []        # OPS_ROLE on PauseManager      — pause/unpause tokens
@@ -27,5 +26,7 @@ symbol = "AAPL"
 identifier = "US0378331005"
 # Defaults to top-level `admin` if zero.
 admin = "0x0000000000000000000000000000000000000000"
-# Addresses granted ISSUER_ROLE on the new token.
+# Addresses granted ISSUER_ROLE on the new token (mint / burn).
 issuers = []
+# Addresses granted OPS_ROLE on the new token (UI multiplier scheduling).
+operators = []

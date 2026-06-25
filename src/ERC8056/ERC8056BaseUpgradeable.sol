@@ -462,11 +462,6 @@ abstract contract ERC8056BaseUpgradeable is
     /**
      * @dev Override of ERC20Upgradeable internal transfer hook to emit {IScaledUIAmount-TransferWithUIAmount}.
      *
-     * Per BEP-677, implementations MUST emit a {TransferWithUIAmount} event on every
-     * token transfer, mint, and burn. Any override MUST call `super._update` to
-     * preserve both ERC20 accounting and this event emission. Do NOT emit this
-     * event separately instead of calling super — that would silently skip token
-     * balance updates.
      *
      * Uses {_tryToUIAmount} to compute `uiAmount`, falling back to `0` when the
      * multiplication would overflow `uint256` rather than reverting. This
