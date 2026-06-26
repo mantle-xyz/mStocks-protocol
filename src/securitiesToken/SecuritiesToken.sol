@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import "../ERC8056/ERC8056BaseUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import {ERC20PermitUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import "../compliance/ComplianceClientUpgradeable.sol";
 import "../pauseManager/PauseManagerClientUpgradeable.sol";
@@ -16,6 +17,7 @@ import "../pauseManager/PauseManagerClientUpgradeable.sol";
 contract SecuritiesToken is
     ERC8056BaseUpgradeable,
     AccessControlEnumerableUpgradeable,
+    ERC20PermitUpgradeable,
     ComplianceClientUpgradeable,
     PauseManagerClientUpgradeable
 {
@@ -165,6 +167,10 @@ contract SecuritiesToken is
         if (bytes(identifier_).length == 0) revert EmptyString();
         __AccessControlEnumerable_init();
         __erc8056Base_init(nameOverride_, symbolOverride_);
+        // EIP-2612 / EIP-712. NB: the name committed to the EIP-712 domain is the
+        // *initial* nameOverride_ — subsequent setName() calls do NOT update it.
+        // Off-chain dapps should query eip712Domain() to get the correct domain name.
+        __ERC20Permit_init(nameOverride_);
         _nameOverride = nameOverride_;
         _symbolOverride = symbolOverride_;
         identifier = identifier_;
@@ -373,7 +379,10 @@ contract SecuritiesToken is
      * @param  value  The amount of tokens being transferred
      * @dev    Checks if token is paused and validates compliance for all parties involved
      */
-    function _update(address from, address to, uint256 value) internal override(ERC8056BaseUpgradeable) {
+    function _update(address from, address to, uint256 value)
+        internal
+        override(ERC8056BaseUpgradeable, ERC20Upgradeable)
+    {
         // Revert if the token is paused
         _checkTokenIsPaused();
         // Check constraints when `transferFrom` is called to facilitate
@@ -404,6 +413,10 @@ contract SecuritiesToken is
      * @param  interfaceId The interface identifier, as specified in ERC-165
      * @return True if the interface is supported
      */
+    // ═══════════════════════════════════════════════
+    //                ERC-165
+    // ═══════════════════════════════════════════════
+
     function supportsInterface(bytes4 interfaceId)
         public
         view
