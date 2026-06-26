@@ -105,7 +105,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
 
     /**
      * @notice Modifier that restricts access to blocklist management roles
-     * @dev    Allows DEFAULT_ADMIN_ROLE, OPS_ROLE
+     * @dev    Allows OPS_ROLE only
      */
     modifier onlyBlocklistRole() {
         _checkBlocklistRole();
@@ -113,9 +113,9 @@ contract Compliance is ICompliance, AccessControlEnumerable {
     }
 
     function _checkBlocklistRole() private view {
-        if (!hasRole(DEFAULT_ADMIN_ROLE, _msgSender()) && !hasRole(OPS_ROLE, _msgSender())) {
-            revert MissingBlocklistRole();
-        }
+        // Separation of duties: admin only grants roles, OPS_ROLE actually
+        // manages blocklist / sanctions.
+        if (!hasRole(OPS_ROLE, _msgSender())) revert MissingBlocklistRole();
     }
 
     /**
@@ -144,7 +144,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
      * @notice Add addresses to the blocklist for a given token
      * @param  token     The token address
      * @param  addresses The addresses to add to the blocklist
-     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE
+     * @dev    Callable by OPS_ROLE only (admin only grants the role)
      */
     function addToBlocklist(address token, address[] calldata addresses) external onlyBlocklistRole {
         if (addresses.length == 0) revert EmptyAddressesArray();
@@ -160,7 +160,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
      * @notice Remove addresses from the blocklist for a given token
      * @param  token     The token address
      * @param  addresses The addresses to remove from the blocklist
-     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE
+     * @dev    Callable by OPS_ROLE only (admin only grants the role)
      */
     function removeFromBlocklist(address token, address[] calldata addresses) external onlyBlocklistRole {
         if (addresses.length == 0) revert EmptyAddressesArray();
@@ -175,7 +175,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
     /**
      * @notice Add addresses to the global sanctions list
      * @param  addresses The addresses to add to the sanctions list
-     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE
+     * @dev    Callable by OPS_ROLE only (admin only grants the role)
      */
     function addToSanctionsList(address[] calldata addresses) external onlyBlocklistRole {
         if (addresses.length == 0) revert EmptyAddressesArray();
@@ -196,7 +196,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
     /**
      * @notice Remove addresses from the global sanctions list
      * @param  addresses The addresses to remove from the sanctions list
-     * @dev    Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE
+     * @dev    Callable by OPS_ROLE only (admin only grants the role)
      */
     function removeFromSanctionsList(address[] calldata addresses) external onlyBlocklistRole {
         if (addresses.length == 0) revert EmptyAddressesArray();
@@ -221,7 +221,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
      * @notice Clears the entire sanctions list in O(1) gas
      * @dev    Bumps the internal epoch counter, instantly invalidating all previously
      *         sanctioned addresses regardless of list size. No new addresses are added.
-     *         Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE.
+     *         Callable by OPS_ROLE only (admin only grants the role).
      */
     function resetSanctionedAddresses() external onlyBlocklistRole {
         sanctionEpoch++;
@@ -236,7 +236,7 @@ contract Compliance is ICompliance, AccessControlEnumerable {
      *         addresses in O(1) gas regardless of list size. Then writes only the new list.
      *         Duplicate entries in `newAddresses` are silently deduplicated.
      *         Zero address is not allowed.
-     *         Callable by DEFAULT_ADMIN_ROLE, OPS_ROLE.
+     *         Callable by OPS_ROLE only (admin only grants the role).
      */
     function setSanctionedAddresses(address[] calldata newAddresses) external onlyBlocklistRole {
         // O(1) invalidation of all previous sanctions

@@ -3,57 +3,60 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {SecuritiesToken} from "../src/securitiesToken/SecuritiesToken.sol";
 import {Compliance} from "../src/compliance/Compliance.sol";
 import {PauseManager} from "../src/pauseManager/PauseManager.sol";
+import {OperatorWallet} from "../src/OperatorWallet/OperatorWallet.sol";
 
 /**
  * @title  Smoke
  * @notice End-to-end smoke tests against a *deployed* SecuritiesToken on a real chain.
  *
- *         The signer (--private-key / --account) MUST be the token's DEFAULT_ADMIN_ROLE
- *         holder — every flow either signs as admin or as a freshly-derived test user
- *         (whose private key is generated inside the script via vm.createWallet).
+ *         Role model (admin = grant-only, operational work delegated):
+ *           - admin signs grantRole / revokeRole and one-off config (--private-key)
+ *           - a deterministic in-script "ops" wallet (vm.createWallet) holds the
+ *             OPS_ROLE on the token / Compliance / PauseManager AND OPS_ROLE on an
+ *             OperatorWallet contract that holds ISSUER_ROLE on the token
+ *           - a separate deterministic "user" wallet plays the role of a customer
+ *             and is registered as a hot wallet on the OperatorWallet so it can be
+ *             a mint / transfer / burn target
  *
- *         Each test entry point is self-contained (does its own setup + cleanup) and can
- *         be invoked via --sig. Use `runAll(address)` to chain everything in one broadcast.
+ *         Token ISSUER_ROLE can no longer be granted to an EOA, so all mint / burn /
+ *         transfer operations are routed through the OperatorWallet. Use a pre-deployed
+ *         OperatorWallet by setting `SMOKE_OPERATOR_WALLET`; otherwise the script will
+ *         deploy a fresh one (admin pays for the deploy).
  *
  *         Examples:
  *           export RPC=https://...
  *           export ADMIN_PK=0x...
  *           export TOKEN=0xDeployedTokenProxy
+ *           # optional — reuse an existing wallet across runs:
+ *           # export SMOKE_OPERATOR_WALLET=0xWalletProxy
  *
  *           forge script script/Smoke.s.sol:Smoke --sig "testInfo(address)" $TOKEN --rpc-url $RPC
- *           forge script script/Smoke.s.sol:Smoke --sig "testMint(address)" $TOKEN \
- *             --rpc-url $RPC --private-key $ADMIN_PK --broadcast
  *           forge script script/Smoke.s.sol:Smoke --sig "runAll(address)" $TOKEN \
  *             --rpc-url $RPC --private-key $ADMIN_PK --broadcast
- *
- *         Override the deterministic test-user label (defaults to "mstocks-smoke-user")
- *         to generate a fresh user — useful when prior runs left state behind:
- *           SMOKE_USER_LABEL="run-$(date +%s)" forge script ...
  */
 contract Smoke is Script {
-    // Amount used for mint / transfer flows (18 decimals raw).
     uint256 internal constant TEST_AMOUNT = 1_000 ether;
-    // Below this balance, admin tops up the test user.
-    // Default 0.01 native. L2s with L1 data fees (Mantle, Optimism, Base, Arbitrum)
-    // can burn a lot per tx — bump via SMOKE_USER_GAS_THRESHOLD if needed.
     uint256 internal constant DEFAULT_GAS_THRESHOLD = 0.01 ether;
-    // Top-up amount when funding the test user. Default 0.05 native. Each user-signed
-    // tx on Mantle can cost up to ~0.02 native including L1 fee — 0.05 covers ~2 user
-    // txs (transfer back + approve). Bump via SMOKE_USER_GAS_TARGET if needed.
     uint256 internal constant DEFAULT_GAS_TARGET = 0.05 ether;
+
+    /// Cached OperatorWallet for the current forge script invocation. Within `runAll`,
+    /// this is resolved once on the first `_setupOps` call and reused.
+    OperatorWallet internal _wallet;
 
     // ═══════════════════════════════════════════════
     //                Public entry points
     // ═══════════════════════════════════════════════
 
-    /// Read-only dump of the token's state. No broadcast required.
-    function testInfo(address tokenAddr) public view {
+    function testInfo(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
         Compliance c = Compliance(address(token.compliance()));
         PauseManager p = PauseManager(address(token.pauseManager()));
+        Vm.Wallet memory ops = _ops();
+        Vm.Wallet memory user = _user();
 
         console.log("--- testInfo ---");
         console.log("Token:           ", tokenAddr);
@@ -72,252 +75,280 @@ contract Smoke is Script {
         console.log("PauseManager:    ", address(p));
         console.log("Token paused:    ", p.isTokenPaused(tokenAddr));
         console.log("All paused:      ", p.allTokensPaused());
-        console.log("Admin balance:   ", token.balanceOf(_admin()));
+        console.log("Admin:           ", _admin());
+        console.log("Ops:             ", ops.addr);
+        console.log("User:            ", user.addr);
+        console.log("Ops native gas:  ", ops.addr.balance);
+        address envWallet = vm.envOr("SMOKE_OPERATOR_WALLET", address(0));
+        if (envWallet != address(0)) {
+            console.log("OperatorWallet (env):", envWallet);
+        }
     }
 
-    /// Admin mints TEST_AMOUNT to itself, asserts balance + totalSupply increased.
+    /// Mint TEST_AMOUNT through OperatorWallet to itself.
     function testMint(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        address admin = _admin();
+        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
         console.log("--- testMint ---");
 
         uint256 supplyBefore = token.totalSupply();
-        uint256 balanceBefore = token.balanceOf(admin);
+        uint256 balanceBefore = token.balanceOf(address(wallet));
 
-        vm.startBroadcast();
-        require(token.mint(TEST_AMOUNT), "mint returned false");
-        vm.stopBroadcast();
+        vm.broadcast(ops.privateKey);
+        wallet.mint(address(token), address(wallet), TEST_AMOUNT);
 
         require(token.totalSupply() == supplyBefore + TEST_AMOUNT, "totalSupply not bumped");
-        require(token.balanceOf(admin) == balanceBefore + TEST_AMOUNT, "balance not bumped");
-        console.log("  minted          ", TEST_AMOUNT);
-        console.log("  admin balance   ", token.balanceOf(admin));
+        require(
+            token.balanceOf(address(wallet)) == balanceBefore + TEST_AMOUNT,
+            "wallet balance not bumped"
+        );
+        console.log("  minted             ", TEST_AMOUNT);
+        console.log("  wallet balance     ", token.balanceOf(address(wallet)));
         console.log("  [PASS] testMint");
     }
 
-    /// Admin burns TEST_AMOUNT from itself, asserts balance + totalSupply decreased.
-    /// Mints first if admin lacks balance.
+    /// Burn TEST_AMOUNT from the OperatorWallet's own balance.
     function testBurn(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        address admin = _admin();
+        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
         console.log("--- testBurn ---");
 
-        vm.startBroadcast();
-        if (token.balanceOf(admin) < TEST_AMOUNT) {
-            require(token.mint(TEST_AMOUNT), "pre-burn mint failed");
+        if (token.balanceOf(address(wallet)) < TEST_AMOUNT) {
+            vm.broadcast(ops.privateKey);
+            wallet.mint(address(token), address(wallet), TEST_AMOUNT);
         }
         uint256 supplyBefore = token.totalSupply();
-        uint256 balanceBefore = token.balanceOf(admin);
-        require(token.burn(TEST_AMOUNT), "burn returned false");
-        vm.stopBroadcast();
+        uint256 balanceBefore = token.balanceOf(address(wallet));
+
+        vm.broadcast(ops.privateKey);
+        wallet.burn(address(token), address(wallet), TEST_AMOUNT);
 
         require(token.totalSupply() == supplyBefore - TEST_AMOUNT, "totalSupply not reduced");
-        require(token.balanceOf(admin) == balanceBefore - TEST_AMOUNT, "balance not reduced");
-        console.log("  burned          ", TEST_AMOUNT);
+        require(
+            token.balanceOf(address(wallet)) == balanceBefore - TEST_AMOUNT,
+            "wallet balance not reduced"
+        );
+        console.log("  burned             ", TEST_AMOUNT);
         console.log("  [PASS] testBurn");
     }
 
-    /// Full transfer flow: admin -> user -> admin (forces user-side signing),
-    /// plus approve / transferFrom round trip.
+    /// wallet mints -> transfers to user (hot wallet) -> user signs return -> approve + wallet.burn.
     function testTransferFlow(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        address admin = _admin();
+        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
         Vm.Wallet memory user = _user();
         console.log("--- testTransferFlow ---");
-        console.log("  test user:      ", user.addr);
+        console.log("  ops:               ", ops.addr);
+        console.log("  wallet:            ", address(wallet));
+        console.log("  user:              ", user.addr);
 
-        // Phase 1: admin mints (if needed) + funds user with gas + transfers half to user
-        uint256 half = TEST_AMOUNT / 2;
-        vm.startBroadcast();
-        if (token.balanceOf(admin) < TEST_AMOUNT) {
-            require(token.mint(TEST_AMOUNT), "pre-transfer mint failed");
+        if (token.balanceOf(address(wallet)) < TEST_AMOUNT) {
+            vm.broadcast(ops.privateKey);
+            wallet.mint(address(token), address(wallet), TEST_AMOUNT);
         }
-        _topUpUser(user.addr);
-        require(token.transfer(user.addr, half), "admin -> user transfer failed");
-        vm.stopBroadcast();
-        require(token.balanceOf(user.addr) >= half, "user did not receive tokens");
+        _adminFundIfNeeded(user.addr);
 
-        // Phase 2: user transfers a quarter back (user signs)
-        uint256 quarter = TEST_AMOUNT / 4;
-        uint256 userBefore = token.balanceOf(user.addr);
-        uint256 adminBefore = token.balanceOf(admin);
-        vm.broadcast(user.privateKey);
-        require(token.transfer(admin, quarter), "user -> admin transfer failed");
-        require(token.balanceOf(user.addr) == userBefore - quarter, "user balance mismatch");
-        require(token.balanceOf(admin) == adminBefore + quarter, "admin balance mismatch");
+        _transferFlowPhase1(token, wallet, ops, user, TEST_AMOUNT / 2);
+        _transferFlowPhase2(token, wallet, user, TEST_AMOUNT / 4);
+        _transferFlowPhase3(token, wallet, ops, user, TEST_AMOUNT / 4);
 
-        // Phase 3: approve / transferFrom — user approves admin, admin pulls remaining quarter
-        vm.broadcast(user.privateKey);
-        require(token.approve(admin, quarter), "approve failed");
-        require(token.allowance(user.addr, admin) == quarter, "allowance not set");
-
-        adminBefore = token.balanceOf(admin);
-        userBefore = token.balanceOf(user.addr);
-        vm.broadcast();
-        require(token.transferFrom(user.addr, admin, quarter), "transferFrom failed");
-        require(token.balanceOf(user.addr) == userBefore - quarter, "user post-pull mismatch");
-        require(token.balanceOf(admin) == adminBefore + quarter, "admin post-pull mismatch");
-        require(token.allowance(user.addr, admin) == 0, "allowance not consumed");
-
-        console.log("  admin balance   ", token.balanceOf(admin));
-        console.log("  user balance    ", token.balanceOf(user.addr));
+        console.log("  wallet balance     ", token.balanceOf(address(wallet)));
+        console.log("  user balance       ", token.balanceOf(user.addr));
         console.log("  [PASS] testTransferFlow");
     }
 
-    /// Pause individual + global, verify transfers revert, then unpause.
+    /// Phase 1: ops calls wallet.transfer to send `amount` from wallet to user (hot wallet).
+    function _transferFlowPhase1(
+        SecuritiesToken token,
+        OperatorWallet wallet,
+        Vm.Wallet memory ops,
+        Vm.Wallet memory user,
+        uint256 amount
+    ) internal {
+        uint256 userBefore = token.balanceOf(user.addr);
+        vm.broadcast(ops.privateKey);
+        wallet.transfer(address(token), user.addr, amount);
+        require(
+            token.balanceOf(user.addr) == userBefore + amount,
+            "user did not receive expected tokens"
+        );
+    }
+
+    /// Phase 2: user signs a direct token.transfer back to the wallet.
+    function _transferFlowPhase2(
+        SecuritiesToken token,
+        OperatorWallet wallet,
+        Vm.Wallet memory user,
+        uint256 amount
+    ) internal {
+        uint256 userBefore = token.balanceOf(user.addr);
+        uint256 walletBefore = token.balanceOf(address(wallet));
+        vm.broadcast(user.privateKey);
+        require(token.transfer(address(wallet), amount), "user -> wallet transfer failed");
+        require(token.balanceOf(user.addr) == userBefore - amount, "user balance mismatch");
+        require(
+            token.balanceOf(address(wallet)) == walletBefore + amount,
+            "wallet balance mismatch"
+        );
+    }
+
+    /// Phase 3: user approves wallet, ops calls wallet.burn(token, user, amount) -- wallet
+    /// transferFroms `amount` from user to itself then burns it. Exercises approve / burn
+    /// through the operational layer.
+    function _transferFlowPhase3(
+        SecuritiesToken token,
+        OperatorWallet wallet,
+        Vm.Wallet memory ops,
+        Vm.Wallet memory user,
+        uint256 amount
+    ) internal {
+        vm.broadcast(user.privateKey);
+        require(token.approve(address(wallet), amount), "approve failed");
+        require(
+            token.allowance(user.addr, address(wallet)) == amount,
+            "allowance not set"
+        );
+
+        uint256 supplyBefore = token.totalSupply();
+        uint256 userBefore = token.balanceOf(user.addr);
+        vm.broadcast(ops.privateKey);
+        wallet.burn(address(token), user.addr, amount);
+        require(token.balanceOf(user.addr) == userBefore - amount, "user post-burn mismatch");
+        require(token.totalSupply() == supplyBefore - amount, "totalSupply not reduced by burn");
+        require(token.allowance(user.addr, address(wallet)) == 0, "allowance not consumed");
+    }
+
+    /// Pause individual + global, verify wallet.transfer reverts, then unpause.
     function testPause(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        address admin = _admin();
+        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
         Vm.Wallet memory user = _user();
         PauseManager pm = PauseManager(address(token.pauseManager()));
         console.log("--- testPause ---");
 
-        // Ensure admin has something to attempt transferring
-        vm.startBroadcast();
-        if (token.balanceOf(admin) < 1 ether) {
-            require(token.mint(TEST_AMOUNT), "pre-pause mint failed");
+        if (token.balanceOf(address(wallet)) < 1 ether) {
+            vm.broadcast(ops.privateKey);
+            wallet.mint(address(token), address(wallet), TEST_AMOUNT);
         }
-        vm.stopBroadcast();
 
         // Individual pause
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         pm.pauseToken(tokenAddr);
         require(pm.isTokenPaused(tokenAddr), "token not flagged paused");
-        _expectTransferReverts(token, admin, user.addr, 1 ether, "expected pause revert");
+        _expectWalletTransferReverts(wallet, address(token), ops.addr, user.addr, 1 ether, "expected pause revert");
 
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         pm.unpauseToken(tokenAddr);
         require(!pm.isTokenPaused(tokenAddr), "token still flagged paused");
 
         // Global pause
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         pm.pauseAllTokens();
         require(pm.isTokenPaused(tokenAddr), "global pause not in effect");
-        _expectTransferReverts(token, admin, user.addr, 1 ether, "expected global-pause revert");
+        _expectWalletTransferReverts(wallet, address(token), ops.addr, user.addr, 1 ether, "expected global-pause revert");
 
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         pm.unpauseAllTokens();
         require(!pm.isTokenPaused(tokenAddr), "global unpause failed");
 
-        // Sanity: post-unpause transfer succeeds (and cleans up by sending back)
-        vm.startBroadcast();
-        require(token.transfer(user.addr, 1 ether), "post-unpause transfer failed");
-        vm.stopBroadcast();
+        // Sanity: post-unpause transfer succeeds
+        vm.broadcast(ops.privateKey);
+        wallet.transfer(address(token), user.addr, 1 ether);
         console.log("  [PASS] testPause");
     }
 
     /// Blocklist (token-scoped) + sanctions (global) flow.
     function testCompliance(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        address admin = _admin();
+        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
         Vm.Wallet memory user = _user();
         Compliance c = Compliance(address(token.compliance()));
         console.log("--- testCompliance ---");
 
-        vm.startBroadcast();
-        if (token.balanceOf(admin) < 1 ether) {
-            require(token.mint(TEST_AMOUNT), "pre-compliance mint failed");
+        if (token.balanceOf(address(wallet)) < 1 ether) {
+            vm.broadcast(ops.privateKey);
+            wallet.mint(address(token), address(wallet), TEST_AMOUNT);
         }
-        vm.stopBroadcast();
 
-        // --- Blocklist ---
         address[] memory list = new address[](1);
         list[0] = user.addr;
 
-        vm.broadcast();
+        // --- Blocklist ---
+        vm.broadcast(ops.privateKey);
         c.addToBlocklist(tokenAddr, list);
         require(c.blockedAddresses(tokenAddr, user.addr), "user not on blocklist");
-        _expectTransferReverts(token, admin, user.addr, 1 ether, "expected blocklist revert");
+        _expectWalletTransferReverts(wallet, address(token), ops.addr, user.addr, 1 ether, "expected blocklist revert");
 
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         c.removeFromBlocklist(tokenAddr, list);
         require(!c.blockedAddresses(tokenAddr, user.addr), "user still on blocklist");
 
         // --- Sanctions (global) ---
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         c.addToSanctionsList(list);
         require(c.sanctionedAddresses(user.addr), "user not on sanctions list");
-        _expectTransferReverts(token, admin, user.addr, 1 ether, "expected sanctions revert");
+        _expectWalletTransferReverts(wallet, address(token), ops.addr, user.addr, 1 ether, "expected sanctions revert");
 
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         c.removeFromSanctionsList(list);
         require(!c.sanctionedAddresses(user.addr), "user still on sanctions list");
 
         // --- Sanctions O(1) reset ---
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         c.addToSanctionsList(list);
         require(c.sanctionedAddresses(user.addr), "pre-reset sanction missing");
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         c.resetSanctionedAddresses();
         require(!c.sanctionedAddresses(user.addr), "epoch reset did not clear sanction");
 
         // Post-cleanup sanity
-        vm.startBroadcast();
-        require(token.transfer(user.addr, 1 ether), "post-compliance transfer failed");
-        vm.stopBroadcast();
+        vm.broadcast(ops.privateKey);
+        wallet.transfer(address(token), user.addr, 1 ether);
         console.log("  [PASS] testCompliance");
     }
 
     /// Schedule a multiplier change and verify it is pending on-chain.
-    /// (Does not wait for activation — the script can't sleep across blocks.)
     function testMultiplier(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
+        (Vm.Wallet memory ops,) = _setupOps(token);
         console.log("--- testMultiplier ---");
 
         uint256 current = token.uiMultiplier();
-        // Toggle: if current is 1e18 use 2e18; otherwise restore to 1e18
         uint256 next = current == 1 ether ? 2 ether : 1 ether;
-        // The contract requires effective > block.timestamp AT EXECUTION TIME (not
-        // simulation time). When this runs inside runAll on a slow L2, dozens of txs
-        // may land between simulation and the actual setUIMultiplier broadcast — the
-        // chain's timestamp can advance several minutes. Use a generous 1-hour offset
-        // so the require still passes even under heavy bundle delay. Override via env
-        // for chains with different block times.
         uint256 offset = vm.envOr("SMOKE_MULTIPLIER_OFFSET", uint256(3600));
         uint256 effective = block.timestamp + offset;
 
-        vm.broadcast();
+        vm.broadcast(ops.privateKey);
         token.setUIMultiplier(next, effective);
 
         require(token.newUIMultiplier() == next, "pending multiplier not set");
         require(token.effectiveAt() == effective, "pending effectiveAt not set");
 
-        console.log("  current:        ", current);
-        console.log("  scheduled:      ", next);
-        console.log("  effectiveAt:    ", effective);
+        console.log("  current:           ", current);
+        console.log("  scheduled:         ", next);
+        console.log("  effectiveAt:       ", effective);
         console.log("  [PASS] testMultiplier (scheduling verified)");
     }
 
-    /// Grant ISSUER_ROLE to the test user, have them mint, then revoke.
+    /// Regression test for the EOA-issuer guard: admin's attempt to grant ISSUER_ROLE
+    /// to an EOA must revert. Stays in-simulator via vm.prank so it's not recorded
+    /// as a broadcast tx.
     function testIssuerRole(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
         Vm.Wallet memory user = _user();
         bytes32 issuerRole = token.ISSUER_ROLE();
         console.log("--- testIssuerRole ---");
 
-        // Grant + fund (admin)
-        vm.startBroadcast();
-        token.grantRole(issuerRole, user.addr);
-        _topUpUser(user.addr);
-        vm.stopBroadcast();
-        require(token.hasRole(issuerRole, user.addr), "ISSUER_ROLE not granted");
-
-        // User mints to themself
-        uint256 supplyBefore = token.totalSupply();
-        uint256 userBefore = token.balanceOf(user.addr);
-        vm.broadcast(user.privateKey);
-        require(token.mint(TEST_AMOUNT), "issuer mint failed");
-        require(token.totalSupply() == supplyBefore + TEST_AMOUNT, "totalSupply mismatch");
-        require(token.balanceOf(user.addr) == userBefore + TEST_AMOUNT, "user balance mismatch");
-
-        // Revoke (admin)
-        vm.broadcast();
-        token.revokeRole(issuerRole, user.addr);
-        require(!token.hasRole(issuerRole, user.addr), "ISSUER_ROLE not revoked");
-        console.log("  [PASS] testIssuerRole");
+        vm.prank(_admin());
+        (bool ok,) = address(token).call(
+            abi.encodeWithSignature("grantRole(bytes32,address)", issuerRole, user.addr)
+        );
+        require(!ok, "expected grantRole(ISSUER, EOA) to revert");
+        require(!token.hasRole(issuerRole, user.addr), "EOA somehow gained ISSUER_ROLE");
+        console.log("  [PASS] EOA correctly rejected as ISSUER_ROLE holder");
     }
 
-    /// Run every mutating test in sequence — one broadcast bundle, one report.
+    /// Run every mutating test in sequence.
     function runAll(address tokenAddr) external {
         testInfo(tokenAddr);
         testMint(tokenAddr);
@@ -334,48 +365,157 @@ contract Smoke is Script {
     //                Internal helpers
     // ═══════════════════════════════════════════════
 
-    /// Deterministic test user (same address across runs unless SMOKE_USER_LABEL is overridden).
+    function _ops() internal returns (Vm.Wallet memory) {
+        string memory label = vm.envOr("SMOKE_OPS_LABEL", string("mstocks-smoke-ops"));
+        return vm.createWallet(label);
+    }
+
     function _user() internal returns (Vm.Wallet memory) {
         string memory label = vm.envOr("SMOKE_USER_LABEL", string("mstocks-smoke-user"));
         return vm.createWallet(label);
     }
 
-    /// Address derived from --private-key (or vm default).
     function _admin() internal view returns (address) {
         uint256 pk = vm.envOr("PRIVATE_KEY", uint256(0));
         if (pk != 0) return vm.addr(pk);
         return msg.sender;
     }
 
-    /// Sends gas to `user` if their native balance is below the threshold.
-    /// Both threshold and target are overridable via env (in wei):
-    ///   SMOKE_USER_GAS_THRESHOLD, SMOKE_USER_GAS_TARGET
-    /// Must be called inside an active admin broadcast.
-    function _topUpUser(address user) internal {
-        uint256 threshold = vm.envOr("SMOKE_USER_GAS_THRESHOLD", DEFAULT_GAS_THRESHOLD);
-        uint256 target = vm.envOr("SMOKE_USER_GAS_TARGET", DEFAULT_GAS_TARGET);
-        if (user.balance >= threshold) {
-            console.log("    user gas (skip top-up):", user.balance);
-            return;
+    /**
+     * @dev Resolves the OperatorWallet to use for this run. Resolution order:
+     *      1. cached in `_wallet` (set by a previous call in this same script run)
+     *      2. SMOKE_OPERATOR_WALLET env var (a pre-deployed wallet — must have
+     *         broadcaster as DEFAULT_ADMIN_ROLE)
+     *      3. deploy a fresh wallet (broadcaster becomes admin)
+     */
+    function _getOrDeployWallet() internal returns (OperatorWallet w) {
+        if (address(_wallet) != address(0)) return _wallet;
+
+        address envAddr = vm.envOr("SMOKE_OPERATOR_WALLET", address(0));
+        if (envAddr != address(0)) {
+            _wallet = OperatorWallet(payable(envAddr));
+            require(
+                _wallet.hasRole(bytes32(0), _admin()),
+                "Smoke: broadcaster lacks DEFAULT_ADMIN_ROLE on the configured OperatorWallet"
+            );
+            return _wallet;
         }
-        (bool ok,) = user.call{value: target}("");
-        require(ok, "Smoke: gas fund transfer failed");
-        console.log("    user gas (funded):     ", target);
+
+        console.log("    SMOKE_OPERATOR_WALLET not set - deploying a fresh wallet");
+        vm.startBroadcast();
+        OperatorWallet impl = new OperatorWallet();
+        bytes memory initData = abi.encodeWithSelector(OperatorWallet.initialize.selector, _admin());
+        _wallet = OperatorWallet(payable(address(new ERC1967Proxy(address(impl), initData))));
+        vm.stopBroadcast();
+        console.log("    deployed OperatorWallet at", address(_wallet));
+        return _wallet;
     }
 
-    /// Asserts that `from -> to` transfer reverts. Uses vm.prank + low-level call so the
-    /// check stays in the simulator and is NOT recorded as a broadcast tx (forge's bundle
-    /// re-simulation would otherwise reject the expected revert as a failed transaction).
-    function _expectTransferReverts(
-        SecuritiesToken token,
-        address from,
+    /**
+     * @dev Idempotently provisions the operational setup:
+     *      1. resolves / deploys the OperatorWallet
+     *      2. grants the wallet ISSUER_ROLE on the token (so it can mint / burn)
+     *      3. grants ops the OPS_ROLE on the wallet (so ops can drive mint / burn / transfer)
+     *      4. adds user as a hot wallet on the wallet (so wallet.transfer / wallet.burn
+     *         can use user.addr as recipient / from)
+     *      5. grants ops the OPS_ROLE on token (multiplier), Compliance, and PauseManager
+     *      6. tops up ops's native gas
+     */
+    function _setupOps(SecuritiesToken token) internal returns (Vm.Wallet memory ops, OperatorWallet wallet) {
+        ops = _ops();
+        Vm.Wallet memory user = _user();
+        wallet = _getOrDeployWallet();
+
+        Compliance c = Compliance(address(token.compliance()));
+        PauseManager p = PauseManager(address(token.pauseManager()));
+
+        bytes32 tIssuer = token.ISSUER_ROLE();
+        bytes32 tOps = token.OPS_ROLE();
+        bytes32 walletOps = wallet.OPS_ROLE();
+        bytes32 cOps = c.OPS_ROLE();
+        bytes32 pOps = p.OPS_ROLE();
+
+        bool needIssuerOnWallet = !token.hasRole(tIssuer, address(wallet));
+        bool needOpsOnWallet = !wallet.hasRole(walletOps, ops.addr);
+        bool needHotWallet = !wallet.isHotWallet(user.addr);
+        bool needTOps = !token.hasRole(tOps, ops.addr);
+        bool needCOps = !c.hasRole(cOps, ops.addr);
+        bool needPOps = !p.hasRole(pOps, ops.addr);
+        bool needGas = ops.addr.balance
+            < vm.envOr("SMOKE_USER_GAS_THRESHOLD", DEFAULT_GAS_THRESHOLD);
+
+        if (
+            !needIssuerOnWallet && !needOpsOnWallet && !needHotWallet && !needTOps
+                && !needCOps && !needPOps && !needGas
+        ) {
+            return (ops, wallet);
+        }
+
+        console.log("    setup ops:           ", ops.addr);
+        vm.startBroadcast();
+        if (needGas) _topUpAddr(ops.addr);
+        if (needIssuerOnWallet) {
+            token.grantRole(tIssuer, address(wallet));
+            console.log("      granted token.ISSUER_ROLE to OperatorWallet");
+        }
+        if (needOpsOnWallet) {
+            wallet.grantRole(walletOps, ops.addr);
+            console.log("      granted wallet.OPS_ROLE to ops");
+        }
+        if (needHotWallet) {
+            wallet.addHotWallet(user.addr);
+            console.log("      added user as a hot wallet on the OperatorWallet");
+        }
+        if (needTOps) {
+            token.grantRole(tOps, ops.addr);
+            console.log("      granted token.OPS_ROLE to ops");
+        }
+        if (needCOps) {
+            c.grantRole(cOps, ops.addr);
+            console.log("      granted compliance.OPS_ROLE to ops");
+        }
+        if (needPOps) {
+            p.grantRole(pOps, ops.addr);
+            console.log("      granted pauseManager.OPS_ROLE to ops");
+        }
+        vm.stopBroadcast();
+    }
+
+    function _topUpAddr(address addr) internal {
+        uint256 threshold = vm.envOr("SMOKE_USER_GAS_THRESHOLD", DEFAULT_GAS_THRESHOLD);
+        uint256 target = vm.envOr("SMOKE_USER_GAS_TARGET", DEFAULT_GAS_TARGET);
+        if (addr.balance >= threshold) {
+            console.log("      gas (skip top-up):   ", addr.balance);
+            return;
+        }
+        (bool ok,) = addr.call{value: target}("");
+        require(ok, "Smoke: gas fund transfer failed");
+        console.log("      gas (funded):        ", target);
+    }
+
+    function _adminFundIfNeeded(address addr) internal {
+        uint256 threshold = vm.envOr("SMOKE_USER_GAS_THRESHOLD", DEFAULT_GAS_THRESHOLD);
+        if (addr.balance >= threshold) return;
+        vm.startBroadcast();
+        _topUpAddr(addr);
+        vm.stopBroadcast();
+    }
+
+    /// Asserts that `wallet.transfer(token, to, amount)` reverts when called by `caller`.
+    /// Uses vm.prank + low-level call so the check stays in-simulator (forge's broadcast
+    /// bundle would otherwise reject the expected revert as a failed transaction).
+    function _expectWalletTransferReverts(
+        OperatorWallet wallet,
+        address token,
+        address caller,
         address to,
         uint256 amount,
         string memory reason
     ) internal {
-        vm.prank(from);
-        (bool ok,) =
-            address(token).call(abi.encodeWithSignature("transfer(address,uint256)", to, amount));
+        vm.prank(caller);
+        (bool ok,) = address(wallet).call(
+            abi.encodeWithSignature("transfer(address,address,uint256)", token, to, amount)
+        );
         require(!ok, reason);
     }
 }

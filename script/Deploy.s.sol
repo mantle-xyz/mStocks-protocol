@@ -3,10 +3,12 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {stdToml} from "forge-std/StdToml.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {Compliance} from "../src/compliance/Compliance.sol";
 import {PauseManager} from "../src/pauseManager/PauseManager.sol";
 import {SecuritiesTokenFactory} from "../src/securitiesToken/SecuritiesTokenFactory.sol";
 import {SecuritiesToken} from "../src/securitiesToken/SecuritiesToken.sol";
+import {OperatorWallet} from "../src/OperatorWallet/OperatorWallet.sol";
 
 /**
  * @title  Deploy
@@ -52,6 +54,8 @@ contract Deploy is Script {
         address proxyAdmin;
         address[] complianceOps;
         address[] pauseManagerOps;
+        address[] operatorWalletOps;
+        address[] operatorWalletHotWallets;
         bool deployInitialToken;
         string tokenName;
         string tokenSymbol;
@@ -135,6 +139,17 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
+    /// Deploy an OperatorWallet behind an ERC1967 proxy, grant OPS_ROLE per config, and
+    /// register any pre-configured hot wallets. `[operatorWallet]` config section is optional.
+    function deployOperatorWallet() external returns (OperatorWallet wallet) {
+        Config memory cfg = _loadConfig();
+        bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
+
+        vm.startBroadcast();
+        wallet = _deployOperatorWallet(cfg, broadcasterIsAdmin);
+        vm.stopBroadcast();
+    }
+
     // ═══════════════════════════════════════════════
     //                Internal deploys
     // ═══════════════════════════════════════════════
@@ -176,6 +191,39 @@ contract Deploy is Script {
         factory = new SecuritiesTokenFactory(compliance, pauseManager, cfg.admin, cfg.proxyAdmin);
         console.log("Factory:        ", address(factory));
         console.log("Beacon:         ", address(factory.beacon()));
+    }
+
+    /// Deploys OperatorWallet behind an ERC1967 proxy + applies config-driven grants
+    /// and hot wallets. Grants / hot wallets are skipped if broadcaster != admin (the
+    /// wallet's admin is `cfg.admin`).
+    function _deployOperatorWallet(Config memory cfg, bool broadcasterIsAdmin)
+        internal
+        returns (OperatorWallet wallet)
+    {
+        OperatorWallet impl = new OperatorWallet();
+        bytes memory initData = abi.encodeWithSelector(OperatorWallet.initialize.selector, cfg.admin);
+        wallet = OperatorWallet(payable(address(new ERC1967Proxy(address(impl), initData))));
+        console.log("OperatorWallet impl:  ", address(impl));
+        console.log("OperatorWallet proxy: ", address(wallet));
+
+        _grantRoles(
+            address(wallet),
+            wallet.OPS_ROLE(),
+            "OPS_ROLE (OperatorWallet)",
+            cfg.operatorWalletOps,
+            broadcasterIsAdmin
+        );
+
+        if (cfg.operatorWalletHotWallets.length > 0) {
+            if (!broadcasterIsAdmin) {
+                console.log("Skipping initial hot wallets: broadcaster != admin.");
+            } else {
+                for (uint256 i = 0; i < cfg.operatorWalletHotWallets.length; ++i) {
+                    wallet.addHotWallet(cfg.operatorWalletHotWallets[i]);
+                    console.log("  added hot wallet", cfg.operatorWalletHotWallets[i]);
+                }
+            }
+        }
     }
 
     /// Mints the initial token via `factory.deployToken`. Requires DEFAULT_ADMIN_ROLE on
@@ -245,6 +293,8 @@ contract Deploy is Script {
 
         cfg.complianceOps = _readAddressArrayOr(toml, ".compliance.opsRole");
         cfg.pauseManagerOps = _readAddressArrayOr(toml, ".pauseManager.opsRole");
+        cfg.operatorWalletOps = _readAddressArrayOr(toml, ".operatorWallet.opsRole");
+        cfg.operatorWalletHotWallets = _readAddressArrayOr(toml, ".operatorWallet.hotWallets");
 
         cfg.deployInitialToken = vm.keyExistsToml(toml, ".token");
         if (cfg.deployInitialToken) {

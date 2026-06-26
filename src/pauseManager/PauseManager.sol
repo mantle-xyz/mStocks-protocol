@@ -73,7 +73,7 @@ contract PauseManager is IPauseManager, AccessControlEnumerable {
 
     /**
      * @notice Modifier that restricts access to pause management roles
-     * @dev    Allows DEFAULT_ADMIN_ROLE or OPS_ROLE
+     * @dev    Allows OPS_ROLE only
      */
     modifier onlyPauseRole() {
         _checkPauseRole();
@@ -81,15 +81,14 @@ contract PauseManager is IPauseManager, AccessControlEnumerable {
     }
 
     function _checkPauseRole() private view {
-        if (!hasRole(DEFAULT_ADMIN_ROLE, _msgSender()) && !hasRole(OPS_ROLE, _msgSender())) {
-            revert MissingPauseRole();
-        }
+        // Separation of duties: admin only grants roles, OPS_ROLE actually pauses.
+        if (!hasRole(OPS_ROLE, _msgSender())) revert MissingPauseRole();
     }
 
     /**
      * @notice Pauses a token
      * @param  token The address of the token to pause
-     * @dev    Callable by DEFAULT_ADMIN_ROLE or OPS_ROLE
+     * @dev    Callable by OPS_ROLE only (admin only grants the role)
      */
     function pauseToken(address token) external onlyPauseRole {
         pausedTokens[token] = true;
@@ -99,7 +98,7 @@ contract PauseManager is IPauseManager, AccessControlEnumerable {
     /**
      * @notice Unpauses a token
      * @param  token The address of the token to unpause
-     * @dev    Callable by DEFAULT_ADMIN_ROLE or OPS_ROLE
+     * @dev    Callable by OPS_ROLE only (admin only grants the role)
      */
     function unpauseToken(address token) external onlyPauseRole {
         pausedTokens[token] = false;
@@ -108,7 +107,7 @@ contract PauseManager is IPauseManager, AccessControlEnumerable {
 
     /**
      * @notice Pauses all tokens
-     * @dev    Callable by DEFAULT_ADMIN_ROLE or OPS_ROLE
+     * @dev    Callable by OPS_ROLE only (admin only grants the role)
      */
     function pauseAllTokens() external onlyPauseRole {
         allTokensPaused = true;
@@ -117,7 +116,7 @@ contract PauseManager is IPauseManager, AccessControlEnumerable {
 
     /**
      * @notice Unpauses all tokens
-     * @dev    Callable by DEFAULT_ADMIN_ROLE or OPS_ROLE
+     * @dev    Callable by OPS_ROLE only (admin only grants the role)
      */
     function unpauseAllTokens() external onlyPauseRole {
         allTokensPaused = false;
