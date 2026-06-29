@@ -164,6 +164,25 @@ contract OperatorWalletTest is Test {
         assertEq(token.totalSupply(), 100 ether);
     }
 
+    function test_MintEmitsMintedEvent() public {
+        vm.prank(admin);
+        wallet.addHotWallet(hotwallet1);
+
+        vm.expectEmit(true, true, true, true, address(wallet));
+        emit OperatorWallet.Minted(address(wallet), address(token), hotwallet1, 100 ether);
+
+        vm.prank(ops);
+        wallet.mint(address(token), hotwallet1, 100 ether);
+    }
+
+    function test_MintToSelfEmitsMintedEventWithWalletAsRecipient() public {
+        vm.expectEmit(true, true, true, true, address(wallet));
+        emit OperatorWallet.Minted(address(wallet), address(token), address(wallet), 50 ether);
+
+        vm.prank(ops);
+        wallet.mint(address(token), address(wallet), 50 ether);
+    }
+
     function test_OpsCanMintToSelf() public {
         // recipient = address(wallet) → token stays on the wallet
         vm.prank(ops);
@@ -265,6 +284,27 @@ contract OperatorWalletTest is Test {
         assertEq(token.balanceOf(hotwallet1), 60 ether);
         assertEq(token.balanceOf(address(wallet)), 0);  // wallet pulled then burned
         assertEq(token.totalSupply(), supplyBefore - 40 ether);
+    }
+
+    function test_BurnEmitsBurnedEvent() public {
+        _seedHotWalletForBurn();
+
+        vm.expectEmit(true, true, true, true, address(wallet));
+        emit OperatorWallet.Burned(address(wallet), address(token), hotwallet1, 40 ether);
+
+        vm.prank(ops);
+        wallet.burn(address(token), hotwallet1, 40 ether);
+    }
+
+    function test_BurnFromSelfEmitsBurnedEventWithWalletAsFrom() public {
+        vm.prank(ops);
+        wallet.mint(address(token), address(wallet), 100 ether);
+
+        vm.expectEmit(true, true, true, true, address(wallet));
+        emit OperatorWallet.Burned(address(wallet), address(token), address(wallet), 30 ether);
+
+        vm.prank(ops);
+        wallet.burn(address(token), address(wallet), 30 ether);
     }
 
     function test_AdminCannotBurn() public {
