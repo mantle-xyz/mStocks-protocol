@@ -4,14 +4,14 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {OperatorWallet} from "../src/OperatorWallet/OperatorWallet.sol";
+import {CexTokenIssuer} from "../src/tokenIssuer/CexTokenIssuer.sol";
 import {SecuritiesToken} from "../src/securitiesToken/SecuritiesToken.sol";
 import {SecuritiesTokenFactory} from "../src/securitiesToken/SecuritiesTokenFactory.sol";
 import {Compliance} from "../src/compliance/Compliance.sol";
 import {PauseManager} from "../src/pauseManager/PauseManager.sol";
 
-contract OperatorWalletTest is Test {
-    OperatorWallet internal wallet;
+contract CexTokenIssuerTest is Test {
+    CexTokenIssuer internal wallet;
     SecuritiesToken internal token;
     Compliance internal compliance;
     PauseManager internal pauseManager;
@@ -36,14 +36,14 @@ contract OperatorWalletTest is Test {
             factory.deployToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty)
         );
 
-        // Deploy OperatorWallet behind a proxy (it's upgradeable).
-        OperatorWallet impl = new OperatorWallet();
-        bytes memory initData = abi.encodeWithSelector(OperatorWallet.initialize.selector, admin);
-        wallet = OperatorWallet(payable(address(new ERC1967Proxy(address(impl), initData))));
+        // Deploy CexTokenIssuer behind a proxy (it's upgradeable).
+        CexTokenIssuer impl = new CexTokenIssuer();
+        bytes memory initData = abi.encodeWithSelector(CexTokenIssuer.initialize.selector, admin);
+        wallet = CexTokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
 
         // Admin's only job: hand out roles. Self-grant guard blocks grant-to-self, so use `ops`.
         wallet.grantRole(wallet.OPS_ROLE(), ops);
-        // Operator wallet needs ISSUER_ROLE on the token to mint.
+        // CexTokenIssuer needs ISSUER_ROLE on the token to mint.
         token.grantRole(token.ISSUER_ROLE(), address(wallet));
         // Compliance + PauseManager OPS not needed here — wallet doesn't manage those.
         vm.stopPrank();
@@ -92,21 +92,21 @@ contract OperatorWalletTest is Test {
 
     function test_AddZeroHotWalletReverts() public {
         vm.prank(admin);
-        vm.expectRevert(OperatorWallet.ZeroAddress.selector);
+        vm.expectRevert(CexTokenIssuer.ZeroAddress.selector);
         wallet.addHotWallet(address(0));
     }
 
     function test_AddDuplicateHotWalletReverts() public {
         vm.startPrank(admin);
         wallet.addHotWallet(hotwallet1);
-        vm.expectRevert(OperatorWallet.HotWalletAlreadyExists.selector);
+        vm.expectRevert(CexTokenIssuer.HotWalletAlreadyExists.selector);
         wallet.addHotWallet(hotwallet1);
         vm.stopPrank();
     }
 
     function test_AddSelfAsHotWalletReverts() public {
         vm.prank(admin);
-        vm.expectRevert(OperatorWallet.CannotBeSelf.selector);
+        vm.expectRevert(CexTokenIssuer.CannotBeSelf.selector);
         wallet.addHotWallet(address(wallet));
     }
 
@@ -123,7 +123,7 @@ contract OperatorWalletTest is Test {
 
     function test_RemoveUnknownHotWalletReverts() public {
         vm.prank(admin);
-        vm.expectRevert(OperatorWallet.HotWalletNotFound.selector);
+        vm.expectRevert(CexTokenIssuer.HotWalletNotFound.selector);
         wallet.removeHotWallet(hotwallet1);
     }
 
@@ -169,7 +169,7 @@ contract OperatorWalletTest is Test {
         wallet.addHotWallet(hotwallet1);
 
         vm.expectEmit(true, true, true, true, address(wallet));
-        emit OperatorWallet.Minted(address(wallet), address(token), hotwallet1, 100 ether);
+        emit CexTokenIssuer.Minted(address(wallet), address(token), hotwallet1, 100 ether);
 
         vm.prank(ops);
         wallet.mint(address(token), hotwallet1, 100 ether);
@@ -177,7 +177,7 @@ contract OperatorWalletTest is Test {
 
     function test_MintToSelfEmitsMintedEventWithWalletAsRecipient() public {
         vm.expectEmit(true, true, true, true, address(wallet));
-        emit OperatorWallet.Minted(address(wallet), address(token), address(wallet), 50 ether);
+        emit CexTokenIssuer.Minted(address(wallet), address(token), address(wallet), 50 ether);
 
         vm.prank(ops);
         wallet.mint(address(token), address(wallet), 50 ether);
@@ -194,7 +194,7 @@ contract OperatorWalletTest is Test {
 
     function test_MintToNonHotWalletReverts() public {
         vm.prank(ops);
-        vm.expectRevert(OperatorWallet.RecipientNotHotWallet.selector);
+        vm.expectRevert(CexTokenIssuer.RecipientNotHotWallet.selector);
         wallet.mint(address(token), stranger, 1 ether);
     }
 
@@ -226,7 +226,7 @@ contract OperatorWalletTest is Test {
         wallet.mint(address(token), address(wallet), 50 ether);
 
         vm.prank(ops);
-        vm.expectRevert(OperatorWallet.RecipientNotHotWallet.selector);
+        vm.expectRevert(CexTokenIssuer.RecipientNotHotWallet.selector);
         wallet.transfer(address(token), stranger, 1 ether);
     }
 
@@ -238,7 +238,7 @@ contract OperatorWalletTest is Test {
         wallet.addHotWallet(hotwallet1);
 
         vm.prank(ops);
-        vm.expectRevert(OperatorWallet.MissingIssuerRole.selector);
+        vm.expectRevert(CexTokenIssuer.MissingIssuerRole.selector);
         wallet.mint(address(token), hotwallet1, 1 ether);
     }
 
@@ -253,7 +253,7 @@ contract OperatorWalletTest is Test {
 
         uint256 supplyBefore = token.totalSupply();
         vm.prank(ops);
-        vm.expectRevert(OperatorWallet.MissingIssuerRole.selector);
+        vm.expectRevert(CexTokenIssuer.MissingIssuerRole.selector);
         wallet.mint(address(token), hotwallet1, 1 ether);
         assertEq(token.totalSupply(), supplyBefore);  // no state changed
     }
@@ -262,7 +262,7 @@ contract OperatorWalletTest is Test {
     //                       Burn
     // ═══════════════════════════════════════════════
 
-    /// Helper: mint tokens to hotwallet1 and have it approve the OperatorWallet
+    /// Helper: mint tokens to hotwallet1 and have it approve the CexTokenIssuer
     /// so subsequent burn tests can pull from it.
     function _seedHotWalletForBurn() internal returns (uint256 minted) {
         vm.prank(admin);
@@ -290,7 +290,7 @@ contract OperatorWalletTest is Test {
         _seedHotWalletForBurn();
 
         vm.expectEmit(true, true, true, true, address(wallet));
-        emit OperatorWallet.Burned(address(wallet), address(token), hotwallet1, 40 ether);
+        emit CexTokenIssuer.Burned(address(wallet), address(token), hotwallet1, 40 ether);
 
         vm.prank(ops);
         wallet.burn(address(token), hotwallet1, 40 ether);
@@ -301,7 +301,7 @@ contract OperatorWalletTest is Test {
         wallet.mint(address(token), address(wallet), 100 ether);
 
         vm.expectEmit(true, true, true, true, address(wallet));
-        emit OperatorWallet.Burned(address(wallet), address(token), address(wallet), 30 ether);
+        emit CexTokenIssuer.Burned(address(wallet), address(token), address(wallet), 30 ether);
 
         vm.prank(ops);
         wallet.burn(address(token), address(wallet), 30 ether);
@@ -352,7 +352,7 @@ contract OperatorWalletTest is Test {
         token.revokeRole(issuerRole, address(wallet));
 
         vm.prank(ops);
-        vm.expectRevert(OperatorWallet.MissingIssuerRole.selector);
+        vm.expectRevert(CexTokenIssuer.MissingIssuerRole.selector);
         wallet.burn(address(token), hotwallet1, 10 ether);
     }
 
@@ -366,7 +366,7 @@ contract OperatorWalletTest is Test {
         uint256 walletBefore = token.balanceOf(address(wallet));
 
         vm.prank(ops);
-        vm.expectRevert(OperatorWallet.MissingIssuerRole.selector);
+        vm.expectRevert(CexTokenIssuer.MissingIssuerRole.selector);
         wallet.burn(address(token), hotwallet1, 10 ether);
 
         // No token movement happened (transferFrom would have pulled from hotwallet1)
@@ -408,7 +408,7 @@ contract OperatorWalletTest is Test {
         token.approve(address(wallet), type(uint256).max);
 
         vm.prank(ops);
-        vm.expectRevert(OperatorWallet.FromNotHotWallet.selector);
+        vm.expectRevert(CexTokenIssuer.FromNotHotWallet.selector);
         wallet.burn(address(token), holder, 20 ether);
         // Holder's tokens untouched
         assertEq(token.balanceOf(holder), 50 ether);
@@ -467,7 +467,7 @@ contract OperatorWalletTest is Test {
 
     function test_AdminCannotSelfGrant() public {
         vm.prank(admin);
-        vm.expectRevert(OperatorWallet.SelfGrantNotAllowed.selector);
+        vm.expectRevert(CexTokenIssuer.SelfGrantNotAllowed.selector);
         wallet.grantRole(OPS_ROLE, admin);
     }
 

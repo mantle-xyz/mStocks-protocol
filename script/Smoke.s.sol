@@ -7,7 +7,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {SecuritiesToken} from "../src/securitiesToken/SecuritiesToken.sol";
 import {Compliance} from "../src/compliance/Compliance.sol";
 import {PauseManager} from "../src/pauseManager/PauseManager.sol";
-import {OperatorWallet} from "../src/OperatorWallet/OperatorWallet.sol";
+import {CexTokenIssuer} from "../src/tokenIssuer/CexTokenIssuer.sol";
 
 /**
  * @title  Smoke
@@ -17,14 +17,14 @@ import {OperatorWallet} from "../src/OperatorWallet/OperatorWallet.sol";
  *           - admin signs grantRole / revokeRole and one-off config (--private-key)
  *           - a deterministic in-script "ops" wallet (vm.createWallet) holds the
  *             OPS_ROLE on the token / Compliance / PauseManager AND OPS_ROLE on an
- *             OperatorWallet contract that holds ISSUER_ROLE on the token
+ *             CexTokenIssuer contract that holds ISSUER_ROLE on the token
  *           - a separate deterministic "user" wallet plays the role of a customer
- *             and is registered as a hot wallet on the OperatorWallet so it can be
+ *             and is registered as a hot wallet on the CexTokenIssuer so it can be
  *             a mint / transfer / burn target
  *
  *         Token ISSUER_ROLE can no longer be granted to an EOA, so all mint / burn /
- *         transfer operations are routed through the OperatorWallet. Use a pre-deployed
- *         OperatorWallet by setting `SMOKE_OPERATOR_WALLET`; otherwise the script will
+ *         transfer operations are routed through the CexTokenIssuer. Use a pre-deployed
+ *         CexTokenIssuer by setting `SMOKE_CEX_TOKEN_ISSUER`; otherwise the script will
  *         deploy a fresh one (admin pays for the deploy).
  *
  *         Examples:
@@ -32,7 +32,7 @@ import {OperatorWallet} from "../src/OperatorWallet/OperatorWallet.sol";
  *           export ADMIN_PK=0x...
  *           export TOKEN=0xDeployedTokenProxy
  *           # optional — reuse an existing wallet across runs:
- *           # export SMOKE_OPERATOR_WALLET=0xWalletProxy
+ *           # export SMOKE_CEX_TOKEN_ISSUER=0xWalletProxy
  *
  *           forge script script/Smoke.s.sol:Smoke --sig "testInfo(address)" $TOKEN --rpc-url $RPC
  *           forge script script/Smoke.s.sol:Smoke --sig "runAll(address)" $TOKEN \
@@ -43,9 +43,9 @@ contract Smoke is Script {
     uint256 internal constant DEFAULT_GAS_THRESHOLD = 0.01 ether;
     uint256 internal constant DEFAULT_GAS_TARGET = 0.05 ether;
 
-    /// Cached OperatorWallet for the current forge script invocation. Within `runAll`,
+    /// Cached CexTokenIssuer for the current forge script invocation. Within `runAll`,
     /// this is resolved once on the first `_setupOps` call and reused.
-    OperatorWallet internal _wallet;
+    CexTokenIssuer internal _wallet;
 
     // ═══════════════════════════════════════════════
     //                Public entry points
@@ -79,16 +79,16 @@ contract Smoke is Script {
         console.log("Ops:             ", ops.addr);
         console.log("User:            ", user.addr);
         console.log("Ops native gas:  ", ops.addr.balance);
-        address envWallet = vm.envOr("SMOKE_OPERATOR_WALLET", address(0));
+        address envWallet = vm.envOr("SMOKE_CEX_TOKEN_ISSUER", address(0));
         if (envWallet != address(0)) {
-            console.log("OperatorWallet (env):", envWallet);
+            console.log("CexTokenIssuer (env):", envWallet);
         }
     }
 
-    /// Mint TEST_AMOUNT through OperatorWallet to itself.
+    /// Mint TEST_AMOUNT through CexTokenIssuer to itself.
     function testMint(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
+        (Vm.Wallet memory ops, CexTokenIssuer wallet) = _setupOps(token);
         console.log("--- testMint ---");
 
         uint256 supplyBefore = token.totalSupply();
@@ -107,10 +107,10 @@ contract Smoke is Script {
         console.log("  [PASS] testMint");
     }
 
-    /// Burn TEST_AMOUNT from the OperatorWallet's own balance.
+    /// Burn TEST_AMOUNT from the CexTokenIssuer's own balance.
     function testBurn(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
+        (Vm.Wallet memory ops, CexTokenIssuer wallet) = _setupOps(token);
         console.log("--- testBurn ---");
 
         if (token.balanceOf(address(wallet)) < TEST_AMOUNT) {
@@ -135,7 +135,7 @@ contract Smoke is Script {
     /// wallet mints -> transfers to user (hot wallet) -> user signs return -> approve + wallet.burn.
     function testTransferFlow(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
+        (Vm.Wallet memory ops, CexTokenIssuer wallet) = _setupOps(token);
         Vm.Wallet memory user = _user();
         console.log("--- testTransferFlow ---");
         console.log("  ops:               ", ops.addr);
@@ -160,7 +160,7 @@ contract Smoke is Script {
     /// Phase 1: ops calls wallet.transfer to send `amount` from wallet to user (hot wallet).
     function _transferFlowPhase1(
         SecuritiesToken token,
-        OperatorWallet wallet,
+        CexTokenIssuer wallet,
         Vm.Wallet memory ops,
         Vm.Wallet memory user,
         uint256 amount
@@ -177,7 +177,7 @@ contract Smoke is Script {
     /// Phase 2: user signs a direct token.transfer back to the wallet.
     function _transferFlowPhase2(
         SecuritiesToken token,
-        OperatorWallet wallet,
+        CexTokenIssuer wallet,
         Vm.Wallet memory user,
         uint256 amount
     ) internal {
@@ -197,7 +197,7 @@ contract Smoke is Script {
     /// through the operational layer.
     function _transferFlowPhase3(
         SecuritiesToken token,
-        OperatorWallet wallet,
+        CexTokenIssuer wallet,
         Vm.Wallet memory ops,
         Vm.Wallet memory user,
         uint256 amount
@@ -221,7 +221,7 @@ contract Smoke is Script {
     /// Pause individual + global, verify wallet.transfer reverts, then unpause.
     function testPause(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
+        (Vm.Wallet memory ops, CexTokenIssuer wallet) = _setupOps(token);
         Vm.Wallet memory user = _user();
         PauseManager pm = PauseManager(address(token.pauseManager()));
         console.log("--- testPause ---");
@@ -260,7 +260,7 @@ contract Smoke is Script {
     /// Blocklist (token-scoped) + sanctions (global) flow.
     function testCompliance(address tokenAddr) public {
         SecuritiesToken token = SecuritiesToken(tokenAddr);
-        (Vm.Wallet memory ops, OperatorWallet wallet) = _setupOps(token);
+        (Vm.Wallet memory ops, CexTokenIssuer wallet) = _setupOps(token);
         Vm.Wallet memory user = _user();
         Compliance c = Compliance(address(token.compliance()));
         console.log("--- testCompliance ---");
@@ -382,38 +382,38 @@ contract Smoke is Script {
     }
 
     /**
-     * @dev Resolves the OperatorWallet to use for this run. Resolution order:
+     * @dev Resolves the CexTokenIssuer to use for this run. Resolution order:
      *      1. cached in `_wallet` (set by a previous call in this same script run)
-     *      2. SMOKE_OPERATOR_WALLET env var (a pre-deployed wallet — must have
+     *      2. SMOKE_CEX_TOKEN_ISSUER env var (a pre-deployed wallet — must have
      *         broadcaster as DEFAULT_ADMIN_ROLE)
      *      3. deploy a fresh wallet (broadcaster becomes admin)
      */
-    function _getOrDeployWallet() internal returns (OperatorWallet w) {
+    function _getOrDeployWallet() internal returns (CexTokenIssuer w) {
         if (address(_wallet) != address(0)) return _wallet;
 
-        address envAddr = vm.envOr("SMOKE_OPERATOR_WALLET", address(0));
+        address envAddr = vm.envOr("SMOKE_CEX_TOKEN_ISSUER", address(0));
         if (envAddr != address(0)) {
-            _wallet = OperatorWallet(payable(envAddr));
+            _wallet = CexTokenIssuer(payable(envAddr));
             require(
                 _wallet.hasRole(bytes32(0), _admin()),
-                "Smoke: broadcaster lacks DEFAULT_ADMIN_ROLE on the configured OperatorWallet"
+                "Smoke: broadcaster lacks DEFAULT_ADMIN_ROLE on the configured CexTokenIssuer"
             );
             return _wallet;
         }
 
-        console.log("    SMOKE_OPERATOR_WALLET not set - deploying a fresh wallet");
+        console.log("    SMOKE_CEX_TOKEN_ISSUER not set - deploying a fresh wallet");
         vm.startBroadcast();
-        OperatorWallet impl = new OperatorWallet();
-        bytes memory initData = abi.encodeWithSelector(OperatorWallet.initialize.selector, _admin());
-        _wallet = OperatorWallet(payable(address(new ERC1967Proxy(address(impl), initData))));
+        CexTokenIssuer impl = new CexTokenIssuer();
+        bytes memory initData = abi.encodeWithSelector(CexTokenIssuer.initialize.selector, _admin());
+        _wallet = CexTokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
         vm.stopBroadcast();
-        console.log("    deployed OperatorWallet at", address(_wallet));
+        console.log("    deployed CexTokenIssuer at", address(_wallet));
         return _wallet;
     }
 
     /**
      * @dev Idempotently provisions the operational setup:
-     *      1. resolves / deploys the OperatorWallet
+     *      1. resolves / deploys the CexTokenIssuer
      *      2. grants the wallet ISSUER_ROLE on the token (so it can mint / burn)
      *      3. grants ops the OPS_ROLE on the wallet (so ops can drive mint / burn / transfer)
      *      4. adds user as a hot wallet on the wallet (so wallet.transfer / wallet.burn
@@ -421,7 +421,7 @@ contract Smoke is Script {
      *      5. grants ops the OPS_ROLE on token (multiplier), Compliance, and PauseManager
      *      6. tops up ops's native gas
      */
-    function _setupOps(SecuritiesToken token) internal returns (Vm.Wallet memory ops, OperatorWallet wallet) {
+    function _setupOps(SecuritiesToken token) internal returns (Vm.Wallet memory ops, CexTokenIssuer wallet) {
         ops = _ops();
         Vm.Wallet memory user = _user();
         wallet = _getOrDeployWallet();
@@ -456,7 +456,7 @@ contract Smoke is Script {
         if (needGas) _topUpAddr(ops.addr);
         if (needIssuerOnWallet) {
             token.grantRole(tIssuer, address(wallet));
-            console.log("      granted token.ISSUER_ROLE to OperatorWallet");
+            console.log("      granted token.ISSUER_ROLE to CexTokenIssuer");
         }
         if (needOpsOnWallet) {
             wallet.grantRole(walletOps, ops.addr);
@@ -464,7 +464,7 @@ contract Smoke is Script {
         }
         if (needHotWallet) {
             wallet.addHotWallet(user.addr);
-            console.log("      added user as a hot wallet on the OperatorWallet");
+            console.log("      added user as a hot wallet on the CexTokenIssuer");
         }
         if (needTOps) {
             token.grantRole(tOps, ops.addr);
@@ -505,7 +505,7 @@ contract Smoke is Script {
     /// Uses vm.prank + low-level call so the check stays in-simulator (forge's broadcast
     /// bundle would otherwise reject the expected revert as a failed transaction).
     function _expectWalletTransferReverts(
-        OperatorWallet wallet,
+        CexTokenIssuer wallet,
         address token,
         address caller,
         address to,

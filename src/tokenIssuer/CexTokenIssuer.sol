@@ -13,7 +13,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IMintAndBurnable} from "./IMintAndBurnable.sol";
 
 /**
- * @title  OperatorWallet
+ * @title  CexTokenIssuer
  * @notice Custodial wallet that holds ISSUER_ROLE on one or more SecuritiesToken contracts
  *         and routes minted tokens out to a whitelisted set of "hot wallets".
  *
@@ -32,7 +32,7 @@ import {IMintAndBurnable} from "./IMintAndBurnable.sol";
  *         Self-grant guard: admin cannot grant any role to itself (forces a separate
  *         OPS_ROLE account).
  */
-contract OperatorWallet is
+contract CexTokenIssuer is
     Initializable,
     AccessControlEnumerableUpgradeable,
     ReentrancyGuard,
@@ -58,7 +58,7 @@ contract OperatorWallet is
 
     /**
      * @notice Emitted on every successful mint routed through this wallet.
-     * @param  wallet    This OperatorWallet (= the emitter; included explicitly so off-chain
+     * @param  wallet    This CexTokenIssuer (= the emitter; included explicitly so off-chain
      *                   aggregators that index multiple wallets can filter without inspecting
      *                   the log's emitter address)
      * @param  token     The security token contract that was minted
@@ -75,7 +75,7 @@ contract OperatorWallet is
 
     /**
      * @notice Emitted on every successful burn routed through this wallet.
-     * @param  wallet This OperatorWallet (= the emitter; included for cross-wallet indexing)
+     * @param  wallet This CexTokenIssuer (= the emitter; included for cross-wallet indexing)
      * @param  token  The security token contract that was burned
      * @param  from   The address whose tokens were burned — either this wallet itself (when
      *                burning held inventory) or a hot wallet that pre-approved the wallet
@@ -182,7 +182,7 @@ contract OperatorWallet is
             assetBalance = address(this).balance;
             if (assetBalance != 0) {
                 (bool ok,) = payable(to).call{value: assetBalance}("");
-                require(ok, "OperatorWallet: native withdraw failed");
+                require(ok, "CexTokenIssuer: native withdraw failed");
             }
         } else {
             assetBalance = IERC20(token).balanceOf(address(this));

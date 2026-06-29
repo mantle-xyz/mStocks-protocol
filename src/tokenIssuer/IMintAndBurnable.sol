@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 /**
- * @dev Minimal mint/burn interface for tokens managed by OperatorWallet.
+ * @dev Minimal mint/burn interface for tokens managed by CexTokenIssuer.
  *      Matches SecuritiesToken.mint / SecuritiesToken.burn (both mint to / burn from caller).
  */
 interface IMintAndBurnable {

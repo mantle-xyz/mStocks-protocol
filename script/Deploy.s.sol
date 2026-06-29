@@ -8,7 +8,7 @@ import {Compliance} from "../src/compliance/Compliance.sol";
 import {PauseManager} from "../src/pauseManager/PauseManager.sol";
 import {SecuritiesTokenFactory} from "../src/securitiesToken/SecuritiesTokenFactory.sol";
 import {SecuritiesToken} from "../src/securitiesToken/SecuritiesToken.sol";
-import {OperatorWallet} from "../src/OperatorWallet/OperatorWallet.sol";
+import {CexTokenIssuer} from "../src/tokenIssuer/CexTokenIssuer.sol";
 
 /**
  * @title  Deploy
@@ -54,8 +54,8 @@ contract Deploy is Script {
         address proxyAdmin;
         address[] complianceOps;
         address[] pauseManagerOps;
-        address[] operatorWalletOps;
-        address[] operatorWalletHotWallets;
+        address[] cexTokenIssuerOps;
+        address[] cexTokenIssuerHotWallets;
         bool deployInitialToken;
         string tokenName;
         string tokenSymbol;
@@ -139,14 +139,14 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    /// Deploy an OperatorWallet behind an ERC1967 proxy, grant OPS_ROLE per config, and
-    /// register any pre-configured hot wallets. `[operatorWallet]` config section is optional.
-    function deployOperatorWallet() external returns (OperatorWallet wallet) {
+    /// Deploy an CexTokenIssuer behind an ERC1967 proxy, grant OPS_ROLE per config, and
+    /// register any pre-configured hot wallets. `[cexTokenIssuer]` config section is optional.
+    function deployCexTokenIssuer() external returns (CexTokenIssuer wallet) {
         Config memory cfg = _loadConfig();
         bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
 
         vm.startBroadcast();
-        wallet = _deployOperatorWallet(cfg, broadcasterIsAdmin);
+        wallet = _deployCexTokenIssuer(cfg, broadcasterIsAdmin);
         vm.stopBroadcast();
     }
 
@@ -193,34 +193,34 @@ contract Deploy is Script {
         console.log("Beacon:         ", address(factory.beacon()));
     }
 
-    /// Deploys OperatorWallet behind an ERC1967 proxy + applies config-driven grants
+    /// Deploys CexTokenIssuer behind an ERC1967 proxy + applies config-driven grants
     /// and hot wallets. Grants / hot wallets are skipped if broadcaster != admin (the
     /// wallet's admin is `cfg.admin`).
-    function _deployOperatorWallet(Config memory cfg, bool broadcasterIsAdmin)
+    function _deployCexTokenIssuer(Config memory cfg, bool broadcasterIsAdmin)
         internal
-        returns (OperatorWallet wallet)
+        returns (CexTokenIssuer wallet)
     {
-        OperatorWallet impl = new OperatorWallet();
-        bytes memory initData = abi.encodeWithSelector(OperatorWallet.initialize.selector, cfg.admin);
-        wallet = OperatorWallet(payable(address(new ERC1967Proxy(address(impl), initData))));
-        console.log("OperatorWallet impl:  ", address(impl));
-        console.log("OperatorWallet proxy: ", address(wallet));
+        CexTokenIssuer impl = new CexTokenIssuer();
+        bytes memory initData = abi.encodeWithSelector(CexTokenIssuer.initialize.selector, cfg.admin);
+        wallet = CexTokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
+        console.log("CexTokenIssuer impl:  ", address(impl));
+        console.log("CexTokenIssuer proxy: ", address(wallet));
 
         _grantRoles(
             address(wallet),
             wallet.OPS_ROLE(),
-            "OPS_ROLE (OperatorWallet)",
-            cfg.operatorWalletOps,
+            "OPS_ROLE (CexTokenIssuer)",
+            cfg.cexTokenIssuerOps,
             broadcasterIsAdmin
         );
 
-        if (cfg.operatorWalletHotWallets.length > 0) {
+        if (cfg.cexTokenIssuerHotWallets.length > 0) {
             if (!broadcasterIsAdmin) {
                 console.log("Skipping initial hot wallets: broadcaster != admin.");
             } else {
-                for (uint256 i = 0; i < cfg.operatorWalletHotWallets.length; ++i) {
-                    wallet.addHotWallet(cfg.operatorWalletHotWallets[i]);
-                    console.log("  added hot wallet", cfg.operatorWalletHotWallets[i]);
+                for (uint256 i = 0; i < cfg.cexTokenIssuerHotWallets.length; ++i) {
+                    wallet.addHotWallet(cfg.cexTokenIssuerHotWallets[i]);
+                    console.log("  added hot wallet", cfg.cexTokenIssuerHotWallets[i]);
                 }
             }
         }
@@ -293,8 +293,8 @@ contract Deploy is Script {
 
         cfg.complianceOps = _readAddressArrayOr(toml, ".compliance.opsRole");
         cfg.pauseManagerOps = _readAddressArrayOr(toml, ".pauseManager.opsRole");
-        cfg.operatorWalletOps = _readAddressArrayOr(toml, ".operatorWallet.opsRole");
-        cfg.operatorWalletHotWallets = _readAddressArrayOr(toml, ".operatorWallet.hotWallets");
+        cfg.cexTokenIssuerOps = _readAddressArrayOr(toml, ".cexTokenIssuer.opsRole");
+        cfg.cexTokenIssuerHotWallets = _readAddressArrayOr(toml, ".cexTokenIssuer.hotWallets");
 
         cfg.deployInitialToken = vm.keyExistsToml(toml, ".token");
         if (cfg.deployInitialToken) {
