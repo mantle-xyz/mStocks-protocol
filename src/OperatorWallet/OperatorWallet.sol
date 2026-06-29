@@ -56,6 +56,38 @@ contract OperatorWallet is
     event Withdrawn(address indexed token, address indexed to, uint256 amount);
     event Executed(address indexed to, uint256 value, bytes data, bool success);
 
+    /**
+     * @notice Emitted on every successful mint routed through this wallet.
+     * @param  wallet    This OperatorWallet (= the emitter; included explicitly so off-chain
+     *                   aggregators that index multiple wallets can filter without inspecting
+     *                   the log's emitter address)
+     * @param  token     The security token contract that was minted
+     * @param  recipient The address that received the freshly minted tokens (this wallet
+     *                   itself, or a hot wallet from the whitelist)
+     * @param  amount    Amount minted (raw, 18 decimals)
+     */
+    event Minted(
+        address indexed wallet,
+        address indexed token,
+        address indexed recipient,
+        uint256 amount
+    );
+
+    /**
+     * @notice Emitted on every successful burn routed through this wallet.
+     * @param  wallet This OperatorWallet (= the emitter; included for cross-wallet indexing)
+     * @param  token  The security token contract that was burned
+     * @param  from   The address whose tokens were burned — either this wallet itself (when
+     *                burning held inventory) or a hot wallet that pre-approved the wallet
+     * @param  amount Amount burned (raw, 18 decimals)
+     */
+    event Burned(
+        address indexed wallet,
+        address indexed token,
+        address indexed from,
+        uint256 amount
+    );
+
     error ZeroAddress();
     error HotWalletAlreadyExists();
     error HotWalletNotFound();
@@ -182,6 +214,7 @@ contract OperatorWallet is
         if (recipient != address(this)) {
             IERC20(token).safeTransfer(recipient, amount);
         }
+        emit Minted(address(this), token, recipient, amount);
     }
 
     function burn(address token, address from, uint256 amount)
@@ -196,6 +229,7 @@ contract OperatorWallet is
             IERC20(token).safeTransferFrom(from, address(this), amount);
         }
         if (!IMintAndBurnable(token).burn(amount)) revert BurnFailed();
+        emit Burned(address(this), token, from, amount);
     }
 
     /// Reverts with {MissingIssuerRole} if this wallet is not authorised to mint/burn
