@@ -4,48 +4,26 @@ pragma solidity ^0.8.20;
 import {Script, console} from "forge-std/Script.sol";
 import {stdToml} from "forge-std/StdToml.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import {Compliance} from "../src/compliance/Compliance.sol";
-import {PauseManager} from "../src/pauseManager/PauseManager.sol";
-import {SecuritiesTokenFactory} from "../src/securitiesToken/SecuritiesTokenFactory.sol";
-import {SecuritiesToken} from "../src/securitiesToken/SecuritiesToken.sol";
-import {CexTokenIssuer} from "../src/tokenIssuer/CexTokenIssuer.sol";
 
-/**
- * @title  Deploy
- * @notice Deployment entry points, driven by config.toml.
- *
- *         Entry points (use --sig to pick which one):
- *
- *           run()
- *             Deploys the full stack: Compliance, PauseManager, Factory, and (if a
- *             [token] section exists) one initial BeaconProxy token. Role grants /
- *             initial token are skipped gracefully when broadcaster != admin.
- *
- *           deployCompliance()                    → Compliance
- *           deployPauseManager()                  → PauseManager
- *           deployFactory(address, address)       → SecuritiesTokenFactory
- *             args: compliance, pauseManager
- *           deployToken(address)                  → BeaconProxy address
- *             arg:  factory
- *
- *         All address fields set to address(0) in config.toml fall back to the broadcaster.
- *         Role grants and the initial token deploy require DEFAULT_ADMIN_ROLE on the target
- *         and are skipped (not reverted) when the broadcaster is not the admin.
- *
- *         Examples:
- *           forge script script/Deploy.s.sol:Deploy --rpc-url $RPC --broadcast
- *
- *           forge script script/Deploy.s.sol:Deploy --sig "deployCompliance()" \
- *             --rpc-url $RPC --broadcast
- *
- *           forge script script/Deploy.s.sol:Deploy \
- *             --sig "deployFactory(address,address)" 0xCompliance 0xPauseManager \
- *             --rpc-url $RPC --broadcast
- *
- *           forge script script/Deploy.s.sol:Deploy \
- *             --sig "deployToken(address)" 0xFactory \
- *             --rpc-url $RPC --broadcast
- */
+import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
+import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
+import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
+import {IssuerVault} from "../src/issuerVault/IssuerVault.sol";
+
+/// @notice Deployment entry points, driven by config.toml.
+///
+/// Entry points (use --sig to pick which one):
+///   run()                                   — full stack + optional initial token
+///   deployCompliance()                      — ComplianceRegistry
+///   deployPauseManager()                    — PauseRegistry
+///   deployFactory(address,address)          — ScaledTokenFactory(compliance, pauseRegistry)
+///   deployToken(address)                    — BeaconProxy address via factory
+///   deployIssuerVault()                     — ERC1967-proxied IssuerVault
+///
+/// Address fields in config.toml that are address(0) fall back to the broadcaster.
+/// Role grants and initial token deploy require DEFAULT_ADMIN_ROLE on the target; if the
+/// broadcaster is not the admin they are skipped (not reverted) with a console hint.
 contract Deploy is Script {
     using stdToml for string;
 
@@ -53,9 +31,9 @@ contract Deploy is Script {
         address admin;
         address proxyAdmin;
         address[] complianceOps;
-        address[] pauseManagerOps;
-        address[] cexTokenIssuerOps;
-        address[] cexTokenIssuerHotWallets;
+        address[] pauseOps;
+        address[] issuerVaultOps;
+        address[] issuerVaultApprovedRecipients;
         bool deployInitialToken;
         string tokenName;
         string tokenSymbol;
@@ -65,17 +43,12 @@ contract Deploy is Script {
         address[] operators;
     }
 
-    // ═══════════════════════════════════════════════
-    //                Public entry points
-    // ═══════════════════════════════════════════════
-
-    /// Full-stack deploy: Compliance → PauseManager → Factory → (optional) initial token.
     function run()
         external
         returns (
-            Compliance compliance,
-            PauseManager pauseManager,
-            SecuritiesTokenFactory factory,
+            ComplianceRegistry compliance,
+            PauseRegistry pauseManager,
+            ScaledTokenFactory factory,
             address initialToken
         )
     {
@@ -93,8 +66,7 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    /// Deploy Compliance + apply role grants from config.
-    function deployCompliance() external returns (Compliance compliance) {
+    function deployCompliance() external returns (ComplianceRegistry compliance) {
         Config memory cfg = _loadConfig();
         bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
 
@@ -103,8 +75,7 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    /// Deploy PauseManager + apply role grants from config.
-    function deployPauseManager() external returns (PauseManager pauseManager) {
+    function deployPauseManager() external returns (PauseRegistry pauseManager) {
         Config memory cfg = _loadConfig();
         bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
 
@@ -113,10 +84,9 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    /// Deploy the factory, pointing at already-deployed compliance + pauseManager.
     function deployFactory(address compliance, address pauseManager)
         external
-        returns (SecuritiesTokenFactory factory)
+        returns (ScaledTokenFactory factory)
     {
         require(compliance != address(0), "Deploy: compliance is zero");
         require(pauseManager != address(0), "Deploy: pauseManager is zero");
@@ -127,7 +97,6 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    /// Deploy a single BeaconProxy token through an existing factory, using the [token] config.
     function deployToken(address factory) external returns (address proxy) {
         require(factory != address(0), "Deploy: factory is zero");
         Config memory cfg = _loadConfig();
@@ -135,35 +104,31 @@ contract Deploy is Script {
         bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
 
         vm.startBroadcast();
-        proxy = _deployToken(cfg, SecuritiesTokenFactory(factory), broadcasterIsAdmin);
+        proxy = _deployToken(cfg, ScaledTokenFactory(factory), broadcasterIsAdmin);
         vm.stopBroadcast();
     }
 
-    /// Deploy an CexTokenIssuer behind an ERC1967 proxy, grant OPS_ROLE per config, and
-    /// register any pre-configured hot wallets. `[cexTokenIssuer]` config section is optional.
-    function deployCexTokenIssuer() external returns (CexTokenIssuer wallet) {
+    /// @notice Deploys IssuerVault behind an ERC1967 proxy, grants OPS_ROLE per config, and
+    ///         registers any pre-configured approved recipients. `[issuerVault]` is optional.
+    function deployIssuerVault() external returns (IssuerVault vault) {
         Config memory cfg = _loadConfig();
         bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
 
         vm.startBroadcast();
-        wallet = _deployCexTokenIssuer(cfg, broadcasterIsAdmin);
+        vault = _deployIssuerVault(cfg, broadcasterIsAdmin);
         vm.stopBroadcast();
     }
 
-    // ═══════════════════════════════════════════════
-    //                Internal deploys
-    // ═══════════════════════════════════════════════
-
     function _deployCompliance(Config memory cfg, bool broadcasterIsAdmin)
         internal
-        returns (Compliance compliance)
+        returns (ComplianceRegistry compliance)
     {
-        compliance = new Compliance(cfg.admin);
-        console.log("Compliance:     ", address(compliance));
+        compliance = new ComplianceRegistry(cfg.admin);
+        console.log("ComplianceRegistry: ", address(compliance));
         _grantRoles(
             address(compliance),
             compliance.OPS_ROLE(),
-            "OPS_ROLE (Compliance)",
+            "OPS_ROLE (ComplianceRegistry)",
             cfg.complianceOps,
             broadcasterIsAdmin
         );
@@ -171,73 +136,68 @@ contract Deploy is Script {
 
     function _deployPauseManager(Config memory cfg, bool broadcasterIsAdmin)
         internal
-        returns (PauseManager pauseManager)
+        returns (PauseRegistry pauseManager)
     {
-        pauseManager = new PauseManager(cfg.admin);
-        console.log("PauseManager:   ", address(pauseManager));
+        pauseManager = new PauseRegistry(cfg.admin);
+        console.log("PauseRegistry:      ", address(pauseManager));
         _grantRoles(
             address(pauseManager),
             pauseManager.OPS_ROLE(),
-            "OPS_ROLE (PauseManager)",
-            cfg.pauseManagerOps,
+            "OPS_ROLE (PauseRegistry)",
+            cfg.pauseOps,
             broadcasterIsAdmin
         );
     }
 
     function _deployFactory(Config memory cfg, address compliance, address pauseManager)
         internal
-        returns (SecuritiesTokenFactory factory)
+        returns (ScaledTokenFactory factory)
     {
-        factory = new SecuritiesTokenFactory(compliance, pauseManager, cfg.admin, cfg.proxyAdmin);
-        console.log("Factory:        ", address(factory));
-        console.log("Beacon:         ", address(factory.beacon()));
+        factory = new ScaledTokenFactory(compliance, pauseManager, cfg.admin, cfg.proxyAdmin);
+        console.log("Factory:            ", address(factory));
+        console.log("Beacon:             ", address(factory.beacon()));
     }
 
-    /// Deploys CexTokenIssuer behind an ERC1967 proxy + applies config-driven grants
-    /// and hot wallets. Grants / hot wallets are skipped if broadcaster != admin (the
-    /// wallet's admin is `cfg.admin`).
-    function _deployCexTokenIssuer(Config memory cfg, bool broadcasterIsAdmin)
+    function _deployIssuerVault(Config memory cfg, bool broadcasterIsAdmin)
         internal
-        returns (CexTokenIssuer wallet)
+        returns (IssuerVault vault)
     {
-        CexTokenIssuer impl = new CexTokenIssuer();
-        bytes memory initData = abi.encodeWithSelector(CexTokenIssuer.initialize.selector, cfg.admin);
-        wallet = CexTokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
-        console.log("CexTokenIssuer impl:  ", address(impl));
-        console.log("CexTokenIssuer proxy: ", address(wallet));
+        IssuerVault impl = new IssuerVault();
+        bytes memory initData = abi.encodeWithSelector(IssuerVault.initialize.selector, cfg.admin);
+        vault = IssuerVault(payable(address(new ERC1967Proxy(address(impl), initData))));
+        console.log("IssuerVault impl:   ", address(impl));
+        console.log("IssuerVault proxy:  ", address(vault));
 
         _grantRoles(
-            address(wallet),
-            wallet.OPS_ROLE(),
-            "OPS_ROLE (CexTokenIssuer)",
-            cfg.cexTokenIssuerOps,
+            address(vault),
+            vault.OPS_ROLE(),
+            "OPS_ROLE (IssuerVault)",
+            cfg.issuerVaultOps,
             broadcasterIsAdmin
         );
 
-        if (cfg.cexTokenIssuerHotWallets.length > 0) {
+        if (cfg.issuerVaultApprovedRecipients.length > 0) {
             if (!broadcasterIsAdmin) {
-                console.log("Skipping initial hot wallets: broadcaster != admin.");
+                console.log("Skipping approved recipients: broadcaster != admin.");
             } else {
-                for (uint256 i = 0; i < cfg.cexTokenIssuerHotWallets.length; ++i) {
-                    wallet.addHotWallet(cfg.cexTokenIssuerHotWallets[i]);
-                    console.log("  added hot wallet", cfg.cexTokenIssuerHotWallets[i]);
+                for (uint256 i = 0; i < cfg.issuerVaultApprovedRecipients.length; ++i) {
+                    vault.addApprovedRecipient(cfg.issuerVaultApprovedRecipients[i]);
+                    console.log("  added approved recipient", cfg.issuerVaultApprovedRecipients[i]);
                 }
             }
         }
     }
 
-    /// Mints the initial token via `factory.deployToken`. Requires DEFAULT_ADMIN_ROLE on
-    /// the factory, so it skips with a hint when broadcaster != admin.
-    function _deployToken(Config memory cfg, SecuritiesTokenFactory factory, bool broadcasterIsAdmin)
+    function _deployToken(Config memory cfg, ScaledTokenFactory factory, bool broadcasterIsAdmin)
         internal
         returns (address proxy)
     {
         if (!broadcasterIsAdmin) {
             console.log("Skipping token deploy: broadcaster != admin.");
-            console.log("Run factory.deployToken(...) from admin instead.");
+            console.log("Run factory.createToken(...) from admin instead.");
             return address(0);
         }
-        proxy = factory.deployToken(
+        proxy = factory.createToken(
             cfg.tokenName,
             cfg.tokenSymbol,
             cfg.tokenIdentifier,
@@ -245,15 +205,11 @@ contract Deploy is Script {
             cfg.issuers,
             cfg.operators
         );
-        console.log("Token (proxy):  ", proxy);
+        console.log("Token (proxy):      ", proxy);
     }
 
-    // ═══════════════════════════════════════════════
-    //                Helpers
-    // ═══════════════════════════════════════════════
-
-    /// Grants `role` on `target` to every address in `grantees`. Skips with a hint when
-    /// the broadcaster is not the admin (since AccessControl will reject the call).
+    /// @dev Grants `role` on `target` to every address in `grantees`. Skips with a hint when
+    ///      the broadcaster is not the admin (AccessControl would otherwise reject the call).
     function _grantRoles(
         address target,
         bytes32 role,
@@ -292,9 +248,9 @@ contract Deploy is Script {
         if (cfg.proxyAdmin == address(0)) cfg.proxyAdmin = broadcaster;
 
         cfg.complianceOps = _readAddressArrayOr(toml, ".compliance.opsRole");
-        cfg.pauseManagerOps = _readAddressArrayOr(toml, ".pauseManager.opsRole");
-        cfg.cexTokenIssuerOps = _readAddressArrayOr(toml, ".cexTokenIssuer.opsRole");
-        cfg.cexTokenIssuerHotWallets = _readAddressArrayOr(toml, ".cexTokenIssuer.hotWallets");
+        cfg.pauseOps = _readAddressArrayOr(toml, ".pauseManager.opsRole");
+        cfg.issuerVaultOps = _readAddressArrayOr(toml, ".issuerVault.opsRole");
+        cfg.issuerVaultApprovedRecipients = _readAddressArrayOr(toml, ".issuerVault.approvedRecipients");
 
         cfg.deployInitialToken = vm.keyExistsToml(toml, ".token");
         if (cfg.deployInitialToken) {
@@ -320,8 +276,7 @@ contract Deploy is Script {
         return vm.keyExistsToml(toml, key) ? toml.readAddressArray(key) : new address[](0);
     }
 
-    /// Mirrors forge-script's signer resolution: prefer PRIVATE_KEY env, else fall back to
-    /// the default tx.origin used by Script.
+    /// @dev Mirrors forge-script's signer resolution: PRIVATE_KEY env, else tx.origin.
     function _broadcaster() internal view returns (address) {
         uint256 pk = vm.envOr("PRIVATE_KEY", uint256(0));
         if (pk != 0) return vm.addr(pk);

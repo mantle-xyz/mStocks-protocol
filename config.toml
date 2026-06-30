@@ -13,17 +13,17 @@ proxyAdmin = "0x0000000000000000000000000000000000000000"
 # when the broadcaster IS the admin; otherwise the script skips them and prints
 # a hint so the operator can grant them manually from the admin account.
 [compliance]
-opsRole = []        # OPS_ROLE on Compliance        — manage blocklist + sanctions
+opsRole = []        # OPS_ROLE on ComplianceRegistry  — manage blocklist + sanctions
 
 [pauseManager]
-opsRole = []        # OPS_ROLE on PauseManager      — pause/unpause tokens
+opsRole = []        # OPS_ROLE on PauseRegistry       — pause/unpause tokens
 
-# CexTokenIssuer (optional — only used when calling deployCexTokenIssuer()).
-# - opsRole: addresses granted OPS_ROLE on the wallet (mint/burn/transfer through it)
-# - hotWallets: addresses pre-registered as outbound hot-wallet recipients
-[cexTokenIssuer]
+# IssuerVault (optional — only used when calling deployIssuerVault()).
+# - opsRole: addresses granted OPS_ROLE on the vault (mint/burn/transfer through it)
+# - approvedRecipients: addresses pre-registered as approved outbound recipients
+[issuerVault]
 opsRole = []
-hotWallets = []
+approvedRecipients = []
 
 # Optional initial-token deployment.
 # Remove the entire `[token]` block to skip the first token deploy.
@@ -33,7 +33,7 @@ symbol = "AAPL"
 identifier = "US0378331005"
 # Defaults to top-level `admin` if zero.
 admin = "0x0000000000000000000000000000000000000000"
-# Addresses granted ISSUER_ROLE on the new token (mint / burn).
+# Addresses granted ISSUER_ROLE on the new token (mint / burn). Must be contracts.
 issuers = []
 # Addresses granted OPS_ROLE on the new token (UI multiplier scheduling).
 operators = []
