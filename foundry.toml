@@ -6,6 +6,9 @@ evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
 via_ir = true
-fs_permissions = [{ access = "read", path = "./config.toml" }]
+fs_permissions = [{ access = "read", path = "./config.toml" }, { access = "read-write", path = "./logs/qa" }]
+
+[fuzz]
+runs = 512
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
