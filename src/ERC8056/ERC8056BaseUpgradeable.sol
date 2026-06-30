@@ -231,8 +231,6 @@ abstract contract ERC8056BaseUpgradeable is
      * Returns the pending multiplier and its effective timestamp as a tuple.
      * When {hasPendingMultiplier} returns false, returns (0, 0).
      *
-     * This is a BSC extension providing richer semantics than the EIP-standard
-     * {newUIMultiplier} and {effectiveAt} individual getters.
      */
     function pendingMultiplier()
         public

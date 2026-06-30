@@ -124,10 +124,16 @@ contract CexTokenIssuer is
     //                       Views
     // ═══════════════════════════════════════════════
 
+    /**
+     * @notice Returns whether `account` is currently registered as a hot wallet.
+     * @param  account The address to query.
+     * @return True if the address is on the hot-wallet whitelist, false otherwise.
+     */
     function isHotWallet(address account) public view returns (bool) {
         return hotWalletsMap[account] > 0;
     }
 
+    /// @notice Returns the current number of hot wallets registered on this issuer.
     function numOfHotWallets() external view returns (uint256) {
         return hotWallets.length;
     }

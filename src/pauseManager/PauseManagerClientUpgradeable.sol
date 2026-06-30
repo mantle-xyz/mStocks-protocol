@@ -78,9 +78,12 @@ abstract contract PauseManagerClientUpgradeable is Initializable {
     }
 
     /**
-     * @notice Modifier to ensure the calling token contract is not paused.
-     * @dev    Checks the pause status for the token contract using the `IPauseManager`.
-     *         Reverts with `TokenPaused` if the contract is paused.
+     * @notice Internal helper that reverts with {TokenPaused} if the calling token
+     *         contract is currently paused (either individually or globally via the
+     *         pause manager).
+     * @dev    Intended to be called from inside the inheriting token's transfer hook
+     *         (e.g. `_update`). Not a modifier — kept as a function to allow callers
+     *         to mix this check with others in their own modifier chain.
      */
     function _checkTokenIsPaused() internal view {
         if (pauseManager.isTokenPaused(address(this))) {

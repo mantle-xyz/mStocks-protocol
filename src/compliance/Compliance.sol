@@ -20,7 +20,6 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
  *         Role hierarchy:
  *          - DEFAULT_ADMIN_ROLE (Owner)
  *              ├── Manages grant/revoke of all roles
- *              └── Manages blocklist and sanctions list
  *          - OPS_ROLE
  *              └── Manages blocklist and sanctions list
  */

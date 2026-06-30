@@ -13,7 +13,6 @@ import "./IPauseManager.sol";
  *         Role hierarchy:
  *          - DEFAULT_ADMIN_ROLE (Owner)
  *              ├── Manages grant/revoke of all roles
- *              └── pause/unpause
  *          - OPS_ROLE
  *              └── pause/unpause
  */

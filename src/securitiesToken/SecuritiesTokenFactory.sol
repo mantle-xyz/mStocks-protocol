@@ -19,10 +19,11 @@ import "../pauseManager/IPauseManager.sol";
  *         1. Deploy SecuritiesTokenFactory(compliance, pauseManager, owner, proxyAdmin)
  *            — the factory deploys the SecuritiesToken implementation and UpgradeableBeacon
  *              internally, then transfers beacon ownership to proxyAdmin
- *         2. Call factory.deployToken("Apple Inc.", "AAPL", "US0378331005", _admin, issuers) → creates BeaconProxy
- *            — _admin receives DEFAULT_ADMIN_ROLE on the new token (must not be the deployer EOA)
+ *         2. Call factory.deployToken("Apple Inc.", "AAPL", "US0378331005", _admin, issuers, operators)
+ *            → creates BeaconProxy. `_admin` receives DEFAULT_ADMIN_ROLE on the new token
+ *            (must not be the deployer EOA); `issuers` get ISSUER_ROLE; `operators` get OPS_ROLE.
  *
- *         On BSCScan, each BeaconProxy will show as a proxy contract that
+ *         On Etherscan, each BeaconProxy will show as a proxy contract that
  *         delegates to the SecuritiesToken implementation via the beacon.
  *
  *         Ownership model:

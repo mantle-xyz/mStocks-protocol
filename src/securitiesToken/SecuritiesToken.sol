@@ -330,8 +330,10 @@ contract SecuritiesToken is
     // ═══════════════════════════════════════════════
 
     /**
-     * @dev Restricts multiplier updates to accounts with OPS_ROLE (admin only grants the role).
-     *      Called by {ERC8056BaseUpgradeable-setUIMultiplier} before executing the update.
+     * @dev Authorization hook invoked by {ERC8056BaseUpgradeable-setUIMultiplier} before
+     *      a scheduled multiplier update is applied. Reverts unless the caller holds
+     *      OPS_ROLE — admin's role is purely to grant/revoke OPS_ROLE, not to schedule
+     *      multiplier changes directly.
      */
     function _authorizeMultiplierUpdate() internal view override {
         _checkOperator();
