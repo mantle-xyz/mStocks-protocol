@@ -24,7 +24,7 @@ contract ScaledToken is
     PauseGuardUpgradeable
 {
     bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
-    bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
+    bytes32 public constant MULTIPLIER_SCHEDULER_ROLE = keccak256("MULTIPLIER_SCHEDULER_ROLE");
 
     bool public mintAllowed;
     bool public burnAllowed;
@@ -60,8 +60,8 @@ contract ScaledToken is
         if (!hasRole(ISSUER_ROLE, msg.sender)) revert UnauthorizedRole();
     }
 
-    function _requireOperator() private view {
-        if (!hasRole(OPS_ROLE, msg.sender)) revert UnauthorizedRole();
+    function _requireMultiplierScheduler() private view {
+        if (!hasRole(MULTIPLIER_SCHEDULER_ROLE, msg.sender)) revert UnauthorizedRole();
     }
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -77,9 +77,9 @@ contract ScaledToken is
         address pauseManager_,
         address admin_,
         address[] memory issuers_,
-        address[] memory operators_
+        address[] memory multiplierSchedulers_
     ) public initializer {
-        __scaledToken_init(name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, operators_);
+        __scaledToken_init(name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, multiplierSchedulers_);
     }
 
     function __scaledToken_init(
@@ -90,7 +90,7 @@ contract ScaledToken is
         address pauseManager_,
         address admin_,
         address[] memory issuers_,
-        address[] memory operators_
+        address[] memory multiplierSchedulers_
     ) internal onlyInitializing {
         if (bytes(name_).length == 0) revert EmptyString();
         if (bytes(symbol_).length == 0) revert EmptyString();
@@ -107,14 +107,14 @@ contract ScaledToken is
         __PauseGuard_init_unchained(pauseManager_);
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _setRoleAdmin(ISSUER_ROLE, DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(MULTIPLIER_SCHEDULER_ROLE, DEFAULT_ADMIN_ROLE);
         for (uint256 i = 0; i < issuers_.length; ++i) {
             if (issuers_[i] == address(0)) revert ZeroAddress();
             _grantRole(ISSUER_ROLE, issuers_[i]);
         }
-        for (uint256 i = 0; i < operators_.length; ++i) {
-            if (operators_[i] == address(0)) revert ZeroAddress();
-            _grantRole(OPS_ROLE, operators_[i]);
+        for (uint256 i = 0; i < multiplierSchedulers_.length; ++i) {
+            if (multiplierSchedulers_[i] == address(0)) revert ZeroAddress();
+            _grantRole(MULTIPLIER_SCHEDULER_ROLE, multiplierSchedulers_[i]);
         }
         mintAllowed = true;
         burnAllowed = true;
@@ -180,9 +180,9 @@ contract ScaledToken is
         _setPauseManager(_pauseManager);
     }
 
-    /// @dev OPS_ROLE authorises scheduled multiplier updates; admin only grants the role.
+    /// @dev MULTIPLIER_SCHEDULER_ROLE authorises scheduled multiplier updates; admin only grants the role.
     function _authorizeMultiplierUpdate() internal view override {
-        _requireOperator();
+        _requireMultiplierScheduler();
     }
 
     /// @dev Multipliers use 1e18 == 1.0x. Allowed range [1e9, 1e27] guards against UI
