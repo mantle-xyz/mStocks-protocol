@@ -18,10 +18,10 @@ opsRole = []        # OPS_ROLE on ComplianceRegistry  — manage blocklist + san
 [pauseManager]
 opsRole = []        # OPS_ROLE on PauseRegistry       — pause/unpause tokens
 
-# IssuerVault (optional — only used when calling deployIssuerVault()).
-# - opsRole: addresses granted OPS_ROLE on the vault (mint/burn/transfer through it)
+# TokenIssuer (optional — only used when calling deployTokenIssuer()).
+# - opsRole: addresses granted OPS_ROLE on the issuer (mint/burn/transfer through it)
 # - approvedRecipients: addresses pre-registered as approved outbound recipients
-[issuerVault]
+[tokenIssuer]
 opsRole = []
 approvedRecipients = []
 
@@ -35,5 +35,5 @@ identifier = "US0378331005"
 admin = "0x0000000000000000000000000000000000000000"
 # Addresses granted ISSUER_ROLE on the new token (mint / burn). Must be contracts.
 issuers = []
-# Addresses granted OPS_ROLE on the new token (UI multiplier scheduling).
-operators = []
+# Addresses granted MULTIPLIER_SCHEDULER_ROLE on the new token (UI multiplier scheduling).
+multiplierSchedulers = []

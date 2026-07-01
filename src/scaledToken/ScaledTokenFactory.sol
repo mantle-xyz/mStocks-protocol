@@ -35,7 +35,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         string assetCode,
         address indexed admin,
         address[] issuers,
-        address[] operators,
+        address[] multiplierSchedulers,
         address indexed deployer
     );
     event DefaultComplianceUpdated(address indexed oldCompliance, address indexed newCompliance);
@@ -67,14 +67,15 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
 
     /// @notice Deploys a new ScaledToken behind a BeaconProxy and initializes it atomically.
     ///         `_admin` receives DEFAULT_ADMIN_ROLE on the new token (use a multisig, not an EOA);
-    ///         `_issuers` receive ISSUER_ROLE (must be contracts); `_operators` receive OPS_ROLE.
+    ///         `_issuers` receive ISSUER_ROLE (must be contracts); `_multiplierSchedulers`
+    ///         receive MULTIPLIER_SCHEDULER_ROLE.
     function createToken(
         string memory _name,
         string memory _symbol,
         string memory _assetCode,
         address _admin,
         address[] memory _issuers,
-        address[] memory _operators
+        address[] memory _multiplierSchedulers
     ) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant returns (address proxy) {
         if (bytes(_name).length == 0) revert EmptyString();
         if (bytes(_symbol).length == 0) revert EmptyString();
@@ -92,7 +93,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
             defaultPauseManager,
             _admin,
             _issuers,
-            _operators
+            _multiplierSchedulers
         );
 
         BeaconProxy beaconProxy = new BeaconProxy(address(beacon), initData);
@@ -103,7 +104,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
 
         require(ScaledToken(proxy).hasRole(DEFAULT_ADMIN_ROLE, _admin), "ScaledToken: init check failed");
 
-        emit TokenCreated(proxy, _name, _symbol, _assetCode, _admin, _issuers, _operators, msg.sender);
+        emit TokenCreated(proxy, _name, _symbol, _assetCode, _admin, _issuers, _multiplierSchedulers, msg.sender);
     }
 
     function tokenCount() external view returns (uint256) {

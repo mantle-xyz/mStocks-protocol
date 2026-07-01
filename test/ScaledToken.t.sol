@@ -32,7 +32,7 @@ contract ScaledTokenTest is Test {
     address internal stranger = makeAddr("stranger");
 
     bytes32 internal ISSUER_ROLE;
-    bytes32 internal OPS_ROLE;
+    bytes32 internal SCHEDULER_ROLE;
     bytes32 internal DEFAULT_ADMIN_ROLE;
     bytes32 internal COMPLIANCE_OPS_ROLE;
     bytes32 internal PAUSE_OPS_ROLE;
@@ -50,10 +50,10 @@ contract ScaledTokenTest is Test {
 
         address[] memory issuers = new address[](1);
         issuers[0] = issuer;
-        address[] memory operators = new address[](1);
-        operators[0] = operator;
+        address[] memory schedulers = new address[](1);
+        schedulers[0] = operator;
 
-        address proxy = factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, issuers, operators);
+        address proxy = factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, issuers, schedulers);
         token = ScaledToken(proxy);
 
         compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
@@ -62,7 +62,7 @@ contract ScaledTokenTest is Test {
         vm.stopPrank();
 
         ISSUER_ROLE = token.ISSUER_ROLE();
-        OPS_ROLE = token.OPS_ROLE();
+        SCHEDULER_ROLE = token.MULTIPLIER_SCHEDULER_ROLE();
         COMPLIANCE_OPS_ROLE = compliance.OPS_ROLE();
         PAUSE_OPS_ROLE = pauseManager.OPS_ROLE();
         DEFAULT_ADMIN_ROLE = 0x00;
@@ -79,7 +79,7 @@ contract ScaledTokenTest is Test {
         assertTrue(token.burnAllowed());
         assertTrue(token.hasRole(DEFAULT_ADMIN_ROLE, admin));
         assertTrue(token.hasRole(ISSUER_ROLE, issuer));
-        assertTrue(token.hasRole(OPS_ROLE, operator));
+        assertTrue(token.hasRole(SCHEDULER_ROLE,operator));
     }
 
     function test_AdminCanRenameAndReSymbol() public {
@@ -427,8 +427,8 @@ contract ScaledTokenTest is Test {
     function test_GrantingOpsRoleToEoaIsAllowed() public {
         address eoa = makeAddr("opsEoa");
         vm.prank(admin);
-        token.grantRole(OPS_ROLE, eoa);
-        assertTrue(token.hasRole(OPS_ROLE, eoa));
+        token.grantRole(SCHEDULER_ROLE,eoa);
+        assertTrue(token.hasRole(SCHEDULER_ROLE,eoa));
     }
 
     function test_FactoryDeployTokenRejectsEoaIssuer() public {
@@ -444,14 +444,14 @@ contract ScaledTokenTest is Test {
     function test_AdminCanGrantAndRevokeOperator() public {
         address newOps = makeAddr("newOps");
         vm.prank(admin);
-        token.grantRole(OPS_ROLE, newOps);
-        assertTrue(token.hasRole(OPS_ROLE, newOps));
+        token.grantRole(SCHEDULER_ROLE,newOps);
+        assertTrue(token.hasRole(SCHEDULER_ROLE,newOps));
 
         vm.prank(newOps);
         token.setUIMultiplier(2 ether, block.timestamp + 1 hours);
 
         vm.prank(admin);
-        token.revokeRole(OPS_ROLE, newOps);
+        token.revokeRole(SCHEDULER_ROLE,newOps);
 
         vm.prank(newOps);
         vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
@@ -484,8 +484,8 @@ contract ScaledTokenTest is Test {
 
     function test_AdminCanStillGrantToOthers() public {
         vm.prank(admin);
-        token.grantRole(OPS_ROLE, user1);
-        assertTrue(token.hasRole(OPS_ROLE, user1));
+        token.grantRole(SCHEDULER_ROLE,user1);
+        assertTrue(token.hasRole(SCHEDULER_ROLE,user1));
     }
 
     function test_InitialAdminRoleStillSetByConstructor() public view {

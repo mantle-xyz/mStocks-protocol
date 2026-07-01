@@ -13,13 +13,13 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 
 import {IMintAndBurnable} from "./IMintAndBurnable.sol";
 
-/// @notice Custodial vault that holds ISSUER_ROLE on one or more ScaledToken contracts
+/// @notice Custodial issuer that holds ISSUER_ROLE on one or more ScaledToken contracts
 ///         and routes mint/burn flow through a whitelisted set of approved recipients.
 ///
-///         Admin (DEFAULT_ADMIN_ROLE) manages the recipient whitelist, pauses the vault,
+///         Admin (DEFAULT_ADMIN_ROLE) manages the recipient whitelist, pauses the issuer,
 ///         and may emergency-sweep assets. OPS_ROLE performs day-to-day mint / burn / transfer.
 ///         Self-grant is disallowed so the admin and operator must be distinct accounts.
-contract IssuerVault is
+contract TokenIssuer is
     Initializable,
     AccessControlEnumerableUpgradeable,
     ReentrancyGuard,
@@ -28,10 +28,6 @@ contract IssuerVault is
     using SafeERC20 for IERC20;
 
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
-
-    /// @notice Role required on the security token for this vault to mint / burn it.
-    ///         Must match {ScaledToken.ISSUER_ROLE}.
-    bytes32 public constant TOKEN_ISSUER_ROLE = keccak256("ISSUER_ROLE");
 
     /// @dev recipient => 1-based index in `approvedRecipients`. 0 means "not approved".
     mapping(address => uint256) private recipientIndex;
@@ -43,15 +39,15 @@ contract IssuerVault is
     event Withdrawn(address indexed token, address indexed to, uint256 amount);
     event Executed(address indexed to, uint256 value, bytes data, bool success);
 
-    /// @notice Emitted on every successful mint routed through this vault. `vault` is the
-    ///         emitter itself, included so aggregators indexing many vaults can filter without
+    /// @notice Emitted on every successful mint routed through this issuer. `issuer` is the
+    ///         emitter itself, included so aggregators indexing many issuers can filter without
     ///         inspecting the log emitter.
-    event Minted(address indexed vault, address indexed token, address indexed recipient, uint256 amount);
+    event Minted(address indexed issuer, address indexed token, address indexed recipient, uint256 amount);
 
-    /// @notice Emitted on every successful burn routed through this vault. `from` is either
-    ///         this vault (burning held inventory) or an approved recipient that pre-approved
-    ///         the vault to pull tokens.
-    event Burned(address indexed vault, address indexed token, address indexed from, uint256 amount);
+    /// @notice Emitted on every successful burn routed through this issuer. `from` is either
+    ///         this issuer (burning held inventory) or an approved recipient that pre-approved
+    ///         the issuer to pull tokens.
+    event Burned(address indexed issuer, address indexed token, address indexed from, uint256 amount);
 
     error ZeroAddress();
     error RecipientAlreadyApproved();
@@ -60,9 +56,6 @@ contract IssuerVault is
     error FromNotApproved();
     error MintFailed();
     error BurnFailed();
-    /// @dev This vault does not hold ISSUER_ROLE on the target token. Caught explicitly so
-    ///      the failure surfaces before any tokens are moved.
-    error MissingIssuerRole();
     error SelfGrantNotAllowed();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
@@ -128,7 +121,7 @@ contract IssuerVault is
             assetBalance = address(this).balance;
             if (assetBalance != 0) {
                 (bool ok,) = payable(to).call{value: assetBalance}("");
-                require(ok, "IssuerVault: native withdraw failed");
+                require(ok, "TokenIssuer: native withdraw failed");
             }
         } else {
             assetBalance = IERC20(token).balanceOf(address(this));
@@ -139,8 +132,8 @@ contract IssuerVault is
         emit Withdrawn(token, to, assetBalance);
     }
 
-    /// @notice Mints `amount` of `token` (this vault must hold ISSUER_ROLE on it) and either
-    ///         keeps the inventory on the vault (recipient == self) or forwards to an approved
+    /// @notice Mints `amount` of `token` (this issuer must hold ISSUER_ROLE on it) and either
+    ///         keeps the inventory on the issuer (recipient == self) or forwards to an approved
     ///         recipient.
     function mint(address token, address recipient, uint256 amount)
         external
@@ -149,7 +142,6 @@ contract IssuerVault is
         nonReentrant
     {
         if (recipient != address(this) && !isApprovedRecipient(recipient)) revert RecipientNotApproved();
-        _requireIssuerRole(token);
         if (!IMintAndBurnable(token).mint(amount)) revert MintFailed();
         if (recipient != address(this)) {
             IERC20(token).safeTransfer(recipient, amount);
@@ -157,8 +149,8 @@ contract IssuerVault is
         emit Minted(address(this), token, recipient, amount);
     }
 
-    /// @notice Burns `amount` of `token` from this vault (`from == self`) or from an approved
-    ///         recipient that has pre-approved the vault to pull tokens.
+    /// @notice Burns `amount` of `token` from this issuer (`from == self`) or from an approved
+    ///         recipient that has pre-approved the issuer to pull tokens.
     function burn(address token, address from, uint256 amount)
         external
         whenNotPaused
@@ -166,7 +158,6 @@ contract IssuerVault is
         nonReentrant
     {
         if (from != address(this) && !isApprovedRecipient(from)) revert FromNotApproved();
-        _requireIssuerRole(token);
         if (from != address(this)) {
             IERC20(token).safeTransferFrom(from, address(this), amount);
         }
@@ -174,15 +165,7 @@ contract IssuerVault is
         emit Burned(address(this), token, from, amount);
     }
 
-    /// @dev Pre-flight check: fail with {MissingIssuerRole} before any tokens are pulled,
-    ///      rather than letting the token's mint/burn revert later with a generic message.
-    function _requireIssuerRole(address token) internal view {
-        if (!IAccessControl(token).hasRole(TOKEN_ISSUER_ROLE, address(this))) {
-            revert MissingIssuerRole();
-        }
-    }
-
-    /// @notice Transfers `amount` of `token` already held by this vault to an approved recipient.
+    /// @notice Transfers `amount` of `token` already held by this issuer to an approved recipient.
     function transfer(address token, address recipient, uint256 amount)
         external
         whenNotPaused

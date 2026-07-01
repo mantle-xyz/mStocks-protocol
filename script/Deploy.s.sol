@@ -9,7 +9,7 @@ import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.s
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
-import {IssuerVault} from "../src/issuerVault/IssuerVault.sol";
+import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 
 /// @notice Deployment entry points, driven by config.toml.
 ///
@@ -19,7 +19,7 @@ import {IssuerVault} from "../src/issuerVault/IssuerVault.sol";
 ///   deployPauseManager()                    — PauseRegistry
 ///   deployFactory(address,address)          — ScaledTokenFactory(compliance, pauseRegistry)
 ///   deployToken(address)                    — BeaconProxy address via factory
-///   deployIssuerVault()                     — ERC1967-proxied IssuerVault
+///   deployTokenIssuer()                     — ERC1967-proxied TokenIssuer
 ///
 /// Address fields in config.toml that are address(0) fall back to the broadcaster.
 /// Role grants and initial token deploy require DEFAULT_ADMIN_ROLE on the target; if the
@@ -32,15 +32,15 @@ contract Deploy is Script {
         address proxyAdmin;
         address[] complianceOps;
         address[] pauseOps;
-        address[] issuerVaultOps;
-        address[] issuerVaultApprovedRecipients;
+        address[] tokenIssuerOps;
+        address[] tokenIssuerApprovedRecipients;
         bool deployInitialToken;
         string tokenName;
         string tokenSymbol;
         string tokenIdentifier;
         address tokenAdmin;
         address[] issuers;
-        address[] operators;
+        address[] multiplierSchedulers;
     }
 
     function run()
@@ -108,14 +108,14 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    /// @notice Deploys IssuerVault behind an ERC1967 proxy, grants OPS_ROLE per config, and
-    ///         registers any pre-configured approved recipients. `[issuerVault]` is optional.
-    function deployIssuerVault() external returns (IssuerVault vault) {
+    /// @notice Deploys TokenIssuer behind an ERC1967 proxy, grants OPS_ROLE per config, and
+    ///         registers any pre-configured approved recipients. `[tokenIssuer]` is optional.
+    function deployTokenIssuer() external returns (TokenIssuer issuer) {
         Config memory cfg = _loadConfig();
         bool broadcasterIsAdmin = _broadcaster() == cfg.admin;
 
         vm.startBroadcast();
-        vault = _deployIssuerVault(cfg, broadcasterIsAdmin);
+        issuer = _deployTokenIssuer(cfg, broadcasterIsAdmin);
         vm.stopBroadcast();
     }
 
@@ -158,31 +158,31 @@ contract Deploy is Script {
         console.log("Beacon:             ", address(factory.beacon()));
     }
 
-    function _deployIssuerVault(Config memory cfg, bool broadcasterIsAdmin)
+    function _deployTokenIssuer(Config memory cfg, bool broadcasterIsAdmin)
         internal
-        returns (IssuerVault vault)
+        returns (TokenIssuer issuer)
     {
-        IssuerVault impl = new IssuerVault();
-        bytes memory initData = abi.encodeWithSelector(IssuerVault.initialize.selector, cfg.admin);
-        vault = IssuerVault(payable(address(new ERC1967Proxy(address(impl), initData))));
-        console.log("IssuerVault impl:   ", address(impl));
-        console.log("IssuerVault proxy:  ", address(vault));
+        TokenIssuer impl = new TokenIssuer();
+        bytes memory initData = abi.encodeWithSelector(TokenIssuer.initialize.selector, cfg.admin);
+        issuer = TokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
+        console.log("TokenIssuer impl:   ", address(impl));
+        console.log("TokenIssuer proxy:  ", address(issuer));
 
         _grantRoles(
-            address(vault),
-            vault.OPS_ROLE(),
-            "OPS_ROLE (IssuerVault)",
-            cfg.issuerVaultOps,
+            address(issuer),
+            issuer.OPS_ROLE(),
+            "OPS_ROLE (TokenIssuer)",
+            cfg.tokenIssuerOps,
             broadcasterIsAdmin
         );
 
-        if (cfg.issuerVaultApprovedRecipients.length > 0) {
+        if (cfg.tokenIssuerApprovedRecipients.length > 0) {
             if (!broadcasterIsAdmin) {
                 console.log("Skipping approved recipients: broadcaster != admin.");
             } else {
-                for (uint256 i = 0; i < cfg.issuerVaultApprovedRecipients.length; ++i) {
-                    vault.addApprovedRecipient(cfg.issuerVaultApprovedRecipients[i]);
-                    console.log("  added approved recipient", cfg.issuerVaultApprovedRecipients[i]);
+                for (uint256 i = 0; i < cfg.tokenIssuerApprovedRecipients.length; ++i) {
+                    issuer.addApprovedRecipient(cfg.tokenIssuerApprovedRecipients[i]);
+                    console.log("  added approved recipient", cfg.tokenIssuerApprovedRecipients[i]);
                 }
             }
         }
@@ -203,7 +203,7 @@ contract Deploy is Script {
             cfg.tokenIdentifier,
             cfg.tokenAdmin,
             cfg.issuers,
-            cfg.operators
+            cfg.multiplierSchedulers
         );
         console.log("Token (proxy):      ", proxy);
     }
@@ -249,8 +249,8 @@ contract Deploy is Script {
 
         cfg.complianceOps = _readAddressArrayOr(toml, ".compliance.opsRole");
         cfg.pauseOps = _readAddressArrayOr(toml, ".pauseManager.opsRole");
-        cfg.issuerVaultOps = _readAddressArrayOr(toml, ".issuerVault.opsRole");
-        cfg.issuerVaultApprovedRecipients = _readAddressArrayOr(toml, ".issuerVault.approvedRecipients");
+        cfg.tokenIssuerOps = _readAddressArrayOr(toml, ".tokenIssuer.opsRole");
+        cfg.tokenIssuerApprovedRecipients = _readAddressArrayOr(toml, ".tokenIssuer.approvedRecipients");
 
         cfg.deployInitialToken = vm.keyExistsToml(toml, ".token");
         if (cfg.deployInitialToken) {
@@ -264,7 +264,7 @@ contract Deploy is Script {
             if (cfg.tokenAdmin == address(0)) cfg.tokenAdmin = cfg.admin;
 
             cfg.issuers = _readAddressArrayOr(toml, ".token.issuers");
-            cfg.operators = _readAddressArrayOr(toml, ".token.operators");
+            cfg.multiplierSchedulers = _readAddressArrayOr(toml, ".token.multiplierSchedulers");
         }
     }
 
