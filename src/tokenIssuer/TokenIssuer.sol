@@ -92,9 +92,7 @@ contract TokenIssuer is
         emit RecipientApproved(recipient);
     }
 
-    /// @notice Not gated by `whenNotPaused` — revoking a compromised recipient must remain
-    ///         possible while the issuer is paused. `addApprovedRecipient` keeps the pause gate.
-    function removeApprovedRecipient(address recipient) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function removeApprovedRecipient(address recipient) external whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) {
         if (recipient == address(0)) revert ZeroAddress();
         uint256 idx = recipientIndex[recipient];
         if (idx == 0) revert RecipientNotApproved();
