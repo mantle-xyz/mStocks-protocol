@@ -7,7 +7,7 @@ import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -22,7 +22,7 @@ import {IMintAndBurnable} from "./IMintAndBurnable.sol";
 contract TokenIssuer is
     Initializable,
     AccessControlEnumerableUpgradeable,
-    ReentrancyGuard,
+    ReentrancyGuardTransient,
     PausableUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -69,7 +69,7 @@ contract TokenIssuer is
         if (admin == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
         __Pausable_init();
-        // ReentrancyGuard (v5) uses transient storage and needs no initializer.
+        // ReentrancyGuardTransient (v5, EIP-1153 TSTORE) uses transient storage — no initializer needed.
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
