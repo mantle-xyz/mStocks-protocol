@@ -37,7 +37,6 @@ contract TokenIssuer is
     event RecipientApproved(address indexed recipient);
     event RecipientRevoked(address indexed recipient);
     event Withdrawn(address indexed token, address indexed to, uint256 amount);
-    event Executed(address indexed to, uint256 value, bytes data, bool success);
 
     /// @notice Emitted on every successful mint routed through this issuer. `issuer` is the
     ///         emitter itself, included so aggregators indexing many issuers can filter without
