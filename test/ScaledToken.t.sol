@@ -517,6 +517,45 @@ contract ScaledTokenTest is Test {
         factory.createToken("X", "AAPL!", "ID3", admin, empty, empty);
     }
 
+    function test_RenameSymbolHappyPath() public {
+        vm.prank(admin);
+        token.updateSymbol("AAPL2");
+
+        vm.prank(admin);
+        factory.renameSymbol(address(token), "AAPL", "AAPL2");
+
+        assertEq(factory.tokenBySymbol("AAPL"), address(0));
+        assertEq(factory.tokenBySymbol("AAPL2"), address(token));
+    }
+
+    function test_RenameSymbolRevertsWhenTokenSymbolNotYetUpdated() public {
+        // Caller forgot to call token.updateSymbol first — on-token symbol is still "AAPL",
+        // so renaming the factory registry to "AAPL2" must revert with SymbolMismatch.
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(ScaledTokenFactory.SymbolMismatch.selector, "AAPL", "AAPL2")
+        );
+        factory.renameSymbol(address(token), "AAPL", "AAPL2");
+    }
+
+    function test_RenameSymbolRevertsIfTokenNotRegisteredUnderOldSymbol() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ScaledTokenFactory.TokenNotRegisteredUnderSymbol.selector,
+                address(token),
+                "WRONG"
+            )
+        );
+        factory.renameSymbol(address(token), "WRONG", "AAPL2");
+    }
+
+    function test_RenameSymbolRevertsOnZeroToken() public {
+        vm.prank(admin);
+        vm.expectRevert(ScaledTokenFactory.ZeroAddress.selector);
+        factory.renameSymbol(address(0), "AAPL", "AAPL2");
+    }
+
     function _signTokenPermit(
         Vm.Wallet memory wallet,
         address spender,
