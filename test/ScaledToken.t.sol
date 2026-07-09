@@ -100,6 +100,12 @@ contract ScaledTokenTest is Test {
         token.updateName("X");
     }
 
+    function test_UpdateSymbolRejectsInvalidFormat() public {
+        vm.prank(admin);
+        vm.expectRevert(ScaledToken.InvalidSymbol.selector);
+        token.updateSymbol("BAD SYMBOL!");
+    }
+
     function test_AdminCannotMint() public {
         vm.prank(admin);
         vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
