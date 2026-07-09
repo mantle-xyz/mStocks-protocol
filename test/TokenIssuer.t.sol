@@ -399,17 +399,6 @@ contract TokenIssuerTest is Test {
         assertEq(token.totalSupply(), supplyBefore - 30 ether);
     }
 
-    function test_AdminCanWithdrawNative() public {
-        vm.deal(address(issuer), 1 ether);
-        uint256 balBefore = admin.balance;
-
-        vm.prank(admin);
-        issuer.withdraw(address(0));
-
-        assertEq(address(issuer).balance, 0);
-        assertEq(admin.balance, balBefore + 1 ether);
-    }
-
     function test_AdminCanWithdrawERC20() public {
         vm.prank(ops);
         issuer.mint(address(token), address(issuer), 100 ether);
@@ -424,7 +413,21 @@ contract TokenIssuerTest is Test {
     function test_NonAdminCannotWithdraw() public {
         vm.prank(ops);
         vm.expectRevert();
+        issuer.withdraw(address(token));
+    }
+
+    function test_WithdrawRejectsZeroToken() public {
+        vm.prank(admin);
+        vm.expectRevert(TokenIssuer.ZeroAddress.selector);
         issuer.withdraw(address(0));
+    }
+
+    function test_IssuerDoesNotAcceptNative() public {
+        // TokenIssuer intentionally omits receive() — plain native sends must revert.
+        vm.deal(address(this), 1 ether);
+        (bool ok,) = payable(address(issuer)).call{value: 1 ether}("");
+        assertFalse(ok);
+        assertEq(address(issuer).balance, 0);
     }
 
     function test_AdminCannotSelfGrant() public {
