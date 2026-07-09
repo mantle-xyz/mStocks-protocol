@@ -47,6 +47,8 @@ contract ScaledToken is
     error EmptyString();
     error ZeroAddress();
     error SelfGrantNotAllowed();
+    /// @dev Asset codes must be 1–32 characters of [A-Za-z0-9-].
+    error InvalidAssetCode();
     /// @dev ISSUER_ROLE governs mint/burn and must be held by a contract with its own
     ///      access control — never a plain EOA.
     error IssuerNotContract();
@@ -143,9 +145,28 @@ contract ScaledToken is
     }
 
     function updateAssetCode(string memory assetCode_) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (bytes(assetCode_).length == 0) revert EmptyString();
+        _assertAssetCode(assetCode_);
         emit AssetCodeUpdated(assetCode, assetCode_);
         assetCode = assetCode_;
+    }
+
+    /// @dev Same length / charset rules the factory uses at creation. Mirrored here so a
+    ///      direct `updateAssetCode` call cannot bypass the format guard and leave the token
+    ///      with a malformed on-token asset code that would then fail {ScaledTokenFactory.renameAssetCode}.
+    function _assertAssetCode(string memory assetCode_) internal pure {
+        bytes memory b = bytes(assetCode_);
+        if (b.length == 0 || b.length > 32) revert InvalidAssetCode();
+        for (uint256 i = 0; i < b.length; ++i) {
+            bytes1 c = b[i];
+            if (
+                (c < 0x41 || c > 0x5A) // not A-Z
+                    && (c < 0x61 || c > 0x7A) // not a-z
+                    && (c < 0x30 || c > 0x39) // not 0-9
+                    && c != 0x2D // not hyphen (-)
+            ) {
+                revert InvalidAssetCode();
+            }
+        }
     }
 
     function setMintAllowed(bool allowed) external onlyRole(DEFAULT_ADMIN_ROLE) {
