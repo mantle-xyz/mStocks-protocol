@@ -113,7 +113,9 @@ contract TokenIssuer is
     }
 
     /// @notice Emergency sweep of native (`token == address(0)`) or ERC-20 balance to the caller.
-    function withdraw(address token) external whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+    ///         Deliberately not gated by `whenNotPaused` — emergency asset recovery must remain
+    ///         available while the issuer is paused (which is the state right after an incident).
+    function withdraw(address token) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         uint256 assetBalance;
         address to = _msgSender();
         if (token == address(0)) {
