@@ -52,6 +52,8 @@ contract ScaledToken is
     error EmptyString();
     error ZeroAddress();
     error SelfGrantNotAllowed();
+    /// @dev Symbols must be 1–32 characters of [A-Za-z0-9-].
+    error InvalidSymbol();
     /// @dev Asset codes must be 1–32 characters of [A-Za-z0-9-].
     error InvalidAssetCode();
     /// @dev ISSUER_ROLE governs mint/burn and must be held by a contract with its own
@@ -148,9 +150,28 @@ contract ScaledToken is
     }
 
     function updateSymbol(string memory symbol_) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (bytes(symbol_).length == 0) revert EmptyString();
+        _assertSymbol(symbol_);
         emit SymbolUpdated(_storedSymbol, symbol_);
         _storedSymbol = symbol_;
+    }
+
+    /// @dev Same length / charset rules the factory uses at creation. Mirrored here so a
+    ///      direct `updateSymbol` call cannot leave the token with a malformed on-token
+    ///      symbol that would then fail {ScaledTokenFactory.renameSymbol}.
+    function _assertSymbol(string memory symbol_) internal pure {
+        bytes memory b = bytes(symbol_);
+        if (b.length == 0 || b.length > 32) revert InvalidSymbol();
+        for (uint256 i = 0; i < b.length; ++i) {
+            bytes1 c = b[i];
+            if (
+                (c < 0x41 || c > 0x5A) // not A-Z
+                    && (c < 0x61 || c > 0x7A) // not a-z
+                    && (c < 0x30 || c > 0x39) // not 0-9
+                    && c != 0x2D // not hyphen (-)
+            ) {
+                revert InvalidSymbol();
+            }
+        }
     }
 
     function updateAssetCode(string memory assetCode_) external onlyRole(DEFAULT_ADMIN_ROLE) {
