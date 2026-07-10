@@ -283,6 +283,16 @@ contract ScaledTokenTest is Test {
         assertFalse(compliance.isSanctioned(user2));
     }
 
+    function test_ReplaceSanctionsRejectsEmptyList() public {
+        // Empty input must revert — callers wanting a full clear must use clearSanctions
+        // explicitly. Prevents an ops script that accidentally passes an empty array from
+        // silently wiping the entire sanctions list.
+        address[] memory empty = new address[](0);
+        vm.prank(complianceOps);
+        vm.expectRevert(ComplianceRegistry.EmptyAddressList.selector);
+        compliance.replaceSanctions(empty);
+    }
+
     function test_BlocklistIsTokenScoped() public {
         vm.prank(issuer);
         token.mint(100 ether);
