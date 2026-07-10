@@ -304,14 +304,14 @@ contract ScaledTokenTest is Test {
     }
 
     function test_AdminCannotScheduleMultiplier() public {
-        uint256 effective = block.timestamp + 1 hours;
+        uint256 effective = block.timestamp + 25 hours;
         vm.prank(admin);
         vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2 ether, effective);
     }
 
     function test_OperatorCanScheduleMultiplier() public {
-        uint256 effective = block.timestamp + 1 hours;
+        uint256 effective = block.timestamp + 25 hours;
         vm.prank(operator);
         token.setUIMultiplier(2 ether, effective);
         assertEq(token.newUIMultiplier(), 2 ether);
@@ -320,7 +320,7 @@ contract ScaledTokenTest is Test {
     }
 
     function test_IssuerCannotScheduleMultiplier() public {
-        uint256 effective = block.timestamp + 1 hours;
+        uint256 effective = block.timestamp + 25 hours;
         vm.prank(issuer);
         vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2 ether, effective);
@@ -329,11 +329,11 @@ contract ScaledTokenTest is Test {
     function test_StrangerCannotScheduleMultiplier() public {
         vm.prank(stranger);
         vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
-        token.setUIMultiplier(2 ether, block.timestamp + 1 hours);
+        token.setUIMultiplier(2 ether, block.timestamp + 25 hours);
     }
 
     function test_MultiplierActivatesAfterEffectiveAt() public {
-        uint256 effective = block.timestamp + 1 hours;
+        uint256 effective = block.timestamp + 25 hours;
         vm.prank(operator);
         token.setUIMultiplier(2 ether, effective);
 
@@ -347,13 +347,19 @@ contract ScaledTokenTest is Test {
     function test_MultiplierBelowMinReverts() public {
         vm.prank(operator);
         vm.expectRevert(bytes("ScaledToken: multiplier below minimum (1e-9x)"));
-        token.setUIMultiplier(1e9 - 1, block.timestamp + 1 hours);
+        token.setUIMultiplier(1e9 - 1, block.timestamp + 25 hours);
     }
 
     function test_MultiplierAboveMaxReverts() public {
         vm.prank(operator);
         vm.expectRevert(bytes("ScaledToken: multiplier above maximum (1e9x)"));
-        token.setUIMultiplier(1e27 + 1, block.timestamp + 1 hours);
+        token.setUIMultiplier(1e27 + 1, block.timestamp + 25 hours);
+    }
+
+    function test_MultiplierBelowMinNoticeReverts() public {
+        vm.prank(operator);
+        vm.expectRevert(bytes("ScaledToken: minimum notice period not met"));
+        token.setUIMultiplier(2 ether, block.timestamp + 23 hours);
     }
 
     function test_MultiplierBeyond365DaysReverts() public {
@@ -363,18 +369,20 @@ contract ScaledTokenTest is Test {
     }
 
     function test_MultiplierPastTimestampReverts() public {
+        // Current/past timestamps fall under MIN_MULTIPLIER_NOTICE now — the ScaledToken
+        // check fires before the ERC8056 base "must be in future" check.
         vm.warp(1_000_000);
         vm.prank(operator);
-        vm.expectRevert(bytes("ERC8056: effective time must be in future"));
+        vm.expectRevert(bytes("ScaledToken: minimum notice period not met"));
         token.setUIMultiplier(2 ether, block.timestamp);
     }
 
     function test_PendingMultiplierOverwriteEmitsAndUpdates() public {
-        uint256 firstAt = block.timestamp + 1 hours;
+        uint256 firstAt = block.timestamp + 25 hours;
         vm.prank(operator);
         token.setUIMultiplier(2 ether, firstAt);
 
-        uint256 secondAt = block.timestamp + 2 hours;
+        uint256 secondAt = block.timestamp + 26 hours;
         vm.prank(operator);
         token.setUIMultiplier(3 ether, secondAt);
 
@@ -387,8 +395,8 @@ contract ScaledTokenTest is Test {
         assertEq(token.toUIAmount(raw), raw);
 
         vm.prank(operator);
-        token.setUIMultiplier(2 ether, block.timestamp + 1 hours);
-        vm.warp(block.timestamp + 1 hours);
+        token.setUIMultiplier(2 ether, block.timestamp + 25 hours);
+        vm.warp(block.timestamp + 25 hours);
         assertEq(token.toUIAmount(raw), raw * 2);
 
         assertEq(token.fromUIAmount(raw * 2), raw);
@@ -399,8 +407,8 @@ contract ScaledTokenTest is Test {
         token.mint(100 ether);
 
         vm.prank(operator);
-        token.setUIMultiplier(2 ether, block.timestamp + 1 hours);
-        vm.warp(block.timestamp + 1 hours);
+        token.setUIMultiplier(2 ether, block.timestamp + 25 hours);
+        vm.warp(block.timestamp + 25 hours);
 
         assertEq(token.balanceOfUI(issuer), 200 ether);
         assertEq(token.totalSupplyUI(), 200 ether);
@@ -448,14 +456,14 @@ contract ScaledTokenTest is Test {
         assertTrue(token.hasRole(SCHEDULER_ROLE,newOps));
 
         vm.prank(newOps);
-        token.setUIMultiplier(2 ether, block.timestamp + 1 hours);
+        token.setUIMultiplier(2 ether, block.timestamp + 25 hours);
 
         vm.prank(admin);
         token.revokeRole(SCHEDULER_ROLE,newOps);
 
         vm.prank(newOps);
         vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
-        token.setUIMultiplier(3 ether, block.timestamp + 2 hours);
+        token.setUIMultiplier(3 ether, block.timestamp + 26 hours);
     }
 
     function test_NonAdminCannotGrantRole() public {

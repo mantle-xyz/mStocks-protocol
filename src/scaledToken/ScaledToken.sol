@@ -26,6 +26,11 @@ contract ScaledToken is
     bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
     bytes32 public constant MULTIPLIER_SCHEDULER_ROLE = keccak256("MULTIPLIER_SCHEDULER_ROLE");
 
+    /// @notice Minimum window between scheduling a multiplier change and its effective time.
+    ///         Bounds the front-running / acceleration attack window to at least this duration,
+    ///         giving integrators time to observe UIMultiplierUpdated and hedge / halt as needed.
+    uint256 public constant MIN_MULTIPLIER_NOTICE = 24 hours;
+
     bool public mintAllowed;
     bool public burnAllowed;
 
@@ -193,9 +198,16 @@ contract ScaledToken is
     }
 
     /// @dev Caps the scheduling horizon at 365 days so no single change can lock the
-    ///      multiplier indefinitely.
+    ///      multiplier indefinitely, and enforces MIN_MULTIPLIER_NOTICE so any scheduled
+    ///      change — initial or overwrite — sits at least 24h in the future. This bounds
+    ///      the acceleration/front-running window without blocking legitimate value
+    ///      corrections (integrators must monitor UIMultiplierUpdated for reschedules).
     function _setUIMultiplier(uint256 newMultiplier, uint256 effectiveAtTimestamp) internal override {
         require(effectiveAtTimestamp <= block.timestamp + 365 days, "ScaledToken: effective time too far in future");
+        require(
+            effectiveAtTimestamp >= block.timestamp + MIN_MULTIPLIER_NOTICE,
+            "ScaledToken: minimum notice period not met"
+        );
         super._setUIMultiplier(newMultiplier, effectiveAtTimestamp);
     }
 
