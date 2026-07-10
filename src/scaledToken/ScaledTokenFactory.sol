@@ -27,6 +27,11 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     address[] private tokens;
     /// @notice Reverse lookup: symbol => proxy.
     mapping(string => address) public tokenBySymbol;
+    /// @notice Reverse lookup: asset code (ISIN / CUSIP / internal reference) => proxy.
+    ///         Two tokens claiming the same real-world instrument would be a data-integrity
+    ///         failure for a regulated tokenized-security protocol, so this mapping guards
+    ///         uniqueness at creation and rename time.
+    mapping(string => address) public tokenByAssetCode;
 
     event TokenCreated(
         address indexed proxy,
@@ -41,8 +46,10 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     event DefaultComplianceUpdated(address indexed oldCompliance, address indexed newCompliance);
     event DefaultPauseManagerUpdated(address indexed oldPauseManager, address indexed newPauseManager);
     event SymbolRenamed(address indexed token, string oldSymbol, string newSymbol);
+    event AssetCodeRenamed(address indexed token, string oldAssetCode, string newAssetCode);
 
     error TokenSymbolAlreadyExists(string symbol);
+    error AssetCodeAlreadyExists(string assetCode);
     error ZeroAddress();
     error EmptyString();
     error InvalidComplianceContract();
@@ -52,8 +59,12 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     error SymbolMismatch(string expected, string provided);
     /// @dev Reverts when a token address is not registered in `tokenBySymbol` under the given symbol.
     error TokenNotRegisteredUnderSymbol(address token, string providedSymbol);
+    error AssetCodeMismatch(string expected, string provided);
+    error TokenNotRegisteredUnderAssetCode(address token, string providedAssetCode);
     /// @dev Symbols must be 1–32 characters of [A-Za-z0-9-].
     error InvalidSymbol(string symbol);
+    /// @dev Asset codes must be 1–32 characters of [A-Za-z0-9-] (accommodates ISIN, CUSIP, internal refs).
+    error InvalidAssetCode(string assetCode);
 
     constructor(address _compliance, address _pauseManager, address _owner, address _proxyAdmin) {
         _assertCompliance(_compliance);
@@ -86,7 +97,9 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         if (bytes(_assetCode).length == 0) revert EmptyString();
         if (_admin == address(0)) revert ZeroAddress();
         _assertSymbol(_symbol);
+        _assertAssetCode(_assetCode);
         if (tokenBySymbol[_symbol] != address(0)) revert TokenSymbolAlreadyExists(_symbol);
+        if (tokenByAssetCode[_assetCode] != address(0)) revert AssetCodeAlreadyExists(_assetCode);
 
         bytes memory initData = abi.encodeWithSignature(
             "initialize(string,string,string,address,address,address,address[],address[])",
@@ -105,6 +118,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         proxy = address(beaconProxy);
         tokens.push(proxy);
         tokenBySymbol[_symbol] = proxy;
+        tokenByAssetCode[_assetCode] = proxy;
 
         require(ScaledToken(proxy).hasRole(DEFAULT_ADMIN_ROLE, _admin), "ScaledToken: init check failed");
 
@@ -185,6 +199,25 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         }
     }
 
+    /// @dev Same charset and length rules as {_assertSymbol}: 1–32 chars of [A-Za-z0-9-].
+    ///      Accommodates ISIN (12), CUSIP (9) and short internal reference codes while
+    ///      keeping enough structure to catch typos and truly-malformed inputs.
+    function _assertAssetCode(string memory _assetCode) internal pure {
+        bytes memory b = bytes(_assetCode);
+        if (b.length == 0 || b.length > 32) revert InvalidAssetCode(_assetCode);
+        for (uint256 i = 0; i < b.length; ++i) {
+            bytes1 c = b[i];
+            if (
+                (c < 0x41 || c > 0x5A) // not A-Z
+                    && (c < 0x61 || c > 0x7A) // not a-z
+                    && (c < 0x30 || c > 0x39) // not 0-9
+                    && c != 0x2D // not hyphen (-)
+            ) {
+                revert InvalidAssetCode(_assetCode);
+            }
+        }
+    }
+
     /// @notice Updates the factory's symbol mapping after a token's symbol changes. Caller must
     ///         have already called {ScaledToken.updateSymbol} on the token itself — this method
     ///         verifies that the on-token `symbol()` already equals `newSymbol` and refuses to
@@ -211,5 +244,33 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         tokenBySymbol[newSymbol] = token;
 
         emit SymbolRenamed(token, oldSymbol, newSymbol);
+    }
+
+    /// @notice Updates the factory's asset-code mapping after a token's asset code changes.
+    ///         Caller must have already called {ScaledToken.updateAssetCode} on the token
+    ///         itself — this method verifies that the on-token `assetCode()` already equals
+    ///         `newAssetCode` and refuses to sync the map otherwise.
+    function renameAssetCode(address token, string calldata oldAssetCode, string calldata newAssetCode)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+    {
+        if (token == address(0)) revert ZeroAddress();
+        if (bytes(newAssetCode).length == 0) revert EmptyString();
+        _assertAssetCode(newAssetCode);
+        if (tokenByAssetCode[oldAssetCode] != token) {
+            revert TokenNotRegisteredUnderAssetCode(token, oldAssetCode);
+        }
+        // Guard against factory-map / on-token drift: the token must already reflect the
+        // new asset code (via ScaledToken.updateAssetCode) before we sync the registry.
+        string memory actualAssetCode = ScaledToken(token).assetCode();
+        if (keccak256(bytes(actualAssetCode)) != keccak256(bytes(newAssetCode))) {
+            revert AssetCodeMismatch({expected: actualAssetCode, provided: newAssetCode});
+        }
+        if (tokenByAssetCode[newAssetCode] != address(0)) revert AssetCodeAlreadyExists(newAssetCode);
+
+        delete tokenByAssetCode[oldAssetCode];
+        tokenByAssetCode[newAssetCode] = token;
+
+        emit AssetCodeRenamed(token, oldAssetCode, newAssetCode);
     }
 }
