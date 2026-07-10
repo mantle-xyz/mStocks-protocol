@@ -26,6 +26,11 @@ contract ScaledToken is
     bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
     bytes32 public constant MULTIPLIER_SCHEDULER_ROLE = keccak256("MULTIPLIER_SCHEDULER_ROLE");
 
+    /// @notice Minimum window between scheduling a multiplier change and its effective time.
+    ///         Bounds the front-running / acceleration attack window to at least this duration,
+    ///         giving integrators time to observe UIMultiplierUpdated and hedge / halt as needed.
+    uint256 public constant MIN_MULTIPLIER_NOTICE = 24 hours;
+
     bool public mintAllowed;
     bool public burnAllowed;
 
@@ -97,6 +102,10 @@ contract ScaledToken is
         if (bytes(name_).length == 0) revert EmptyString();
         if (bytes(symbol_).length == 0) revert EmptyString();
         if (bytes(assetCode_).length == 0) revert EmptyString();
+        // Defense in depth: factory already rejects zero admin in createToken, but initialize()
+        // is a public entrypoint on the impl and any BeaconProxy pointing at the shared beacon
+        // could bypass that check. Match the pattern used for compliance/pauseManager/issuers.
+        if (admin_ == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
         __erc8056Base_init(name_, symbol_);
         // EIP-712 domain commits to the *initial* name; later updateName() does not
@@ -214,9 +223,16 @@ contract ScaledToken is
     }
 
     /// @dev Caps the scheduling horizon at 365 days so no single change can lock the
-    ///      multiplier indefinitely.
+    ///      multiplier indefinitely, and enforces MIN_MULTIPLIER_NOTICE so any scheduled
+    ///      change — initial or overwrite — sits at least 24h in the future. This bounds
+    ///      the acceleration/front-running window without blocking legitimate value
+    ///      corrections (integrators must monitor UIMultiplierUpdated for reschedules).
     function _setUIMultiplier(uint256 newMultiplier, uint256 effectiveAtTimestamp) internal override {
         require(effectiveAtTimestamp <= block.timestamp + 365 days, "ScaledToken: effective time too far in future");
+        require(
+            effectiveAtTimestamp >= block.timestamp + MIN_MULTIPLIER_NOTICE,
+            "ScaledToken: minimum notice period not met"
+        );
         super._setUIMultiplier(newMultiplier, effectiveAtTimestamp);
     }
 

@@ -3,7 +3,8 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {stdToml} from "forge-std/StdToml.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {TransparentUpgradeableProxy} from
+    "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
@@ -19,7 +20,9 @@ import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 ///   deployPauseManager()                    — PauseRegistry
 ///   deployFactory(address,address)          — ScaledTokenFactory(compliance, pauseRegistry)
 ///   deployToken(address)                    — BeaconProxy address via factory
-///   deployTokenIssuer()                     — ERC1967-proxied TokenIssuer
+///   deployTokenIssuer()                     — TokenIssuer behind TransparentUpgradeableProxy
+///                                              (upgrade authority = auto-created ProxyAdmin
+///                                              owned by cfg.proxyAdmin)
 ///
 /// Address fields in config.toml that are address(0) fall back to the broadcaster.
 /// Role grants and initial token deploy require DEFAULT_ADMIN_ROLE on the target; if the
@@ -164,9 +167,18 @@ contract Deploy is Script {
     {
         TokenIssuer impl = new TokenIssuer();
         bytes memory initData = abi.encodeWithSelector(TokenIssuer.initialize.selector, cfg.admin);
-        issuer = TokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
-        console.log("TokenIssuer impl:   ", address(impl));
-        console.log("TokenIssuer proxy:  ", address(issuer));
+        issuer = TokenIssuer(payable(address(
+            new TransparentUpgradeableProxy(address(impl), cfg.proxyAdmin, initData)
+        )));
+
+        // Auto-created ProxyAdmin address is stored in EIP-1967 admin slot.
+        address tokenIssuerProxyAdmin = address(uint160(uint256(
+            vm.load(address(issuer), 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103)
+        )));
+        console.log("TokenIssuer impl:        ", address(impl));
+        console.log("TokenIssuer proxy:       ", address(issuer));
+        console.log("TokenIssuer ProxyAdmin:  ", tokenIssuerProxyAdmin);
+        console.log("  (owner = cfg.proxyAdmin, sole upgrade authority)");
 
         _grantRoles(
             address(issuer),
