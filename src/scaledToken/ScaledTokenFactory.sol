@@ -47,7 +47,11 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     error EmptyString();
     error InvalidComplianceContract();
     error InvalidPauseManagerContract();
+    /// @dev Reverts when the token's actual `symbol()` does not match the value expected here
+    ///      — used by {renameSymbol} to guard against factory-map / on-token symbol divergence.
     error SymbolMismatch(string expected, string provided);
+    /// @dev Reverts when a token address is not registered in `tokenBySymbol` under the given symbol.
+    error TokenNotRegisteredUnderSymbol(address token, string providedSymbol);
     /// @dev Symbols must be 1–32 characters of [A-Za-z0-9-].
     error InvalidSymbol(string symbol);
 
@@ -182,15 +186,24 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     }
 
     /// @notice Updates the factory's symbol mapping after a token's symbol changes. Caller must
-    ///         have already called {ScaledToken.updateSymbol} on the token itself.
+    ///         have already called {ScaledToken.updateSymbol} on the token itself — this method
+    ///         verifies that the on-token `symbol()` already equals `newSymbol` and refuses to
+    ///         sync the map otherwise, closing the drift between factory registry and reality.
     function renameSymbol(address token, string calldata oldSymbol, string calldata newSymbol)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
     {
+        if (token == address(0)) revert ZeroAddress();
         if (bytes(newSymbol).length == 0) revert EmptyString();
         _assertSymbol(newSymbol);
         if (tokenBySymbol[oldSymbol] != token) {
-            revert SymbolMismatch(oldSymbol, "token not registered under oldSymbol");
+            revert TokenNotRegisteredUnderSymbol(token, oldSymbol);
+        }
+        // Guard against factory-map / on-token symbol drift: the token must already reflect
+        // the new symbol (via ScaledToken.updateSymbol) before we sync the factory registry.
+        string memory actualSymbol = ScaledToken(token).symbol();
+        if (keccak256(bytes(actualSymbol)) != keccak256(bytes(newSymbol))) {
+            revert SymbolMismatch({expected: actualSymbol, provided: newSymbol});
         }
         if (tokenBySymbol[newSymbol] != address(0)) revert TokenSymbolAlreadyExists(newSymbol);
 

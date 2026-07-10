@@ -7,7 +7,7 @@ import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -22,7 +22,7 @@ import {IMintAndBurnable} from "./IMintAndBurnable.sol";
 contract TokenIssuer is
     Initializable,
     AccessControlEnumerableUpgradeable,
-    ReentrancyGuard,
+    ReentrancyGuardTransient,
     PausableUpgradeable
 {
     using SafeERC20 for IERC20;
@@ -37,7 +37,6 @@ contract TokenIssuer is
     event RecipientApproved(address indexed recipient);
     event RecipientRevoked(address indexed recipient);
     event Withdrawn(address indexed token, address indexed to, uint256 amount);
-    event Executed(address indexed to, uint256 value, bytes data, bool success);
 
     /// @notice Emitted on every successful mint routed through this issuer. `issuer` is the
     ///         emitter itself, included so aggregators indexing many issuers can filter without
@@ -63,13 +62,11 @@ contract TokenIssuer is
         _disableInitializers();
     }
 
-    receive() external payable {}
-
     function initialize(address admin) external initializer {
         if (admin == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
         __Pausable_init();
-        // ReentrancyGuard (v5) uses transient storage and needs no initializer.
+        // ReentrancyGuardTransient (v5, EIP-1153 TSTORE) uses transient storage — no initializer needed.
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
@@ -113,21 +110,17 @@ contract TokenIssuer is
         _unpause();
     }
 
-    /// @notice Emergency sweep of native (`token == address(0)`) or ERC-20 balance to the caller.
-    function withdraw(address token) external whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
-        uint256 assetBalance;
+    /// @notice Emergency sweep of an ERC-20 balance held by this issuer to the caller.
+    ///         TokenIssuer intentionally does not accept native tokens (no `receive()`), so this
+    ///         function only supports ERC-20 assets. Deliberately not gated by `whenNotPaused` —
+    ///         emergency asset recovery must remain available while the issuer is paused (which
+    ///         is the state right after an incident).
+    function withdraw(address token) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        if (token == address(0)) revert ZeroAddress();
         address to = _msgSender();
-        if (token == address(0)) {
-            assetBalance = address(this).balance;
-            if (assetBalance != 0) {
-                (bool ok,) = payable(to).call{value: assetBalance}("");
-                require(ok, "TokenIssuer: native withdraw failed");
-            }
-        } else {
-            assetBalance = IERC20(token).balanceOf(address(this));
-            if (assetBalance != 0) {
-                IERC20(token).safeTransfer(to, assetBalance);
-            }
+        uint256 assetBalance = IERC20(token).balanceOf(address(this));
+        if (assetBalance != 0) {
+            IERC20(token).safeTransfer(to, assetBalance);
         }
         emit Withdrawn(token, to, assetBalance);
     }
@@ -186,6 +179,10 @@ contract TokenIssuer is
         super.grantRole(role, account);
     }
 
-    /// @dev Storage gap for upgrade-safe inheritance.
-    uint256[47] private __gap;
+    /// @dev Storage gap for upgrade-safe additions. 2 vars (recipientIndex, approvedRecipients)
+    ///      + 48 = 50 slots reserved, matching the convention used by ScaledToken / ERC8056Base
+    ///      / Guards. TokenIssuer is deployed behind a TransparentUpgradeableProxy — upgrade
+    ///      authority lives on the auto-created ProxyAdmin (owned by `cfg.proxyAdmin`),
+    ///      separate from `DEFAULT_ADMIN_ROLE` (day-to-day ops).
+    uint256[48] private __gap;
 }
