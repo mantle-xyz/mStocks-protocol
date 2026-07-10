@@ -186,6 +186,10 @@ contract TokenIssuer is
         super.grantRole(role, account);
     }
 
-    /// @dev Storage gap for upgrade-safe inheritance.
-    uint256[47] private __gap;
+    /// @dev Storage gap for upgrade-safe additions. 2 vars (recipientIndex, approvedRecipients)
+    ///      + 48 = 50 slots reserved, matching the convention used by ScaledToken / ERC8056Base
+    ///      / Guards. TokenIssuer is deployed behind a TransparentUpgradeableProxy — upgrade
+    ///      authority lives on the auto-created ProxyAdmin (owned by `cfg.proxyAdmin`),
+    ///      separate from `DEFAULT_ADMIN_ROLE` (day-to-day ops).
+    uint256[48] private __gap;
 }
