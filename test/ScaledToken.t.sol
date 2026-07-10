@@ -289,6 +289,16 @@ contract ScaledTokenTest is Test {
         assertFalse(compliance.isSanctioned(user2));
     }
 
+    function test_ReplaceSanctionsRejectsEmptyList() public {
+        // Empty input must revert — callers wanting a full clear must use clearSanctions
+        // explicitly. Prevents an ops script that accidentally passes an empty array from
+        // silently wiping the entire sanctions list.
+        address[] memory empty = new address[](0);
+        vm.prank(complianceOps);
+        vm.expectRevert(ComplianceRegistry.EmptyAddressList.selector);
+        compliance.replaceSanctions(empty);
+    }
+
     function test_BlocklistIsTokenScoped() public {
         vm.prank(issuer);
         token.mint(100 ether);
@@ -530,6 +540,73 @@ contract ScaledTokenTest is Test {
             abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, "AAPL!")
         );
         factory.createToken("X", "AAPL!", "ID3", admin, empty, empty);
+    }
+
+    function test_FactoryRejectsDuplicateAssetCode() public {
+        address[] memory empty = new address[](0);
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(ScaledTokenFactory.AssetCodeAlreadyExists.selector, "US0378331005")
+        );
+        // Same assetCode as the setUp AAPL token; different name/symbol so we hit the
+        // asset-code uniqueness check specifically.
+        factory.createToken("Copycat", "COPY", "US0378331005", admin, empty, empty);
+    }
+
+    function test_FactoryRejectsInvalidAssetCode() public {
+        address[] memory empty = new address[](0);
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(ScaledTokenFactory.InvalidAssetCode.selector, "BAD CODE!")
+        );
+        factory.createToken("New", "NEW", "BAD CODE!", admin, empty, empty);
+    }
+
+    function test_FactoryRegistersAssetCodeMapping() public view {
+        assertEq(factory.tokenByAssetCode("US0378331005"), address(token));
+    }
+
+    function test_RenameAssetCodeHappyPath() public {
+        vm.prank(admin);
+        token.updateAssetCode("US0378331006");
+
+        vm.prank(admin);
+        factory.renameAssetCode(address(token), "US0378331005", "US0378331006");
+
+        assertEq(factory.tokenByAssetCode("US0378331005"), address(0));
+        assertEq(factory.tokenByAssetCode("US0378331006"), address(token));
+    }
+
+    function test_RenameAssetCodeRevertsWhenTokenNotYetUpdated() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ScaledTokenFactory.AssetCodeMismatch.selector, "US0378331005", "US0378331006"
+            )
+        );
+        factory.renameAssetCode(address(token), "US0378331005", "US0378331006");
+    }
+
+    function test_RenameAssetCodeRevertsIfTokenNotRegistered() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ScaledTokenFactory.TokenNotRegisteredUnderAssetCode.selector, address(token), "WRONG"
+            )
+        );
+        factory.renameAssetCode(address(token), "WRONG", "US0378331006");
+    }
+
+    function test_RenameAssetCodeRevertsOnZeroToken() public {
+        vm.prank(admin);
+        vm.expectRevert(ScaledTokenFactory.ZeroAddress.selector);
+        factory.renameAssetCode(address(0), "US0378331005", "US0378331006");
+    }
+
+    function test_UpdateAssetCodeRejectsInvalidFormat() public {
+        vm.prank(admin);
+        vm.expectRevert(ScaledToken.InvalidAssetCode.selector);
+        token.updateAssetCode("BAD CODE!");
     }
 
     function test_InitializeRejectsZeroAdmin() public {

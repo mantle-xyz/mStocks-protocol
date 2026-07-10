@@ -123,7 +123,11 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
 
     /// @notice Replaces the sanctions list with `newList` (O(1) invalidation of the
     ///         old set, then O(N) write of the new). Duplicates are silently deduped.
+    ///         Empty input reverts — callers wanting to fully clear must use
+    ///         {clearSanctions} explicitly, so an ops script that accidentally
+    ///         passes an empty array cannot silently wipe the entire list.
     function replaceSanctions(address[] calldata newList) external onlyOps {
+        if (newList.length == 0) revert EmptyAddressList();
         uint256 epoch = ++currentEpoch;
         for (uint256 i = 0; i < newList.length; ++i) {
             address addr = newList[i];
