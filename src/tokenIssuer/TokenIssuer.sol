@@ -62,8 +62,6 @@ contract TokenIssuer is
         _disableInitializers();
     }
 
-    receive() external payable {}
-
     function initialize(address admin) external initializer {
         if (admin == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
@@ -112,23 +110,17 @@ contract TokenIssuer is
         _unpause();
     }
 
-    /// @notice Emergency sweep of native (`token == address(0)`) or ERC-20 balance to the caller.
-    ///         Deliberately not gated by `whenNotPaused` — emergency asset recovery must remain
-    ///         available while the issuer is paused (which is the state right after an incident).
+    /// @notice Emergency sweep of an ERC-20 balance held by this issuer to the caller.
+    ///         TokenIssuer intentionally does not accept native tokens (no `receive()`), so this
+    ///         function only supports ERC-20 assets. Deliberately not gated by `whenNotPaused` —
+    ///         emergency asset recovery must remain available while the issuer is paused (which
+    ///         is the state right after an incident).
     function withdraw(address token) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
-        uint256 assetBalance;
+        if (token == address(0)) revert ZeroAddress();
         address to = _msgSender();
-        if (token == address(0)) {
-            assetBalance = address(this).balance;
-            if (assetBalance != 0) {
-                (bool ok,) = payable(to).call{value: assetBalance}("");
-                require(ok, "TokenIssuer: native withdraw failed");
-            }
-        } else {
-            assetBalance = IERC20(token).balanceOf(address(this));
-            if (assetBalance != 0) {
-                IERC20(token).safeTransfer(to, assetBalance);
-            }
+        uint256 assetBalance = IERC20(token).balanceOf(address(this));
+        if (assetBalance != 0) {
+            IERC20(token).safeTransfer(to, assetBalance);
         }
         emit Withdrawn(token, to, assetBalance);
     }
