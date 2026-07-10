@@ -100,6 +100,10 @@ contract ScaledToken is
         if (bytes(name_).length == 0) revert EmptyString();
         if (bytes(symbol_).length == 0) revert EmptyString();
         if (bytes(assetCode_).length == 0) revert EmptyString();
+        // Defense in depth: factory already rejects zero admin in createToken, but initialize()
+        // is a public entrypoint on the impl and any BeaconProxy pointing at the shared beacon
+        // could bypass that check. Match the pattern used for compliance/pauseManager/issuers.
+        if (admin_ == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
         __erc8056Base_init(name_, symbol_);
         // EIP-712 domain commits to the *initial* name; later updateName() does not

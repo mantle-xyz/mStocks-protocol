@@ -5,6 +5,7 @@ import {Test, Vm} from "forge-std/Test.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
+import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
@@ -523,6 +524,20 @@ contract ScaledTokenTest is Test {
             abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, "AAPL!")
         );
         factory.createToken("X", "AAPL!", "ID3", admin, empty, empty);
+    }
+
+    function test_InitializeRejectsZeroAdmin() public {
+        // Factory createToken has its own admin-zero check, but initialize is public on the impl
+        // so any BeaconProxy pointing at the shared beacon could bypass the factory. Deploy a
+        // BeaconProxy manually and assert the defense-in-depth check inside __scaledToken_init.
+        address[] memory empty = new address[](0);
+        bytes memory initData = abi.encodeWithSignature(
+            "initialize(string,string,string,address,address,address,address[],address[])",
+            "X", "X", "ID", address(compliance), address(pauseManager), address(0), empty, empty
+        );
+        address beaconAddr = address(factory.beacon());
+        vm.expectRevert(ScaledToken.ZeroAddress.selector);
+        new BeaconProxy(beaconAddr, initData);
     }
 
     function test_RenameSymbolHappyPath() public {
