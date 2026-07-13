@@ -47,7 +47,7 @@ contract ScaledTokenTest is Test {
 
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
-        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin);
+        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
 
         address[] memory issuers = new address[](1);
         issuers[0] = issuer;
@@ -386,12 +386,58 @@ contract ScaledTokenTest is Test {
     }
 
     function test_MultiplierPastTimestampReverts() public {
-        // Current/past timestamps fall under MIN_MULTIPLIER_NOTICE now — the ScaledToken
+        // Current/past timestamps fall under minMultiplierNotice now — the ScaledToken
         // check fires before the ERC8056 base "must be in future" check.
         vm.warp(1_000_000);
         vm.prank(operator);
         vm.expectRevert(bytes("ScaledToken: minimum notice period not met"));
         token.setUIMultiplier(2 ether, block.timestamp);
+    }
+
+    function test_MinMultiplierNoticeExposed() public view {
+        assertEq(token.minMultiplierNotice(), 24 hours);
+        assertEq(factory.minMultiplierNotice(), 24 hours);
+    }
+
+    function test_MultiplierExactlyAtMinNoticeSucceeds() public {
+        vm.prank(operator);
+        token.setUIMultiplier(2 ether, block.timestamp + 24 hours);
+        assertEq(token.newUIMultiplier(), 2 ether);
+    }
+
+    /// @dev Proves the notice period is no longer hardcoded: a factory constructed with a
+    ///      different notice yields tokens that enforce that window instead of 24h.
+    function test_CustomNoticeFactoryEnforcesConfiguredWindow() public {
+        vm.startPrank(admin);
+        ScaledTokenFactory customFactory =
+            new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 48 hours);
+        address[] memory noIssuers = new address[](0);
+        address[] memory scheds = new address[](1);
+        scheds[0] = operator;
+        ScaledToken customToken = ScaledToken(
+            customFactory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, noIssuers, scheds)
+        );
+        vm.stopPrank();
+
+        assertEq(customToken.minMultiplierNotice(), 48 hours);
+
+        vm.prank(operator);
+        vm.expectRevert(bytes("ScaledToken: minimum notice period not met"));
+        customToken.setUIMultiplier(2 ether, block.timestamp + 47 hours);
+
+        vm.prank(operator);
+        customToken.setUIMultiplier(2 ether, block.timestamp + 48 hours);
+        assertEq(customToken.newUIMultiplier(), 2 ether);
+    }
+
+    function test_ScaledTokenRejectsZeroNotice() public {
+        vm.expectRevert(ScaledToken.InvalidNoticePeriod.selector);
+        new ScaledToken(0);
+    }
+
+    function test_ScaledTokenRejectsNoticeAboveCap() public {
+        vm.expectRevert(ScaledToken.InvalidNoticePeriod.selector);
+        new ScaledToken(366 days);
     }
 
     function test_PendingMultiplierOverwriteEmitsAndUpdates() public {

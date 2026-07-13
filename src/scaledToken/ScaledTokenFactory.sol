@@ -19,6 +19,10 @@ import {IPauseRegistry} from "../pauseRegistry/IPauseRegistry.sol";
 contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     UpgradeableBeacon public immutable beacon;
 
+    /// @notice Minimum multiplier-scheduling notice baked into the beacon implementation, hence
+    ///         shared by every token this factory deploys. Exposed for off-chain transparency.
+    uint256 public immutable minMultiplierNotice;
+
     /// @notice Default compliance registry passed to every new token.
     address public defaultCompliance;
     /// @notice Default pause registry passed to every new token.
@@ -66,13 +70,23 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     /// @dev Asset codes must be 1–32 characters of [A-Za-z0-9-] (accommodates ISIN, CUSIP, internal refs).
     error InvalidAssetCode(string assetCode);
 
-    constructor(address _compliance, address _pauseManager, address _owner, address _proxyAdmin) {
+    /// @param _minMultiplierNotice Minimum lead time for scheduled UI-multiplier changes,
+    ///        baked into the shared beacon implementation (validated in the ScaledToken
+    ///        constructor: non-zero and <= 365 days).
+    constructor(
+        address _compliance,
+        address _pauseManager,
+        address _owner,
+        address _proxyAdmin,
+        uint256 _minMultiplierNotice
+    ) {
         _assertCompliance(_compliance);
         _assertPauseManager(_pauseManager);
         if (_owner == address(0)) revert ZeroAddress();
         if (_proxyAdmin == address(0)) revert ZeroAddress();
 
-        beacon = new UpgradeableBeacon(address(new ScaledToken()), _proxyAdmin);
+        beacon = new UpgradeableBeacon(address(new ScaledToken(_minMultiplierNotice)), _proxyAdmin);
+        minMultiplierNotice = _minMultiplierNotice;
 
         defaultCompliance = _compliance;
         defaultPauseManager = _pauseManager;

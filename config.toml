@@ -7,6 +7,13 @@
 admin = "0x0000000000000000000000000000000000000000"
 proxyAdmin = "0x0000000000000000000000000000000000000000"
 
+# Factory-wide setting baked into the beacon implementation shared by every deployed token.
+[factory]
+# Minimum lead time (in seconds) for a scheduled UI-multiplier change on every token this
+# factory deploys. Immutable per factory; validated on-chain (non-zero, <= 365 days).
+# Defaults to 86400 (24 hours) when omitted.
+minMultiplierNotice = 86400
+
 # Optional role grants performed after each contract is deployed.
 # Each list contains addresses that will be granted the named role.
 # Role admin for every role below is DEFAULT_ADMIN_ROLE — grants are only emitted
