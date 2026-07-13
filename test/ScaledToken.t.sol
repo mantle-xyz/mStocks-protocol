@@ -240,6 +240,34 @@ contract ScaledTokenTest is Test {
         pauseManager.pauseToken(address(token));
     }
 
+    function test_PauseTokenRevertsWhenAlreadyPaused() public {
+        vm.startPrank(pauseOps);
+        pauseManager.pauseToken(address(token));
+        vm.expectRevert(PauseRegistry.TokenAlreadyPaused.selector);
+        pauseManager.pauseToken(address(token));
+        vm.stopPrank();
+    }
+
+    function test_UnpauseTokenRevertsWhenNotPaused() public {
+        vm.prank(pauseOps);
+        vm.expectRevert(PauseRegistry.TokenNotPaused.selector);
+        pauseManager.unpauseToken(address(token));
+    }
+
+    function test_PauseGloballyRevertsWhenAlreadyPaused() public {
+        vm.startPrank(pauseOps);
+        pauseManager.pauseGlobally();
+        vm.expectRevert(PauseRegistry.AlreadyGloballyPaused.selector);
+        pauseManager.pauseGlobally();
+        vm.stopPrank();
+    }
+
+    function test_UnpauseGloballyRevertsWhenNotPaused() public {
+        vm.prank(pauseOps);
+        vm.expectRevert(PauseRegistry.NotGloballyPaused.selector);
+        pauseManager.unpauseGlobally();
+    }
+
     function test_BlocklistBlocksTransfer() public {
         vm.prank(issuer);
         token.mint(100 ether);
