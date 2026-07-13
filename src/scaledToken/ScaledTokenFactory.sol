@@ -3,7 +3,9 @@ pragma solidity ^0.8.24;
 
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {ScaledToken} from "./ScaledToken.sol";
@@ -65,6 +67,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     error InvalidSymbol(string symbol);
     /// @dev Asset codes must be 1–32 characters of [A-Za-z0-9-] (accommodates ISIN, CUSIP, internal refs).
     error InvalidAssetCode(string assetCode);
+    error CannotRenounceLastAdmin();
 
     constructor(address _compliance, address _pauseManager, address _owner, address _proxyAdmin) {
         _assertCompliance(_compliance);
@@ -272,5 +275,19 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         tokenByAssetCode[newAssetCode] = token;
 
         emit AssetCodeRenamed(token, oldAssetCode, newAssetCode);
+    }
+
+    /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
+    ///         permanently strip this non-upgradeable factory of admin capability
+    ///         (no more token creation or default-registry rotation).
+    function renounceRole(bytes32 role, address callerConfirmation)
+        public
+        virtual
+        override(AccessControl, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 }
