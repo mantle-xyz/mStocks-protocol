@@ -201,6 +201,19 @@ contract TokenIssuerTest is Test {
         assertEq(token.balanceOf(address(issuer)), 20 ether);
     }
 
+    function test_TransferEmitsTransferredEvent() public {
+        vm.prank(admin);
+        issuer.addApprovedRecipient(recipient1);
+
+        vm.prank(ops);
+        issuer.mint(address(token), address(issuer), 50 ether);
+
+        vm.expectEmit(true, true, true, true, address(issuer));
+        emit TokenIssuer.Transferred(address(issuer), address(token), recipient1, 30 ether);
+        vm.prank(ops);
+        issuer.transfer(address(token), recipient1, 30 ether);
+    }
+
     function test_TransferToUnapprovedRecipientReverts() public {
         vm.prank(ops);
         issuer.mint(address(token), address(issuer), 50 ether);
