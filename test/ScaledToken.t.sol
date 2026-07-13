@@ -6,6 +6,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
+import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
@@ -396,7 +397,32 @@ contract ScaledTokenTest is Test {
 
     function test_MinMultiplierNoticeExposed() public view {
         assertEq(token.minMultiplierNotice(), 24 hours);
+        // Factory reads it live from the beacon's current implementation.
         assertEq(factory.minMultiplierNotice(), 24 hours);
+    }
+
+    /// @dev The notice lives in the implementation constructor precisely so a beacon upgrade can
+    ///      change it. Upgrading to a new impl updates the factory's live reading and the window
+    ///      enforced by existing token proxies — without the factory caching a stale copy.
+    function test_BeaconUpgradeUpdatesNotice() public {
+        assertEq(factory.minMultiplierNotice(), 24 hours);
+
+        ScaledToken newImpl = new ScaledToken(48 hours);
+        UpgradeableBeacon beacon = factory.beacon();
+        vm.prank(proxyAdmin);
+        beacon.upgradeTo(address(newImpl));
+
+        // Both the factory's live reading and the existing proxy now reflect the new window.
+        assertEq(factory.minMultiplierNotice(), 48 hours);
+        assertEq(token.minMultiplierNotice(), 48 hours);
+
+        vm.prank(operator);
+        vm.expectRevert(bytes("ScaledToken: minimum notice period not met"));
+        token.setUIMultiplier(2 ether, block.timestamp + 47 hours);
+
+        vm.prank(operator);
+        token.setUIMultiplier(2 ether, block.timestamp + 48 hours);
+        assertEq(token.newUIMultiplier(), 2 ether);
     }
 
     function test_MultiplierExactlyAtMinNoticeSucceeds() public {

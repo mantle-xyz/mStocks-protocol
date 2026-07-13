@@ -19,10 +19,6 @@ import {IPauseRegistry} from "../pauseRegistry/IPauseRegistry.sol";
 contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     UpgradeableBeacon public immutable beacon;
 
-    /// @notice Minimum multiplier-scheduling notice baked into the beacon implementation, hence
-    ///         shared by every token this factory deploys. Exposed for off-chain transparency.
-    uint256 public immutable minMultiplierNotice;
-
     /// @notice Default compliance registry passed to every new token.
     address public defaultCompliance;
     /// @notice Default pause registry passed to every new token.
@@ -70,9 +66,11 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     /// @dev Asset codes must be 1–32 characters of [A-Za-z0-9-] (accommodates ISIN, CUSIP, internal refs).
     error InvalidAssetCode(string assetCode);
 
-    /// @param _minMultiplierNotice Minimum lead time for scheduled UI-multiplier changes,
-    ///        baked into the shared beacon implementation (validated in the ScaledToken
-    ///        constructor: non-zero and <= 365 days).
+    /// @param _minMultiplierNotice Minimum lead time for scheduled UI-multiplier changes, baked
+    ///        into the INITIAL beacon implementation (validated in the ScaledToken constructor:
+    ///        non-zero and <= 365 days). Not stored on the factory: a later beacon upgrade points
+    ///        at a new implementation carrying its own value, so the live figure is read from the
+    ///        current implementation via {minMultiplierNotice}.
     constructor(
         address _compliance,
         address _pauseManager,
@@ -86,7 +84,6 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         if (_proxyAdmin == address(0)) revert ZeroAddress();
 
         beacon = new UpgradeableBeacon(address(new ScaledToken(_minMultiplierNotice)), _proxyAdmin);
-        minMultiplierNotice = _minMultiplierNotice;
 
         defaultCompliance = _compliance;
         defaultPauseManager = _pauseManager;
@@ -141,6 +138,14 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
 
     function tokenCount() external view returns (uint256) {
         return tokens.length;
+    }
+
+    /// @notice Minimum multiplier-scheduling notice enforced by every token this factory has
+    ///         deployed, read live from the beacon's CURRENT implementation. Upgrading the beacon
+    ///         to a new implementation (with its own constructor value) updates this figure, and
+    ///         with it the window enforced by all existing token proxies.
+    function minMultiplierNotice() external view returns (uint256) {
+        return ScaledToken(beacon.implementation()).minMultiplierNotice();
     }
 
     /// @notice Returns every deployed token. Unbounded — prefer {getTokens} in production.
