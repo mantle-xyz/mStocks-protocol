@@ -30,7 +30,7 @@ contract TokenIssuerTest is Test {
         vm.startPrank(admin);
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
-        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin);
+        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
         address[] memory empty = new address[](0);
         token = ScaledToken(
             factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty)

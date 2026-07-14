@@ -18,7 +18,8 @@ import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 ///   run()                                   — full stack + optional initial token
 ///   deployCompliance()                      — ComplianceRegistry
 ///   deployPauseManager()                    — PauseRegistry
-///   deployFactory(address,address)          — ScaledTokenFactory(compliance, pauseRegistry)
+///   deployFactory(address,address)          — ScaledTokenFactory(compliance, pauseRegistry);
+///                                              minMultiplierNotice read from [factory] config
 ///   deployToken(address)                    — BeaconProxy address via factory
 ///   deployTokenIssuer()                     — TokenIssuer behind TransparentUpgradeableProxy
 ///                                              (upgrade authority = auto-created ProxyAdmin
@@ -33,6 +34,7 @@ contract Deploy is Script {
     struct Config {
         address admin;
         address proxyAdmin;
+        uint256 minMultiplierNotice;
         address[] complianceOps;
         address[] pauseOps;
         address[] tokenIssuerOps;
@@ -156,9 +158,12 @@ contract Deploy is Script {
         internal
         returns (ScaledTokenFactory factory)
     {
-        factory = new ScaledTokenFactory(compliance, pauseManager, cfg.admin, cfg.proxyAdmin);
+        factory = new ScaledTokenFactory(
+            compliance, pauseManager, cfg.admin, cfg.proxyAdmin, cfg.minMultiplierNotice
+        );
         console.log("Factory:            ", address(factory));
         console.log("Beacon:             ", address(factory.beacon()));
+        console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
     }
 
     function _deployTokenIssuer(Config memory cfg, bool broadcasterIsAdmin)
@@ -258,6 +263,12 @@ contract Deploy is Script {
 
         cfg.proxyAdmin = toml.readAddress(".proxyAdmin");
         if (cfg.proxyAdmin == address(0)) cfg.proxyAdmin = broadcaster;
+
+        // Minimum multiplier-scheduling notice baked into the factory's beacon implementation.
+        // Defaults to 24h when the key is absent (validated on-chain: non-zero, <= 365 days).
+        cfg.minMultiplierNotice = vm.keyExistsToml(toml, ".factory.minMultiplierNotice")
+            ? toml.readUint(".factory.minMultiplierNotice")
+            : 24 hours;
 
         cfg.complianceOps = _readAddressArrayOr(toml, ".compliance.opsRole");
         cfg.pauseOps = _readAddressArrayOr(toml, ".pauseManager.opsRole");
