@@ -68,20 +68,30 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
 
     function blockUsers(address token, address[] calldata users) external onlyOps {
         if (users.length == 0) revert EmptyAddressList();
+        address[] memory effectivelyBlocked = new address[](users.length);
+        uint256 count = 0;
         for (uint256 i = 0; i < users.length; ++i) {
             if (users[i] == address(0)) revert ZeroAddress();
+            if (isBlocked[token][users[i]]) continue;
             isBlocked[token][users[i]] = true;
+            effectivelyBlocked[count++] = users[i];
         }
-        emit UsersBlocked(token, users);
+        assembly { mstore(effectivelyBlocked, count) }
+        emit UsersBlocked(token, effectivelyBlocked);
     }
 
     function unblockUsers(address token, address[] calldata users) external onlyOps {
         if (users.length == 0) revert EmptyAddressList();
+        address[] memory effectivelyUnblocked = new address[](users.length);
+        uint256 count = 0;
         for (uint256 i = 0; i < users.length; ++i) {
             if (users[i] == address(0)) revert ZeroAddress();
+            if (!isBlocked[token][users[i]]) continue;
             isBlocked[token][users[i]] = false;
+            effectivelyUnblocked[count++] = users[i];
         }
-        emit UsersUnblocked(token, users);
+        assembly { mstore(effectivelyUnblocked, count) }
+        emit UsersUnblocked(token, effectivelyUnblocked);
     }
 
     function sanctionUsers(address[] calldata users) external onlyOps {

@@ -313,6 +313,66 @@ contract ScaledTokenTest is Test {
         assertFalse(compliance.isBlocked(address(0xBEEF), user1));
     }
 
+    function test_BlockUsersDedupesEventAndState() public {
+        address[] memory list = new address[](3);
+        list[0] = user1;
+        list[1] = user1; // duplicate within the same call
+        list[2] = user2;
+
+        // Only the two distinct, newly-blocked addresses are emitted.
+        address[] memory expected = new address[](2);
+        expected[0] = user1;
+        expected[1] = user2;
+        vm.expectEmit(true, false, false, true);
+        emit ComplianceRegistry.UsersBlocked(address(token), expected);
+
+        vm.prank(complianceOps);
+        compliance.blockUsers(address(token), list);
+
+        assertTrue(compliance.isBlocked(address(token), user1));
+        assertTrue(compliance.isBlocked(address(token), user2));
+
+        // Re-blocking an already-blocked address emits an empty diff.
+        address[] memory again = new address[](1);
+        again[0] = user1;
+        vm.expectEmit(true, false, false, true);
+        emit ComplianceRegistry.UsersBlocked(address(token), new address[](0));
+        vm.prank(complianceOps);
+        compliance.blockUsers(address(token), again);
+    }
+
+    function test_UnblockUsersDedupesEventAndState() public {
+        address[] memory list = new address[](2);
+        list[0] = user1;
+        list[1] = user2;
+        vm.prank(complianceOps);
+        compliance.blockUsers(address(token), list);
+
+        // Duplicate user1 plus already-unblocked user2 -> only user1 emitted once.
+        address[] memory toUnblock = new address[](3);
+        toUnblock[0] = user1;
+        toUnblock[1] = user1;
+        toUnblock[2] = user2;
+        address[] memory expected = new address[](2);
+        expected[0] = user1;
+        expected[1] = user2;
+        vm.expectEmit(true, false, false, true);
+        emit ComplianceRegistry.UsersUnblocked(address(token), expected);
+        vm.prank(complianceOps);
+        compliance.unblockUsers(address(token), toUnblock);
+
+        assertFalse(compliance.isBlocked(address(token), user1));
+        assertFalse(compliance.isBlocked(address(token), user2));
+
+        // Unblocking an address that is not blocked emits an empty diff.
+        address[] memory again = new address[](1);
+        again[0] = user1;
+        vm.expectEmit(true, false, false, true);
+        emit ComplianceRegistry.UsersUnblocked(address(token), new address[](0));
+        vm.prank(complianceOps);
+        compliance.unblockUsers(address(token), again);
+    }
+
     function test_AdminCannotManageBlocklist() public {
         address[] memory list = new address[](1);
         list[0] = user1;
