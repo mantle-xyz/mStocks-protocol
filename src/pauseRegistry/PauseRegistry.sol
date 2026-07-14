@@ -26,6 +26,10 @@ contract PauseRegistry is IPauseRegistry, AccessControlEnumerable {
     error MissingOpsRole();
     error ZeroAddress();
     error SelfGrantNotAllowed();
+    error TokenAlreadyPaused();
+    error TokenNotPaused();
+    error AlreadyGloballyPaused();
+    error NotGloballyPaused();
     error CannotRenounceLastAdmin();
 
     constructor(address admin) {
@@ -44,21 +48,25 @@ contract PauseRegistry is IPauseRegistry, AccessControlEnumerable {
     }
 
     function pauseToken(address token) external onlyOps {
+        if (pausedTokens[token]) revert TokenAlreadyPaused();
         pausedTokens[token] = true;
         emit TokenPaused(token, msg.sender);
     }
 
     function unpauseToken(address token) external onlyOps {
+        if (!pausedTokens[token]) revert TokenNotPaused();
         pausedTokens[token] = false;
         emit TokenUnpaused(token, msg.sender);
     }
 
     function pauseGlobally() external onlyOps {
+        if (globalPaused) revert AlreadyGloballyPaused();
         globalPaused = true;
         emit GlobalPaused(msg.sender);
     }
 
     function unpauseGlobally() external onlyOps {
+        if (!globalPaused) revert NotGloballyPaused();
         globalPaused = false;
         emit GlobalUnpaused(msg.sender);
     }
