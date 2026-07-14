@@ -48,6 +48,11 @@ contract TokenIssuer is
     ///         the issuer to pull tokens.
     event Burned(address indexed issuer, address indexed token, address indexed from, uint256 amount);
 
+    /// @notice Emitted on every successful transfer of held inventory routed through this issuer.
+    ///         `issuer` is the emitter itself, included so aggregators indexing many issuers can
+    ///         filter without inspecting the log emitter.
+    event Transferred(address indexed issuer, address indexed token, address indexed recipient, uint256 amount);
+
     error ZeroAddress();
     error RecipientAlreadyApproved();
     error RecipientNotApproved();
@@ -56,6 +61,7 @@ contract TokenIssuer is
     error MintFailed();
     error BurnFailed();
     error SelfGrantNotAllowed();
+    error CannotRenounceLastAdmin();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -167,6 +173,7 @@ contract TokenIssuer is
     {
         if (!isApprovedRecipient(recipient)) revert RecipientNotApproved();
         IERC20(token).safeTransfer(recipient, amount);
+        emit Transferred(address(this), token, recipient, amount);
     }
 
     /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
@@ -177,6 +184,19 @@ contract TokenIssuer is
     {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
+    }
+
+    /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
+    ///         permanently strip the contract of admin capability.
+    function renounceRole(bytes32 role, address callerConfirmation)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 
     /// @dev Storage gap for upgrade-safe additions. 2 vars (recipientIndex, approvedRecipients)

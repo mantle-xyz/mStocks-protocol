@@ -6,6 +6,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
+import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
@@ -47,7 +48,7 @@ contract ScaledTokenTest is Test {
 
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
-        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin);
+        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
 
         address[] memory issuers = new address[](1);
         issuers[0] = issuer;
@@ -340,6 +341,66 @@ contract ScaledTokenTest is Test {
         assertFalse(compliance.isBlocked(address(0xBEEF), user1));
     }
 
+    function test_BlockUsersDedupesEventAndState() public {
+        address[] memory list = new address[](3);
+        list[0] = user1;
+        list[1] = user1; // duplicate within the same call
+        list[2] = user2;
+
+        // Only the two distinct, newly-blocked addresses are emitted.
+        address[] memory expected = new address[](2);
+        expected[0] = user1;
+        expected[1] = user2;
+        vm.expectEmit(true, false, false, true);
+        emit ComplianceRegistry.UsersBlocked(address(token), expected);
+
+        vm.prank(complianceOps);
+        compliance.blockUsers(address(token), list);
+
+        assertTrue(compliance.isBlocked(address(token), user1));
+        assertTrue(compliance.isBlocked(address(token), user2));
+
+        // Re-blocking an already-blocked address emits an empty diff.
+        address[] memory again = new address[](1);
+        again[0] = user1;
+        vm.expectEmit(true, false, false, true);
+        emit ComplianceRegistry.UsersBlocked(address(token), new address[](0));
+        vm.prank(complianceOps);
+        compliance.blockUsers(address(token), again);
+    }
+
+    function test_UnblockUsersDedupesEventAndState() public {
+        address[] memory list = new address[](2);
+        list[0] = user1;
+        list[1] = user2;
+        vm.prank(complianceOps);
+        compliance.blockUsers(address(token), list);
+
+        // Duplicate user1 plus already-unblocked user2 -> only user1 emitted once.
+        address[] memory toUnblock = new address[](3);
+        toUnblock[0] = user1;
+        toUnblock[1] = user1;
+        toUnblock[2] = user2;
+        address[] memory expected = new address[](2);
+        expected[0] = user1;
+        expected[1] = user2;
+        vm.expectEmit(true, false, false, true);
+        emit ComplianceRegistry.UsersUnblocked(address(token), expected);
+        vm.prank(complianceOps);
+        compliance.unblockUsers(address(token), toUnblock);
+
+        assertFalse(compliance.isBlocked(address(token), user1));
+        assertFalse(compliance.isBlocked(address(token), user2));
+
+        // Unblocking an address that is not blocked emits an empty diff.
+        address[] memory again = new address[](1);
+        again[0] = user1;
+        vm.expectEmit(true, false, false, true);
+        emit ComplianceRegistry.UsersUnblocked(address(token), new address[](0));
+        vm.prank(complianceOps);
+        compliance.unblockUsers(address(token), again);
+    }
+
     function test_AdminCannotManageBlocklist() public {
         address[] memory list = new address[](1);
         list[0] = user1;
@@ -414,12 +475,83 @@ contract ScaledTokenTest is Test {
     }
 
     function test_MultiplierPastTimestampReverts() public {
-        // Current/past timestamps fall under MIN_MULTIPLIER_NOTICE now — the ScaledToken
+        // Current/past timestamps fall under minMultiplierNotice now — the ScaledToken
         // check fires before the ERC8056 base "must be in future" check.
         vm.warp(1_000_000);
         vm.prank(operator);
         vm.expectRevert(bytes("ScaledToken: minimum notice period not met"));
         token.setUIMultiplier(2 ether, block.timestamp);
+    }
+
+    function test_MinMultiplierNoticeExposed() public view {
+        assertEq(token.minMultiplierNotice(), 24 hours);
+        // Factory reads it live from the beacon's current implementation.
+        assertEq(factory.minMultiplierNotice(), 24 hours);
+    }
+
+    /// @dev The notice lives in the implementation constructor precisely so a beacon upgrade can
+    ///      change it. Upgrading to a new impl updates the factory's live reading and the window
+    ///      enforced by existing token proxies — without the factory caching a stale copy.
+    function test_BeaconUpgradeUpdatesNotice() public {
+        assertEq(factory.minMultiplierNotice(), 24 hours);
+
+        ScaledToken newImpl = new ScaledToken(48 hours);
+        UpgradeableBeacon beacon = factory.beacon();
+        vm.prank(proxyAdmin);
+        beacon.upgradeTo(address(newImpl));
+
+        // Both the factory's live reading and the existing proxy now reflect the new window.
+        assertEq(factory.minMultiplierNotice(), 48 hours);
+        assertEq(token.minMultiplierNotice(), 48 hours);
+
+        vm.prank(operator);
+        vm.expectRevert(bytes("ScaledToken: minimum notice period not met"));
+        token.setUIMultiplier(2 ether, block.timestamp + 47 hours);
+
+        vm.prank(operator);
+        token.setUIMultiplier(2 ether, block.timestamp + 48 hours);
+        assertEq(token.newUIMultiplier(), 2 ether);
+    }
+
+    function test_MultiplierExactlyAtMinNoticeSucceeds() public {
+        vm.prank(operator);
+        token.setUIMultiplier(2 ether, block.timestamp + 24 hours);
+        assertEq(token.newUIMultiplier(), 2 ether);
+    }
+
+    /// @dev Proves the notice period is no longer hardcoded: a factory constructed with a
+    ///      different notice yields tokens that enforce that window instead of 24h.
+    function test_CustomNoticeFactoryEnforcesConfiguredWindow() public {
+        vm.startPrank(admin);
+        ScaledTokenFactory customFactory =
+            new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 48 hours);
+        address[] memory noIssuers = new address[](0);
+        address[] memory scheds = new address[](1);
+        scheds[0] = operator;
+        ScaledToken customToken = ScaledToken(
+            customFactory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, noIssuers, scheds)
+        );
+        vm.stopPrank();
+
+        assertEq(customToken.minMultiplierNotice(), 48 hours);
+
+        vm.prank(operator);
+        vm.expectRevert(bytes("ScaledToken: minimum notice period not met"));
+        customToken.setUIMultiplier(2 ether, block.timestamp + 47 hours);
+
+        vm.prank(operator);
+        customToken.setUIMultiplier(2 ether, block.timestamp + 48 hours);
+        assertEq(customToken.newUIMultiplier(), 2 ether);
+    }
+
+    function test_ScaledTokenRejectsZeroNotice() public {
+        vm.expectRevert(ScaledToken.InvalidNoticePeriod.selector);
+        new ScaledToken(0);
+    }
+
+    function test_ScaledTokenRejectsNoticeAboveCap() public {
+        vm.expectRevert(ScaledToken.InvalidNoticePeriod.selector);
+        new ScaledToken(366 days);
     }
 
     function test_PendingMultiplierOverwriteEmitsAndUpdates() public {
@@ -792,5 +924,83 @@ contract ScaledTokenTest is Test {
         (, string memory name,,,,,) =
             abi.decode(data, (bytes1, string, string, uint256, address, bytes32, uint256[]));
         assertEq(name, "Apple Inc.");
+    }
+
+    // --- Last-admin renounce guard ---------------------------------------------
+
+    function test_TokenLastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(ScaledToken.CannotRenounceLastAdmin.selector);
+        token.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function test_TokenNonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        token.grantRole(DEFAULT_ADMIN_ROLE, stranger);
+
+        vm.prank(admin);
+        token.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+
+        assertFalse(token.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(token.hasRole(DEFAULT_ADMIN_ROLE, stranger));
+    }
+
+    function test_FactoryLastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(ScaledTokenFactory.CannotRenounceLastAdmin.selector);
+        factory.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function test_FactoryNonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        factory.grantRole(DEFAULT_ADMIN_ROLE, stranger);
+
+        vm.prank(admin);
+        factory.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+
+        assertFalse(factory.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(factory.hasRole(DEFAULT_ADMIN_ROLE, stranger));
+    }
+
+    function test_ComplianceLastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(ComplianceRegistry.CannotRenounceLastAdmin.selector);
+        compliance.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function test_ComplianceNonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        compliance.grantRole(DEFAULT_ADMIN_ROLE, stranger);
+
+        vm.prank(admin);
+        compliance.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+
+        assertFalse(compliance.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(compliance.hasRole(DEFAULT_ADMIN_ROLE, stranger));
+    }
+
+    function test_PauseRegistryLastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(PauseRegistry.CannotRenounceLastAdmin.selector);
+        pauseManager.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function test_PauseRegistryNonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        pauseManager.grantRole(DEFAULT_ADMIN_ROLE, stranger);
+
+        vm.prank(admin);
+        pauseManager.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+
+        assertFalse(pauseManager.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(pauseManager.hasRole(DEFAULT_ADMIN_ROLE, stranger));
+    }
+
+    function test_NonAdminRoleCanStillBeRenounced() public {
+        // Guard only protects DEFAULT_ADMIN_ROLE; operational roles renounce freely.
+        bytes32 opsRole = pauseManager.OPS_ROLE();
+        vm.prank(pauseOps);
+        pauseManager.renounceRole(opsRole, pauseOps);
+        assertFalse(pauseManager.hasRole(opsRole, pauseOps));
     }
 }

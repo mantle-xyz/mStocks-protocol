@@ -30,7 +30,7 @@ contract TokenIssuerTest is Test {
         vm.startPrank(admin);
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
-        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin);
+        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
         address[] memory empty = new address[](0);
         token = ScaledToken(
             factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty)
@@ -199,6 +199,19 @@ contract TokenIssuerTest is Test {
 
         assertEq(token.balanceOf(recipient1), 30 ether);
         assertEq(token.balanceOf(address(issuer)), 20 ether);
+    }
+
+    function test_TransferEmitsTransferredEvent() public {
+        vm.prank(admin);
+        issuer.addApprovedRecipient(recipient1);
+
+        vm.prank(ops);
+        issuer.mint(address(token), address(issuer), 50 ether);
+
+        vm.expectEmit(true, true, true, true, address(issuer));
+        emit TokenIssuer.Transferred(address(issuer), address(token), recipient1, 30 ether);
+        vm.prank(ops);
+        issuer.transfer(address(token), recipient1, 30 ether);
     }
 
     function test_TransferToUnapprovedRecipientReverts() public {
@@ -453,5 +466,22 @@ contract TokenIssuerTest is Test {
         vm.prank(ops);
         vm.expectRevert();
         issuer.mint(address(token), recipient1, 1 ether);
+    }
+
+    function test_LastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(TokenIssuer.CannotRenounceLastAdmin.selector);
+        issuer.renounceRole(0x00, admin);
+    }
+
+    function test_NonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        issuer.grantRole(0x00, stranger);
+
+        vm.prank(admin);
+        issuer.renounceRole(0x00, admin);
+
+        assertFalse(issuer.hasRole(0x00, admin));
+        assertTrue(issuer.hasRole(0x00, stranger));
     }
 }

@@ -29,7 +29,10 @@ contract ScaledToken is
     /// @notice Minimum window between scheduling a multiplier change and its effective time.
     ///         Bounds the front-running / acceleration attack window to at least this duration,
     ///         giving integrators time to observe UIMultiplierUpdated and hedge / halt as needed.
-    uint256 public constant MIN_MULTIPLIER_NOTICE = 24 hours;
+    ///         Set once in the constructor of this beacon implementation (shared by every token
+    ///         a factory deploys); change it by deploying a new implementation and upgrading the
+    ///         beacon.
+    uint256 public immutable minMultiplierNotice;
 
     bool public mintAllowed;
     bool public burnAllowed;
@@ -56,9 +59,13 @@ contract ScaledToken is
     error InvalidSymbol();
     /// @dev Asset codes must be 1–32 characters of [A-Za-z0-9-].
     error InvalidAssetCode();
+    error CannotRenounceLastAdmin();
     /// @dev ISSUER_ROLE governs mint/burn and must be held by a contract with its own
     ///      access control — never a plain EOA.
     error IssuerNotContract();
+    /// @dev Notice period must be non-zero and no larger than the 365-day scheduling
+    ///      horizon, otherwise no multiplier change could ever be scheduled.
+    error InvalidNoticePeriod();
 
     modifier onlyIssuer() {
         _requireIssuer();
@@ -73,8 +80,12 @@ contract ScaledToken is
         if (!hasRole(MULTIPLIER_SCHEDULER_ROLE, msg.sender)) revert UnauthorizedRole();
     }
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    /// @param minMultiplierNotice_ Minimum lead time enforced on every scheduled multiplier
+    ///        change. Baked into this implementation and shared by all proxies pointing at it.
+    /// @custom:oz-upgrades-unsafe-allow constructor state-variable-immutable
+    constructor(uint256 minMultiplierNotice_) {
+        if (minMultiplierNotice_ == 0 || minMultiplierNotice_ > 365 days) revert InvalidNoticePeriod();
+        minMultiplierNotice = minMultiplierNotice_;
         _disableInitializers();
     }
 
@@ -244,14 +255,14 @@ contract ScaledToken is
     }
 
     /// @dev Caps the scheduling horizon at 365 days so no single change can lock the
-    ///      multiplier indefinitely, and enforces MIN_MULTIPLIER_NOTICE so any scheduled
-    ///      change — initial or overwrite — sits at least 24h in the future. This bounds
+    ///      multiplier indefinitely, and enforces minMultiplierNotice so any scheduled
+    ///      change — initial or overwrite — sits at least that far in the future. This bounds
     ///      the acceleration/front-running window without blocking legitimate value
     ///      corrections (integrators must monitor UIMultiplierUpdated for reschedules).
     function _setUIMultiplier(uint256 newMultiplier, uint256 effectiveAtTimestamp) internal override {
         require(effectiveAtTimestamp <= block.timestamp + 365 days, "ScaledToken: effective time too far in future");
         require(
-            effectiveAtTimestamp >= block.timestamp + MIN_MULTIPLIER_NOTICE,
+            effectiveAtTimestamp >= block.timestamp + minMultiplierNotice,
             "ScaledToken: minimum notice period not met"
         );
         super._setUIMultiplier(newMultiplier, effectiveAtTimestamp);
@@ -295,6 +306,19 @@ contract ScaledToken is
     {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
+    }
+
+    /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
+    ///         permanently strip the contract of admin capability.
+    function renounceRole(bytes32 role, address callerConfirmation)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 
     /// @dev Covers both the public grantRole flow and the initializer path (initial issuers
