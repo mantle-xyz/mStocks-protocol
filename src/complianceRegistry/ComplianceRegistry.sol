@@ -36,6 +36,7 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
     error MissingOpsRole();
     error ZeroAddress();
     error SelfGrantNotAllowed();
+    error CannotRenounceLastAdmin();
 
     constructor(address admin) {
         if (admin == address(0)) revert ZeroAddress();
@@ -146,5 +147,18 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
     {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
+    }
+
+    /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
+    ///         permanently strip this non-upgradeable contract of admin capability.
+    function renounceRole(bytes32 role, address callerConfirmation)
+        public
+        virtual
+        override(AccessControl, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 }

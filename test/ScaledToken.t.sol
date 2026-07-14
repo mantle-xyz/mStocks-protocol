@@ -837,4 +837,82 @@ contract ScaledTokenTest is Test {
             abi.decode(data, (bytes1, string, string, uint256, address, bytes32, uint256[]));
         assertEq(name, "Apple Inc.");
     }
+
+    // --- Last-admin renounce guard ---------------------------------------------
+
+    function test_TokenLastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(ScaledToken.CannotRenounceLastAdmin.selector);
+        token.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function test_TokenNonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        token.grantRole(DEFAULT_ADMIN_ROLE, stranger);
+
+        vm.prank(admin);
+        token.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+
+        assertFalse(token.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(token.hasRole(DEFAULT_ADMIN_ROLE, stranger));
+    }
+
+    function test_FactoryLastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(ScaledTokenFactory.CannotRenounceLastAdmin.selector);
+        factory.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function test_FactoryNonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        factory.grantRole(DEFAULT_ADMIN_ROLE, stranger);
+
+        vm.prank(admin);
+        factory.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+
+        assertFalse(factory.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(factory.hasRole(DEFAULT_ADMIN_ROLE, stranger));
+    }
+
+    function test_ComplianceLastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(ComplianceRegistry.CannotRenounceLastAdmin.selector);
+        compliance.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function test_ComplianceNonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        compliance.grantRole(DEFAULT_ADMIN_ROLE, stranger);
+
+        vm.prank(admin);
+        compliance.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+
+        assertFalse(compliance.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(compliance.hasRole(DEFAULT_ADMIN_ROLE, stranger));
+    }
+
+    function test_PauseRegistryLastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(PauseRegistry.CannotRenounceLastAdmin.selector);
+        pauseManager.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+    }
+
+    function test_PauseRegistryNonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        pauseManager.grantRole(DEFAULT_ADMIN_ROLE, stranger);
+
+        vm.prank(admin);
+        pauseManager.renounceRole(DEFAULT_ADMIN_ROLE, admin);
+
+        assertFalse(pauseManager.hasRole(DEFAULT_ADMIN_ROLE, admin));
+        assertTrue(pauseManager.hasRole(DEFAULT_ADMIN_ROLE, stranger));
+    }
+
+    function test_NonAdminRoleCanStillBeRenounced() public {
+        // Guard only protects DEFAULT_ADMIN_ROLE; operational roles renounce freely.
+        bytes32 opsRole = pauseManager.OPS_ROLE();
+        vm.prank(pauseOps);
+        pauseManager.renounceRole(opsRole, pauseOps);
+        assertFalse(pauseManager.hasRole(opsRole, pauseOps));
+    }
 }

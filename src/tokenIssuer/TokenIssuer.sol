@@ -61,6 +61,7 @@ contract TokenIssuer is
     error MintFailed();
     error BurnFailed();
     error SelfGrantNotAllowed();
+    error CannotRenounceLastAdmin();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -183,6 +184,19 @@ contract TokenIssuer is
     {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
+    }
+
+    /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
+    ///         permanently strip the contract of admin capability.
+    function renounceRole(bytes32 role, address callerConfirmation)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 
     /// @dev Storage gap for upgrade-safe additions. 2 vars (recipientIndex, approvedRecipients)

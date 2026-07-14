@@ -467,4 +467,21 @@ contract TokenIssuerTest is Test {
         vm.expectRevert();
         issuer.mint(address(token), recipient1, 1 ether);
     }
+
+    function test_LastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(TokenIssuer.CannotRenounceLastAdmin.selector);
+        issuer.renounceRole(0x00, admin);
+    }
+
+    function test_NonLastAdminCanRenounce() public {
+        vm.prank(admin);
+        issuer.grantRole(0x00, stranger);
+
+        vm.prank(admin);
+        issuer.renounceRole(0x00, admin);
+
+        assertFalse(issuer.hasRole(0x00, admin));
+        assertTrue(issuer.hasRole(0x00, stranger));
+    }
 }
