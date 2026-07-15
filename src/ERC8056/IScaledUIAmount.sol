@@ -10,7 +10,10 @@ pragma solidity ^0.8.24;
 interface IScaledUIAmount {
     /**
      * @dev Emitted when the UI multiplier is updated or initialized.
-     * @param oldMultiplier The previous multiplier value. A value of 0 indicates
+     * @param oldMultiplier The multiplier active (currently in effect) at the moment
+     *        this event is emitted — i.e. the value being superseded by `newMultiplier`.
+     *        Note: when overwriting a not-yet-effective scheduled change, this is the
+     *        active multiplier, not the overwritten pending value. A value of 0 indicates
      *        initialization (no prior multiplier exists); the runtime invariant
      *        `uiMultiplier > 0` guarantees 0 cannot appear in any post-init emission.
      * @param newMultiplier The new multiplier value scheduled to take effect
