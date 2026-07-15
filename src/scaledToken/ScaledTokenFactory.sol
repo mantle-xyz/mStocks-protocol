@@ -161,9 +161,10 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     function getTokens(uint256 offset, uint256 limit) external view returns (address[] memory slice) {
         uint256 total = tokens.length;
         if (offset >= total || limit == 0) return new address[](0);
-        uint256 end = offset + limit;
-        if (end > total) end = total;
-        uint256 size = end - offset;
+        // Clamp against the remaining count rather than computing `offset + limit`, so an
+        // arbitrarily large `limit` returns the tail slice instead of overflowing and reverting.
+        uint256 remaining = total - offset;
+        uint256 size = limit < remaining ? limit : remaining;
         slice = new address[](size);
         for (uint256 i = 0; i < size; ++i) {
             slice[i] = tokens[offset + i];
