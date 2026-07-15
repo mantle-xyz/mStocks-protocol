@@ -4,7 +4,15 @@
 # Address fields set to the zero address (0x0000...0000) fall back to the
 # broadcaster (the EOA signing the transactions).
 
+# FINAL admin (handover target), e.g. the team multisig. This is NOT the admin used during
+# deployment: Deploy.s.sol bootstraps every contract with the BROADCASTER (the deploy signer —
+# e.g. a Ledger) as the temporary DEFAULT_ADMIN_ROLE holder, so it can perform all role grants
+# and createToken. After deploy + wiring, run `script/TransferAdmin.s.sol` to grant
+# DEFAULT_ADMIN_ROLE to this address and revoke it from the broadcaster.
+# Zero => broadcaster, i.e. "keep admin on the deployer" (TransferAdmin then no-ops).
 admin = "0x0000000000000000000000000000000000000000"
+# Beacon owner / proxy upgrade authority. Set to its FINAL value at deploy (the broadcaster never
+# needs it) — no handover required. Zero => broadcaster.
 proxyAdmin = "0x0000000000000000000000000000000000000000"
 
 # Factory-wide setting baked into the beacon implementation shared by every deployed token.
