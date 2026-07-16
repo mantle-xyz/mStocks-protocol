@@ -1,42 +1,50 @@
 # Deployment configuration for mStocks protocol.
 # Read natively by `script/Deploy.s.sol` via Foundry's vm.parseToml* cheatcodes.
 #
-# Address fields set to the zero address (0x0000...0000) fall back to the
-# broadcaster (the EOA signing the transactions).
+# INITIAL admin vs FINAL admin:
+#   - INITIAL admin (deploy-time) is ALWAYS the BROADCASTER — the `--private-key` / `--ledger`
+#     signer running Deploy.s.sol. Every contract is bootstrapped with it as the temporary
+#     DEFAULT_ADMIN_ROLE holder so the deploy can perform all role grants and createToken. It is
+#     NOT configured here; it is whoever signs the deployment.
+#   - FINAL admin (handover target) is configured PER CONTRACT via each section's `finalAdmin`.
+#     After deploy + wiring, `script/TransferAdmin.s.sol` grants DEFAULT_ADMIN_ROLE to that admin
+#     and revokes it from the broadcaster.
+#
+# There is NO global/default finalAdmin: every contract you hand over MUST set a valid, non-zero
+# `[section].finalAdmin`. TransferAdmin REVERTS on a missing/zero finalAdmin for any target it is
+# asked to hand over (no silent fallback to the broadcaster).
 
-# FINAL admin (handover target), e.g. the team multisig. This is NOT the admin used during
-# deployment: Deploy.s.sol bootstraps every contract with the BROADCASTER (the deploy signer —
-# e.g. a Ledger) as the temporary DEFAULT_ADMIN_ROLE holder, so it can perform all role grants
-# and createToken. After deploy + wiring, run `script/TransferAdmin.s.sol` to grant
-# DEFAULT_ADMIN_ROLE to this address and revoke it from the broadcaster.
-# Zero => broadcaster, i.e. "keep admin on the deployer" (TransferAdmin then no-ops).
-admin = "0x0000000000000000000000000000000000000000"
 # Beacon owner / proxy upgrade authority. Set to its FINAL value at deploy (the broadcaster never
 # needs it) — no handover required. Zero => broadcaster.
 proxyAdmin = "0x0000000000000000000000000000000000000000"
 
 # Factory-wide setting baked into the beacon implementation shared by every deployed token.
 [factory]
+# FINAL admin (handover target). REQUIRED before handing this contract over — a missing/zero
+# value makes TransferAdmin revert for this target.
+finalAdmin = "0x0000000000000000000000000000000000000000"
 # Minimum lead time (in seconds) for a scheduled UI-multiplier change on every token this
 # factory deploys. Immutable per factory; validated on-chain (non-zero, <= 365 days).
 # Defaults to 86400 (24 hours) when omitted.
 minMultiplierNotice = 86400
 
 # Optional role grants performed after each contract is deployed.
-# Each list contains addresses that will be granted the named role.
-# Role admin for every role below is DEFAULT_ADMIN_ROLE — grants are only emitted
-# when the broadcaster IS the admin; otherwise the script skips them and prints
-# a hint so the operator can grant them manually from the admin account.
+# Each list contains addresses that will be granted the named role. These grants run at deploy time
+# signed by the broadcaster (the initial admin).
 [compliance]
+finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
 opsRole = []        # OPS_ROLE on ComplianceRegistry  — manage blocklist + sanctions
 
 [pauseManager]
+finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
 opsRole = []        # OPS_ROLE on PauseRegistry       — pause/unpause tokens
 
 # TokenIssuer (optional — only used when calling deployTokenIssuer()).
+# - finalAdmin: handover target — REQUIRED (non-zero) before handing the issuer over
 # - opsRole: addresses granted OPS_ROLE on the issuer (mint/burn/transfer through it)
 # - approvedRecipients: addresses pre-registered as approved outbound recipients
 [tokenIssuer]
+finalAdmin = "0x0000000000000000000000000000000000000000"
 opsRole = []
 approvedRecipients = []
 
@@ -46,9 +54,13 @@ approvedRecipients = []
 name = "Apple Inc."
 symbol = "AAPL"
 identifier = "US0378331005"
-# Defaults to top-level `admin` if zero.
-admin = "0x0000000000000000000000000000000000000000"
-# Addresses granted ISSUER_ROLE on the new token (mint / burn). Must be contracts.
+# This token's FINAL admin (handover target). Read ONLY by TransferAdmin — the token is always
+# created with the broadcaster as its temporary admin (uniform with the other contracts). REQUIRED
+# (non-zero) if you include this token in the handover.
+finalAdmin = "0x0000000000000000000000000000000000000000"
+# Addresses granted ISSUER_ROLE on the new token (mint / burn). Must be contracts. Usually left
+# EMPTY: the TokenIssuer is deployed later and auto-granted ISSUER_ROLE by
+# `deployTokenIssuer(address[])`. Fill only if you have another pre-existing contract issuer.
 issuers = []
 # Addresses granted MULTIPLIER_SCHEDULER_ROLE on the new token (UI multiplier scheduling).
 multiplierSchedulers = []

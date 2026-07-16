@@ -6,13 +6,19 @@ import {stdToml} from "forge-std/StdToml.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 /// @notice Hands DEFAULT_ADMIN_ROLE over from the deploy signer (broadcaster — e.g. a Ledger)
-///         to the FINAL admin configured as `admin` in config.toml, across every contract
-///         deployed by Deploy.s.sol.
+///         to each contract's configured FINAL admin, across every contract deployed by
+///         Deploy.s.sol.
+///
+/// Per-contract admins: each contract's handover target is read from its own
+/// `[section].finalAdmin` in config.toml (sections: compliance / pauseManager / factory /
+/// tokenIssuer / token), so different multisigs can own different contracts. There is NO global
+/// default and NO fallback — a missing or zero `finalAdmin` for any target being handed over
+/// REVERTS, so a handover can never silently land on the broadcaster or a wrong default.
 ///
 /// Deploy.s.sol bootstraps every contract with the broadcaster as the temporary
 /// DEFAULT_ADMIN_ROLE holder. Once deployment is complete AND all operational wiring is done
 /// (token creation, OPS_ROLE grants, issuer ISSUER_ROLE, etc.), run this to move admin to the
-/// multisig. Per target it GRANTS the role to the new admin first, then REVOKES it from the
+/// multisig(s). Per target it GRANTS the role to the new admin first, then REVOKES it from the
 /// broadcaster — the admin count never drops to zero. Idempotent and safe to re-run.
 ///
 /// Scope: DEFAULT_ADMIN_ROLE only. `proxyAdmin` / beacon ownership is Ownable and was already
@@ -30,9 +36,9 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 ///     <compliance> <pauseManager> <factory> <tokenIssuer> "[<token1>,<token2>]" \
 ///     --rpc-url $RPC --ledger --sender <ledgerAddr> --broadcast -vvv
 ///
-///   # single target:
-///   forge script script/TransferAdmin.s.sol:TransferAdmin --sig "transferOne(address)" \
-///     <target> --rpc-url $RPC --ledger --sender <ledgerAddr> --broadcast
+///   # single target with an explicit new admin:
+///   forge script script/TransferAdmin.s.sol:TransferAdmin --sig "transferOne(address,address)" \
+///     <target> <newAdmin> --rpc-url $RPC --ledger --sender <ledgerAddr> --broadcast
 contract TransferAdmin is Script {
     using stdToml for string;
 
@@ -50,28 +56,44 @@ contract TransferAdmin is Script {
         address tokenIssuer,
         address[] calldata tokens
     ) external {
-        address newAdmin = _finalAdmin();
         address from = _broadcaster();
-        _printHeader(newAdmin, from);
+        console.log("=== TransferAdmin (per-contract admins) ===");
+        console.log("From (broadcaster):", from);
 
         vm.startBroadcast();
-        _handover(compliance, "ComplianceRegistry", newAdmin, from);
-        _handover(pauseManager, "PauseRegistry", newAdmin, from);
-        _handover(factory, "ScaledTokenFactory", newAdmin, from);
-        _handover(tokenIssuer, "TokenIssuer", newAdmin, from);
-        for (uint256 i = 0; i < tokens.length; ++i) {
-            _handover(tokens[i], "ScaledToken", newAdmin, from);
+        // Resolve each target's finalAdmin only when that target is actually being handed over —
+        // _sectionAdmin reverts on a missing/zero value, so skipped (address(0)) targets don't
+        // require a configured admin.
+        if (compliance != address(0)) {
+            _handover(compliance, "ComplianceRegistry", _sectionAdmin("compliance"), from);
+        }
+        if (pauseManager != address(0)) {
+            _handover(pauseManager, "PauseRegistry", _sectionAdmin("pauseManager"), from);
+        }
+        if (factory != address(0)) {
+            _handover(factory, "ScaledTokenFactory", _sectionAdmin("factory"), from);
+        }
+        if (tokenIssuer != address(0)) {
+            _handover(tokenIssuer, "TokenIssuer", _sectionAdmin("tokenIssuer"), from);
+        }
+        if (tokens.length > 0) {
+            address tokenAdmin = _sectionAdmin("token");
+            for (uint256 i = 0; i < tokens.length; ++i) {
+                _handover(tokens[i], "ScaledToken", tokenAdmin, from);
+            }
         }
         vm.stopBroadcast();
 
         console.log("=== Handover complete ===");
     }
 
-    /// @notice Hand a single contract's DEFAULT_ADMIN_ROLE over to config.admin.
-    function transferOne(address target) external {
-        address newAdmin = _finalAdmin();
+    /// @notice Hand a single contract's DEFAULT_ADMIN_ROLE over to an explicit `newAdmin`.
+    ///         Used for per-contract admins that don't map cleanly to a config section.
+    function transferOne(address target, address newAdmin) external {
         address from = _broadcaster();
-        _printHeader(newAdmin, from);
+        console.log("=== TransferAdmin (single) ===");
+        console.log("From (broadcaster):", from);
+        console.log("To (newAdmin):     ", newAdmin);
 
         vm.startBroadcast();
         _handover(target, "target", newAdmin, from);
@@ -85,9 +107,9 @@ contract TransferAdmin is Script {
         internal
     {
         if (target == address(0)) return;
-        require(newAdmin != address(0), "TransferAdmin: config.admin is zero");
+        require(newAdmin != address(0), "TransferAdmin: finalAdmin is zero");
         if (newAdmin == from) {
-            console.log("Skip", label, "- config.admin == broadcaster (nothing to hand over)");
+            console.log("Skip", label, "- finalAdmin == broadcaster (nothing to hand over)");
             return;
         }
 
@@ -114,19 +136,24 @@ contract TransferAdmin is Script {
         }
     }
 
-    function _printHeader(address newAdmin, address from) internal pure {
-        console.log("=== TransferAdmin ===");
-        console.log("From (broadcaster):", from);
-        console.log("To (config.admin): ", newAdmin);
-    }
-
-    /// @dev Reads the FINAL admin (handover target) from config.toml `.admin`.
-    function _finalAdmin() internal view returns (address admin) {
+    /// @dev Resolves a contract's FINAL admin from config.toml `[section].finalAdmin`. There is no
+    ///      global default and no fallback: a missing or zero value REVERTS, so a handover can never
+    ///      silently target the broadcaster or a wrong default. Only called for targets actually
+    ///      being handed over.
+    function _sectionAdmin(string memory section) internal view returns (address admin) {
         string memory path = vm.envOr("DEPLOY_CONFIG_PATH", string("./config.toml"));
         string memory toml = vm.readFile(path);
-        admin = toml.readAddress(".admin");
-        // Zero => broadcaster (i.e. "no handover"); _handover then no-ops.
-        if (admin == address(0)) admin = _broadcaster();
+
+        string memory sectionKey = string.concat(".", section, ".finalAdmin");
+        require(
+            vm.keyExistsToml(toml, sectionKey),
+            string.concat("TransferAdmin: missing [", section, "].finalAdmin in config")
+        );
+        admin = toml.readAddress(sectionKey);
+        require(
+            admin != address(0),
+            string.concat("TransferAdmin: [", section, "].finalAdmin is zero")
+        );
     }
 
     /// @dev Mirrors forge-script's signer resolution: PRIVATE_KEY env, else tx.origin.
