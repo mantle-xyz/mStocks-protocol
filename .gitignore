@@ -10,5 +10,8 @@ out/
 # Docs
 docs/
 
+# Generated Safe batch tx JSON (operator output); keep the dir via .gitkeep
+safe-txs/*.json
+
 # Dotenv file
 .env

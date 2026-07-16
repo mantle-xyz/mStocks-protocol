@@ -64,3 +64,26 @@ finalAdmin = "0x0000000000000000000000000000000000000000"
 issuers = []
 # Addresses granted MULTIPLIER_SCHEDULER_ROLE on the new token (UI multiplier scheduling).
 multiplierSchedulers = []
+
+# POST-HANDOVER batch token deployment (used ONLY by script/BuildSafeTxs.s.sol, ignored by Deploy).
+# Once the factory admin is a multisig, new tokens must be created by that multisig. List the tokens
+# to deploy as an array-of-tables; `createTokens(address factory)` emits a Safe Transaction Builder
+# batch of factory.createToken(...) calls. Unlike the [token] block above, `admin` here is the NEW
+# token's admin at creation (the multisig that will own it) — REQUIRED (non-zero). symbol/identifier
+# must be globally unique or createToken reverts.
+#
+# [[tokens]]
+# name = "Tesla Inc."
+# symbol = "TSLA"
+# identifier = "US88160R1014"
+# admin = "0x..."                 # this token's admin (multisig)
+# issuers = []                    # usually empty; grant ISSUER_ROLE later via grantIssuer(...)
+# multiplierSchedulers = ["0x..."]
+#
+# [[tokens]]
+# name = "Amazon.com Inc."
+# symbol = "AMZN"
+# identifier = "US0231351067"
+# admin = "0x..."
+# issuers = []
+# multiplierSchedulers = ["0x..."]
