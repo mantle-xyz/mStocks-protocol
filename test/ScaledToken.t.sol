@@ -693,6 +693,34 @@ contract ScaledTokenTest is Test {
         assertEq(factory.tokenCount(), 1);
     }
 
+    function test_GetTokensPaginationAndHugeLimit() public {
+        // setUp already created one token (AAPL); add two more so total == 3.
+        address[] memory empty = new address[](0);
+        vm.startPrank(admin);
+        address t1 = factory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, empty, empty);
+        address t2 = factory.createToken("Amazon", "AMZN", "US0231351067", admin, empty, empty);
+        vm.stopPrank();
+        assertEq(factory.tokenCount(), 3);
+
+        // Normal window.
+        address[] memory firstTwo = factory.getTokens(0, 2);
+        assertEq(firstTwo.length, 2);
+        assertEq(firstTwo[0], address(token));
+        assertEq(firstTwo[1], t1);
+
+        // Regression: a huge limit must return the remaining tail slice, not overflow/revert.
+        address[] memory tail = factory.getTokens(1, type(uint256).max);
+        assertEq(tail.length, 2);
+        assertEq(tail[0], t1);
+        assertEq(tail[1], t2);
+
+        // Huge limit from offset 0 returns the full set.
+        assertEq(factory.getTokens(0, type(uint256).max).length, 3);
+
+        // Offset past the end returns empty.
+        assertEq(factory.getTokens(3, type(uint256).max).length, 0);
+    }
+
     function test_FactoryRejectsInvalidSymbol() public {
         address[] memory empty = new address[](0);
         vm.prank(admin);
