@@ -4,11 +4,17 @@ pragma solidity ^0.8.20;
 import {Script, console} from "forge-std/Script.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {IAccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
 import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
+
+/// @dev Minimal Ownable view — beacon / ProxyAdmin upgrade authority.
+interface IOwnable {
+    function owner() external view returns (address);
+}
 
 /// @notice End-to-end smoke tests against a deployed ScaledToken.
 ///
@@ -45,6 +51,13 @@ contract Smoke is Script {
     uint256 internal constant DEFAULT_GAS_THRESHOLD = 0.01 ether;
     uint256 internal constant DEFAULT_GAS_TARGET = 0.05 ether;
 
+    bytes32 internal constant OPS_ROLE = keccak256("OPS_ROLE");
+    // EIP-1967 slots: beacon (BeaconProxy) and admin (TransparentUpgradeableProxy's ProxyAdmin).
+    bytes32 internal constant _EIP1967_BEACON_SLOT =
+        0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50;
+    bytes32 internal constant _EIP1967_ADMIN_SLOT =
+        0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
     /// @dev Cached TokenIssuer for the current forge script invocation. Within `runAll`,
     ///      resolved once on the first `_setupOps` call and reused.
     TokenIssuer internal _issuer;
@@ -73,13 +86,50 @@ contract Smoke is Script {
         console.log("PauseRegistry:   ", address(p));
         console.log("Token paused:    ", p.isTokenPaused(tokenAddr));
         console.log("Global paused:   ", p.globalPaused());
-        console.log("Admin:           ", _admin());
-        console.log("Ops:             ", ops.addr);
-        console.log("User:            ", user.addr);
+        console.log("Smoke admin (PK):", _admin());
+        console.log("Smoke ops wallet:", ops.addr);
+        console.log("Smoke user wallet:", user.addr);
         console.log("Ops native gas:  ", ops.addr.balance);
+
+        console.log("--- on-chain roles / owners ---");
+        // Upgrade authority for every token on this beacon.
+        address beacon = address(uint160(uint256(vm.load(tokenAddr, _EIP1967_BEACON_SLOT))));
+        if (beacon != address(0)) {
+            console.log("Token beacon:               ", beacon);
+            console.log("Beacon owner (upgrade auth):", IOwnable(beacon).owner());
+        }
+        _printRole("Token DEFAULT_ADMIN_ROLE", tokenAddr, 0x00);
+        _printRole("Token ISSUER_ROLE", tokenAddr, token.ISSUER_ROLE());
+        _printRole("Token MULTIPLIER_SCHEDULER_ROLE", tokenAddr, token.MULTIPLIER_SCHEDULER_ROLE());
+        _printRole("Compliance DEFAULT_ADMIN_ROLE", address(c), 0x00);
+        _printRole("Compliance OPS_ROLE", address(c), c.OPS_ROLE());
+        _printRole("Pause DEFAULT_ADMIN_ROLE", address(p), 0x00);
+        _printRole("Pause OPS_ROLE", address(p), p.OPS_ROLE());
+
         address envIssuer = vm.envOr("SMOKE_TOKEN_ISSUER", address(0));
         if (envIssuer != address(0)) {
-            console.log("TokenIssuer (env):", envIssuer);
+            console.log("TokenIssuer (env):          ", envIssuer);
+            _printRole("Issuer DEFAULT_ADMIN_ROLE", envIssuer, 0x00);
+            _printRole("Issuer OPS_ROLE", envIssuer, OPS_ROLE);
+            // TokenIssuer sits behind a TransparentUpgradeableProxy; its upgrade authority is the
+            // auto-created ProxyAdmin whose owner controls upgrades.
+            address issuerProxyAdmin = address(uint160(uint256(vm.load(envIssuer, _EIP1967_ADMIN_SLOT))));
+            if (issuerProxyAdmin != address(0)) {
+                console.log("Issuer ProxyAdmin:          ", issuerProxyAdmin);
+                console.log("Issuer ProxyAdmin owner:    ", IOwnable(issuerProxyAdmin).owner());
+            }
+        }
+    }
+
+    /// @dev Enumerates and prints every holder of `role` on `target` (AccessControlEnumerable).
+    function _printRole(string memory label, address target, bytes32 role) internal view {
+        uint256 n = IAccessControlEnumerable(target).getRoleMemberCount(role);
+        if (n == 0) {
+            console.log(string.concat("  ", label, ": (none)"));
+            return;
+        }
+        for (uint256 i = 0; i < n; ++i) {
+            console.log(string.concat("  ", label, ":"), IAccessControlEnumerable(target).getRoleMember(role, i));
         }
     }
 
