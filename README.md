@@ -127,7 +127,15 @@ multiplierSchedulers = ["0x..."]
 
 ## Smoke tests (链上端到端)
 
-已部署到链上之后，跑 `script/Smoke.s.sol` 走一遍 mint / burn / transfer / pause / compliance / multiplier / issuer-guard 全流程。ops EOA 与 user EOA 由 `vm.createWallet(label)` 确定性派生。
+已部署到链上之后，跑 `script/Smoke.s.sol` 走一遍 mint / burn / transfer / pause / compliance / multiplier / issuer-guard 全流程。ops EOA 与 user EOA 由 `vm.createWallet(label)` 确定性派生（私钥 = label 的 keccak256，公开可推导）。
+
+> ⚠️ **仅用于一次性 / 测试网部署，切勿对生产或承载真实价值的部署运行。** 由于 ops / user 钱包的私钥可被任何人推导，`runAll` 会在结束前通过 `teardown` 撤销授予这两个钱包的所有角色；若单独运行某个 `test*` 入口，请随后手动执行 `teardown(address)`，确保不残留可推导私钥的特权地址。
+
+```bash
+# 单独测试后清理（撤销 ops/user 的角色）
+forge script script/Smoke.s.sol:Smoke --sig "teardown(address)" $TOKEN \
+  --rpc-url $RPC --private-key $ADMIN_PK --broadcast
+```
 
 ```bash
 export RPC=https://rpc.sepolia.mantle.xyz

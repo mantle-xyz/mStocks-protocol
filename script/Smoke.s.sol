@@ -10,7 +10,14 @@ import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.s
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
 import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 
-/// @notice End-to-end smoke tests against a deployed ScaledToken on a real chain.
+/// @notice End-to-end smoke tests against a deployed ScaledToken.
+///
+/// INTENDED FOR THROWAWAY / TESTNET DEPLOYMENTS ONLY — never run against a production or
+/// value-bearing deployment. The "ops" and "user" wallets are derived deterministically
+/// (`vm.createWallet(label)`, private key = keccak256 of the label), so their keys are public.
+/// `runAll` revokes every role granted to these wallets via {_teardownOps} before finishing; if
+/// you run individual `test*` entrypoints, call `teardown(address)` afterwards so no
+/// derivable-key address is left holding privileges.
 ///
 /// Role model (admin grant-only, operational work delegated):
 ///   - admin signs grantRole / revokeRole and one-off config (--private-key)
@@ -340,7 +347,17 @@ contract Smoke is Script {
         testCompliance(tokenAddr);
         testMultiplier(tokenAddr);
         testIssuerRole(tokenAddr);
+        // Always revoke the deterministic wallets' privileges before finishing, so no
+        // derivable-key address is left holding roles on the target deployment.
+        _teardownOps(ScaledToken(tokenAddr));
         console.log("=== ALL SMOKE TESTS PASSED ===");
+    }
+
+    /// @notice Standalone teardown: revokes every role granted to the deterministic ops wallet
+    ///         and removes the deterministic user recipient. Run this after invoking individual
+    ///         `test*` entrypoints (runAll already tears down automatically). Admin signs.
+    function teardown(address tokenAddr) external {
+        _teardownOps(ScaledToken(tokenAddr));
     }
 
     function _ops() internal returns (Vm.Wallet memory) {
@@ -450,6 +467,57 @@ contract Smoke is Script {
         if (needPOps) {
             p.grantRole(pOps, ops.addr);
             console.log("      granted pauseRegistry.OPS_ROLE to ops");
+        }
+        vm.stopBroadcast();
+    }
+
+    /// @dev Revokes every privileged role granted to the deterministic ops wallet during
+    ///      {_setupOps} and removes the deterministic user as an approved recipient, so no
+    ///      derivable-key address (private key = keccak256 of the label) is left holding
+    ///      privileges after the run. Admin (broadcaster) signs. Idempotent — each revoke is
+    ///      guarded by a hasRole/isApprovedRecipient check. Does not deploy an issuer: if none
+    ///      is cached or configured via SMOKE_TOKEN_ISSUER, issuer-scoped revokes are skipped.
+    function _teardownOps(ScaledToken token) internal {
+        Vm.Wallet memory ops = _ops();
+        Vm.Wallet memory user = _user();
+
+        ComplianceRegistry c = ComplianceRegistry(address(token.compliance()));
+        PauseRegistry p = PauseRegistry(address(token.pauseManager()));
+
+        TokenIssuer issuer = _issuer;
+        if (address(issuer) == address(0)) {
+            address envAddr = vm.envOr("SMOKE_TOKEN_ISSUER", address(0));
+            if (envAddr != address(0)) issuer = TokenIssuer(payable(envAddr));
+        }
+
+        bytes32 tScheduler = token.MULTIPLIER_SCHEDULER_ROLE();
+        bytes32 cOps = c.OPS_ROLE();
+        bytes32 pOps = p.OPS_ROLE();
+
+        console.log("--- teardown: revoking deterministic wallet privileges ---");
+        vm.startBroadcast();
+        if (token.hasRole(tScheduler, ops.addr)) {
+            token.revokeRole(tScheduler, ops.addr);
+            console.log("  revoked token.MULTIPLIER_SCHEDULER_ROLE from ops");
+        }
+        if (c.hasRole(cOps, ops.addr)) {
+            c.revokeRole(cOps, ops.addr);
+            console.log("  revoked compliance.OPS_ROLE from ops");
+        }
+        if (p.hasRole(pOps, ops.addr)) {
+            p.revokeRole(pOps, ops.addr);
+            console.log("  revoked pauseRegistry.OPS_ROLE from ops");
+        }
+        if (address(issuer) != address(0)) {
+            bytes32 issuerOps = issuer.OPS_ROLE();
+            if (issuer.hasRole(issuerOps, ops.addr)) {
+                issuer.revokeRole(issuerOps, ops.addr);
+                console.log("  revoked issuer.OPS_ROLE from ops");
+            }
+            if (issuer.isApprovedRecipient(user.addr)) {
+                issuer.removeApprovedRecipient(user.addr);
+                console.log("  removed user as approved recipient on the TokenIssuer");
+            }
         }
         vm.stopBroadcast();
     }
