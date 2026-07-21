@@ -355,7 +355,12 @@ contract Smoke is Script {
 
         uint256 current = token.uiMultiplier();
         uint256 next = current == 1 ether ? 2 ether : 1 ether;
+        // The schedule must sit at least `minMultiplierNotice` in the future. Honor
+        // SMOKE_MULTIPLIER_OFFSET but floor it to minNotice + a small buffer (for sim->broadcast
+        // time drift) so the default never trips "minimum notice period not met".
+        uint256 minNotice = token.minMultiplierNotice();
         uint256 offset = vm.envOr("SMOKE_MULTIPLIER_OFFSET", uint256(3600));
+        if (offset < minNotice + 300) offset = minNotice + 300;
         uint256 effective = block.timestamp + offset;
 
         vm.broadcast(ops.privateKey);
@@ -366,6 +371,7 @@ contract Smoke is Script {
 
         console.log("  current:           ", current);
         console.log("  scheduled:         ", next);
+        console.log("  minNotice (s):     ", minNotice);
         console.log("  effectiveAt:       ", effective);
         console.log("  [PASS] testMultiplier (scheduling verified)");
     }
