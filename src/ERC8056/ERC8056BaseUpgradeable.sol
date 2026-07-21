@@ -204,10 +204,12 @@ abstract contract ERC8056BaseUpgradeable is
      *
      * Returns the UI-adjusted balance of `account`.
      *
-     * NOTE: This function deliberately reverts when the multiplier is so extreme
-     * that `balance × multiplier` would overflow `uint256`. Returning 0 in that
-     * case would mislead frontends into showing an empty balance. A revert is a
-     * clearer signal that the UI value is currently unrepresentable.
+     * NOTE: {toUIAmount} computes `balance × multiplier / 1e18` via {Math-mulDiv}
+     * with a 512-bit intermediate product, so an intermediate overflow does not
+     * revert; this function reverts only when the final UI amount itself exceeds
+     * `uint256`. Returning 0 in that case would mislead frontends into showing an
+     * empty balance, so a revert is a clearer signal that the UI value is
+     * currently unrepresentable.
      */
     function balanceOfUI(address account) public view virtual override returns (uint256) {
         return toUIAmount(balanceOf(account));

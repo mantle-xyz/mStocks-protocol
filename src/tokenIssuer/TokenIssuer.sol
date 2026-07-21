@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
@@ -7,31 +7,27 @@ import {AccessControlEnumerableUpgradeable} from
     "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {IMintAndBurnable} from "./IMintAndBurnable.sol";
 
-/// @notice Custodial vault that holds ISSUER_ROLE on one or more ScaledToken contracts
+/// @notice Custodial issuer that holds ISSUER_ROLE on one or more ScaledToken contracts
 ///         and routes mint/burn flow through a whitelisted set of approved recipients.
 ///
-///         Admin (DEFAULT_ADMIN_ROLE) manages the recipient whitelist, pauses the vault,
+///         Admin (DEFAULT_ADMIN_ROLE) manages the recipient whitelist, pauses the issuer,
 ///         and may emergency-sweep assets. OPS_ROLE performs day-to-day mint / burn / transfer.
 ///         Self-grant is disallowed so the admin and operator must be distinct accounts.
-contract IssuerVault is
+contract TokenIssuer is
     Initializable,
     AccessControlEnumerableUpgradeable,
-    ReentrancyGuard,
+    ReentrancyGuardTransient,
     PausableUpgradeable
 {
     using SafeERC20 for IERC20;
 
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
-
-    /// @notice Role required on the security token for this vault to mint / burn it.
-    ///         Must match {ScaledToken.ISSUER_ROLE}.
-    bytes32 public constant TOKEN_ISSUER_ROLE = keccak256("ISSUER_ROLE");
 
     /// @dev recipient => 1-based index in `approvedRecipients`. 0 means "not approved".
     mapping(address => uint256) private recipientIndex;
@@ -41,17 +37,21 @@ contract IssuerVault is
     event RecipientApproved(address indexed recipient);
     event RecipientRevoked(address indexed recipient);
     event Withdrawn(address indexed token, address indexed to, uint256 amount);
-    event Executed(address indexed to, uint256 value, bytes data, bool success);
 
-    /// @notice Emitted on every successful mint routed through this vault. `vault` is the
-    ///         emitter itself, included so aggregators indexing many vaults can filter without
+    /// @notice Emitted on every successful mint routed through this issuer. `issuer` is the
+    ///         emitter itself, included so aggregators indexing many issuers can filter without
     ///         inspecting the log emitter.
-    event Minted(address indexed vault, address indexed token, address indexed recipient, uint256 amount);
+    event Minted(address indexed issuer, address indexed token, address indexed recipient, uint256 amount);
 
-    /// @notice Emitted on every successful burn routed through this vault. `from` is either
-    ///         this vault (burning held inventory) or an approved recipient that pre-approved
-    ///         the vault to pull tokens.
-    event Burned(address indexed vault, address indexed token, address indexed from, uint256 amount);
+    /// @notice Emitted on every successful burn routed through this issuer. `from` is either
+    ///         this issuer (burning held inventory) or an approved recipient that pre-approved
+    ///         the issuer to pull tokens.
+    event Burned(address indexed issuer, address indexed token, address indexed from, uint256 amount);
+
+    /// @notice Emitted on every successful transfer of held inventory routed through this issuer.
+    ///         `issuer` is the emitter itself, included so aggregators indexing many issuers can
+    ///         filter without inspecting the log emitter.
+    event Transferred(address indexed issuer, address indexed token, address indexed recipient, uint256 amount);
 
     error ZeroAddress();
     error RecipientAlreadyApproved();
@@ -60,23 +60,19 @@ contract IssuerVault is
     error FromNotApproved();
     error MintFailed();
     error BurnFailed();
-    /// @dev This vault does not hold ISSUER_ROLE on the target token. Caught explicitly so
-    ///      the failure surfaces before any tokens are moved.
-    error MissingIssuerRole();
     error SelfGrantNotAllowed();
+    error CannotRenounceLastAdmin();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
     }
 
-    receive() external payable {}
-
     function initialize(address admin) external initializer {
         if (admin == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
         __Pausable_init();
-        // ReentrancyGuard (v5) uses transient storage and needs no initializer.
+        // ReentrancyGuardTransient (v5, EIP-1153 TSTORE) uses transient storage — no initializer needed.
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
@@ -120,27 +116,23 @@ contract IssuerVault is
         _unpause();
     }
 
-    /// @notice Emergency sweep of native (`token == address(0)`) or ERC-20 balance to the caller.
-    function withdraw(address token) external whenNotPaused onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
-        uint256 assetBalance;
+    /// @notice Emergency sweep of an ERC-20 balance held by this issuer to the caller.
+    ///         TokenIssuer intentionally does not accept native tokens (no `receive()`), so this
+    ///         function only supports ERC-20 assets. Deliberately not gated by `whenNotPaused` —
+    ///         emergency asset recovery must remain available while the issuer is paused (which
+    ///         is the state right after an incident).
+    function withdraw(address token) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        if (token == address(0)) revert ZeroAddress();
         address to = _msgSender();
-        if (token == address(0)) {
-            assetBalance = address(this).balance;
-            if (assetBalance != 0) {
-                (bool ok,) = payable(to).call{value: assetBalance}("");
-                require(ok, "IssuerVault: native withdraw failed");
-            }
-        } else {
-            assetBalance = IERC20(token).balanceOf(address(this));
-            if (assetBalance != 0) {
-                IERC20(token).safeTransfer(to, assetBalance);
-            }
+        uint256 assetBalance = IERC20(token).balanceOf(address(this));
+        if (assetBalance != 0) {
+            IERC20(token).safeTransfer(to, assetBalance);
         }
         emit Withdrawn(token, to, assetBalance);
     }
 
-    /// @notice Mints `amount` of `token` (this vault must hold ISSUER_ROLE on it) and either
-    ///         keeps the inventory on the vault (recipient == self) or forwards to an approved
+    /// @notice Mints `amount` of `token` (this issuer must hold ISSUER_ROLE on it) and either
+    ///         keeps the inventory on the issuer (recipient == self) or forwards to an approved
     ///         recipient.
     function mint(address token, address recipient, uint256 amount)
         external
@@ -149,7 +141,6 @@ contract IssuerVault is
         nonReentrant
     {
         if (recipient != address(this) && !isApprovedRecipient(recipient)) revert RecipientNotApproved();
-        _requireIssuerRole(token);
         if (!IMintAndBurnable(token).mint(amount)) revert MintFailed();
         if (recipient != address(this)) {
             IERC20(token).safeTransfer(recipient, amount);
@@ -157,8 +148,8 @@ contract IssuerVault is
         emit Minted(address(this), token, recipient, amount);
     }
 
-    /// @notice Burns `amount` of `token` from this vault (`from == self`) or from an approved
-    ///         recipient that has pre-approved the vault to pull tokens.
+    /// @notice Burns `amount` of `token` from this issuer (`from == self`) or from an approved
+    ///         recipient that has pre-approved the issuer to pull tokens.
     function burn(address token, address from, uint256 amount)
         external
         whenNotPaused
@@ -166,7 +157,6 @@ contract IssuerVault is
         nonReentrant
     {
         if (from != address(this) && !isApprovedRecipient(from)) revert FromNotApproved();
-        _requireIssuerRole(token);
         if (from != address(this)) {
             IERC20(token).safeTransferFrom(from, address(this), amount);
         }
@@ -174,15 +164,7 @@ contract IssuerVault is
         emit Burned(address(this), token, from, amount);
     }
 
-    /// @dev Pre-flight check: fail with {MissingIssuerRole} before any tokens are pulled,
-    ///      rather than letting the token's mint/burn revert later with a generic message.
-    function _requireIssuerRole(address token) internal view {
-        if (!IAccessControl(token).hasRole(TOKEN_ISSUER_ROLE, address(this))) {
-            revert MissingIssuerRole();
-        }
-    }
-
-    /// @notice Transfers `amount` of `token` already held by this vault to an approved recipient.
+    /// @notice Transfers `amount` of `token` already held by this issuer to an approved recipient.
     function transfer(address token, address recipient, uint256 amount)
         external
         whenNotPaused
@@ -191,6 +173,7 @@ contract IssuerVault is
     {
         if (!isApprovedRecipient(recipient)) revert RecipientNotApproved();
         IERC20(token).safeTransfer(recipient, amount);
+        emit Transferred(address(this), token, recipient, amount);
     }
 
     /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
@@ -203,6 +186,23 @@ contract IssuerVault is
         super.grantRole(role, account);
     }
 
-    /// @dev Storage gap for upgrade-safe inheritance.
-    uint256[47] private __gap;
+    /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
+    ///         permanently strip the contract of admin capability.
+    function renounceRole(bytes32 role, address callerConfirmation)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.renounceRole(role, callerConfirmation);
+    }
+
+    /// @dev Storage gap for upgrade-safe additions. 2 vars (recipientIndex, approvedRecipients)
+    ///      + 48 = 50 slots reserved, matching the convention used by ScaledToken / ERC8056Base
+    ///      / Guards. TokenIssuer is deployed behind a TransparentUpgradeableProxy — upgrade
+    ///      authority lives on the auto-created ProxyAdmin (owned by `cfg.proxyAdmin`),
+    ///      separate from `DEFAULT_ADMIN_ROLE` (day-to-day ops).
+    uint256[48] private __gap;
 }

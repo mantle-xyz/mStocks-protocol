@@ -4,31 +4,44 @@ pragma solidity ^0.8.20;
 import {Script, console} from "forge-std/Script.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {IAccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/IAccessControlEnumerable.sol";
 
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
-import {IssuerVault} from "../src/issuerVault/IssuerVault.sol";
+import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 
-/// @notice End-to-end smoke tests against a deployed ScaledToken on a real chain.
+/// @dev Minimal Ownable view — beacon / ProxyAdmin upgrade authority.
+interface IOwnable {
+    function owner() external view returns (address);
+}
+
+/// @notice End-to-end smoke tests against a deployed ScaledToken.
+///
+/// INTENDED FOR THROWAWAY / TESTNET DEPLOYMENTS ONLY — never run against a production or
+/// value-bearing deployment. The "ops" and "user" wallets are derived deterministically
+/// (`vm.createWallet(label)`, private key = keccak256 of the label), so their keys are public.
+/// `runAll` revokes every role granted to these wallets via {_teardownOps} before finishing; if
+/// you run individual `test*` entrypoints, call `teardown(address)` afterwards so no
+/// derivable-key address is left holding privileges.
 ///
 /// Role model (admin grant-only, operational work delegated):
 ///   - admin signs grantRole / revokeRole and one-off config (--private-key)
 ///   - a deterministic in-script "ops" wallet (vm.createWallet) holds OPS_ROLE on the
-///     token / ComplianceRegistry / PauseRegistry AND OPS_ROLE on an IssuerVault that
+///     token / ComplianceRegistry / PauseRegistry AND OPS_ROLE on a TokenIssuer that
 ///     holds ISSUER_ROLE on the token
 ///   - a deterministic "user" wallet plays the customer role and is registered as an
-///     approved recipient on the IssuerVault so it can be a mint / transfer / burn target
+///     approved recipient on the TokenIssuer so it can be a mint / transfer / burn target
 ///
 /// Token ISSUER_ROLE cannot be granted to an EOA, so all mint / burn flows go through
-/// the IssuerVault. Reuse a pre-deployed vault by setting `SMOKE_ISSUER_VAULT`; otherwise
+/// the TokenIssuer. Reuse a pre-deployed issuer by setting `SMOKE_TOKEN_ISSUER`; otherwise
 /// the script deploys a fresh one (admin pays for the deploy).
 ///
 ///   export RPC=https://...
 ///   export ADMIN_PK=0x...
 ///   export TOKEN=0xDeployedTokenProxy
-///   # optional — reuse an existing vault:
-///   # export SMOKE_ISSUER_VAULT=0xVaultProxy
+///   # optional — reuse an existing issuer:
+///   # export SMOKE_TOKEN_ISSUER=0xIssuerProxy
 ///
 ///   forge script script/Smoke.s.sol:Smoke --sig "testInfo(address)" $TOKEN --rpc-url $RPC
 ///   forge script script/Smoke.s.sol:Smoke --sig "runAll(address)" $TOKEN \
@@ -38,9 +51,16 @@ contract Smoke is Script {
     uint256 internal constant DEFAULT_GAS_THRESHOLD = 0.01 ether;
     uint256 internal constant DEFAULT_GAS_TARGET = 0.05 ether;
 
-    /// @dev Cached IssuerVault for the current forge script invocation. Within `runAll`,
+    bytes32 internal constant OPS_ROLE = keccak256("OPS_ROLE");
+    // EIP-1967 slots: beacon (BeaconProxy) and admin (TransparentUpgradeableProxy's ProxyAdmin).
+    bytes32 internal constant _EIP1967_BEACON_SLOT =
+        0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50;
+    bytes32 internal constant _EIP1967_ADMIN_SLOT =
+        0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
+    /// @dev Cached TokenIssuer for the current forge script invocation. Within `runAll`,
     ///      resolved once on the first `_setupOps` call and reused.
-    IssuerVault internal _vault;
+    TokenIssuer internal _issuer;
 
     function testInfo(address tokenAddr) public {
         ScaledToken token = ScaledToken(tokenAddr);
@@ -66,99 +86,136 @@ contract Smoke is Script {
         console.log("PauseRegistry:   ", address(p));
         console.log("Token paused:    ", p.isTokenPaused(tokenAddr));
         console.log("Global paused:   ", p.globalPaused());
-        console.log("Admin:           ", _admin());
-        console.log("Ops:             ", ops.addr);
-        console.log("User:            ", user.addr);
+        console.log("Smoke admin (PK):", _admin());
+        console.log("Smoke ops wallet:", ops.addr);
+        console.log("Smoke user wallet:", user.addr);
         console.log("Ops native gas:  ", ops.addr.balance);
-        address envVault = vm.envOr("SMOKE_ISSUER_VAULT", address(0));
-        if (envVault != address(0)) {
-            console.log("IssuerVault (env):", envVault);
+
+        console.log("--- on-chain roles / owners ---");
+        // Upgrade authority for every token on this beacon.
+        address beacon = address(uint160(uint256(vm.load(tokenAddr, _EIP1967_BEACON_SLOT))));
+        if (beacon != address(0)) {
+            console.log("Token beacon:               ", beacon);
+            console.log("Beacon owner (upgrade auth):", IOwnable(beacon).owner());
+        }
+        _printRole("Token DEFAULT_ADMIN_ROLE", tokenAddr, 0x00);
+        _printRole("Token ISSUER_ROLE", tokenAddr, token.ISSUER_ROLE());
+        _printRole("Token MULTIPLIER_SCHEDULER_ROLE", tokenAddr, token.MULTIPLIER_SCHEDULER_ROLE());
+        _printRole("Compliance DEFAULT_ADMIN_ROLE", address(c), 0x00);
+        _printRole("Compliance OPS_ROLE", address(c), c.OPS_ROLE());
+        _printRole("Pause DEFAULT_ADMIN_ROLE", address(p), 0x00);
+        _printRole("Pause OPS_ROLE", address(p), p.OPS_ROLE());
+
+        address envIssuer = vm.envOr("SMOKE_TOKEN_ISSUER", address(0));
+        if (envIssuer != address(0)) {
+            console.log("TokenIssuer (env):          ", envIssuer);
+            _printRole("Issuer DEFAULT_ADMIN_ROLE", envIssuer, 0x00);
+            _printRole("Issuer OPS_ROLE", envIssuer, OPS_ROLE);
+            // TokenIssuer sits behind a TransparentUpgradeableProxy; its upgrade authority is the
+            // auto-created ProxyAdmin whose owner controls upgrades.
+            address issuerProxyAdmin = address(uint160(uint256(vm.load(envIssuer, _EIP1967_ADMIN_SLOT))));
+            if (issuerProxyAdmin != address(0)) {
+                console.log("Issuer ProxyAdmin:          ", issuerProxyAdmin);
+                console.log("Issuer ProxyAdmin owner:    ", IOwnable(issuerProxyAdmin).owner());
+            }
         }
     }
 
-    /// @notice Mints TEST_AMOUNT through the IssuerVault to itself.
+    /// @dev Enumerates and prints every holder of `role` on `target` (AccessControlEnumerable).
+    function _printRole(string memory label, address target, bytes32 role) internal view {
+        uint256 n = IAccessControlEnumerable(target).getRoleMemberCount(role);
+        if (n == 0) {
+            console.log(string.concat("  ", label, ": (none)"));
+            return;
+        }
+        for (uint256 i = 0; i < n; ++i) {
+            console.log(string.concat("  ", label, ":"), IAccessControlEnumerable(target).getRoleMember(role, i));
+        }
+    }
+
+    /// @notice Mints TEST_AMOUNT through the TokenIssuer to itself.
     function testMint(address tokenAddr) public {
         ScaledToken token = ScaledToken(tokenAddr);
-        (Vm.Wallet memory ops, IssuerVault vault) = _setupOps(token);
+        (Vm.Wallet memory ops, TokenIssuer issuer) = _setupOps(token);
         console.log("--- testMint ---");
 
         uint256 supplyBefore = token.totalSupply();
-        uint256 balanceBefore = token.balanceOf(address(vault));
+        uint256 balanceBefore = token.balanceOf(address(issuer));
 
         vm.broadcast(ops.privateKey);
-        vault.mint(address(token), address(vault), TEST_AMOUNT);
+        issuer.mint(address(token), address(issuer), TEST_AMOUNT);
 
         require(token.totalSupply() == supplyBefore + TEST_AMOUNT, "totalSupply not bumped");
         require(
-            token.balanceOf(address(vault)) == balanceBefore + TEST_AMOUNT,
-            "vault balance not bumped"
+            token.balanceOf(address(issuer)) == balanceBefore + TEST_AMOUNT,
+            "issuer balance not bumped"
         );
         console.log("  minted             ", TEST_AMOUNT);
-        console.log("  vault balance      ", token.balanceOf(address(vault)));
+        console.log("  issuer balance     ", token.balanceOf(address(issuer)));
         console.log("  [PASS] testMint");
     }
 
-    /// @notice Burns TEST_AMOUNT from the IssuerVault's own balance.
+    /// @notice Burns TEST_AMOUNT from the TokenIssuer's own balance.
     function testBurn(address tokenAddr) public {
         ScaledToken token = ScaledToken(tokenAddr);
-        (Vm.Wallet memory ops, IssuerVault vault) = _setupOps(token);
+        (Vm.Wallet memory ops, TokenIssuer issuer) = _setupOps(token);
         console.log("--- testBurn ---");
 
-        if (token.balanceOf(address(vault)) < TEST_AMOUNT) {
+        if (token.balanceOf(address(issuer)) < TEST_AMOUNT) {
             vm.broadcast(ops.privateKey);
-            vault.mint(address(token), address(vault), TEST_AMOUNT);
+            issuer.mint(address(token), address(issuer), TEST_AMOUNT);
         }
         uint256 supplyBefore = token.totalSupply();
-        uint256 balanceBefore = token.balanceOf(address(vault));
+        uint256 balanceBefore = token.balanceOf(address(issuer));
 
         vm.broadcast(ops.privateKey);
-        vault.burn(address(token), address(vault), TEST_AMOUNT);
+        issuer.burn(address(token), address(issuer), TEST_AMOUNT);
 
         require(token.totalSupply() == supplyBefore - TEST_AMOUNT, "totalSupply not reduced");
         require(
-            token.balanceOf(address(vault)) == balanceBefore - TEST_AMOUNT,
-            "vault balance not reduced"
+            token.balanceOf(address(issuer)) == balanceBefore - TEST_AMOUNT,
+            "issuer balance not reduced"
         );
         console.log("  burned             ", TEST_AMOUNT);
         console.log("  [PASS] testBurn");
     }
 
-    /// @notice vault mints → transfers to user (approved recipient) → user transfers back →
-    ///         user approves and ops calls vault.burn.
+    /// @notice issuer mints → transfers to user (approved recipient) → user transfers back →
+    ///         user approves and ops calls issuer.burn.
     function testTransferFlow(address tokenAddr) public {
         ScaledToken token = ScaledToken(tokenAddr);
-        (Vm.Wallet memory ops, IssuerVault vault) = _setupOps(token);
+        (Vm.Wallet memory ops, TokenIssuer issuer) = _setupOps(token);
         Vm.Wallet memory user = _user();
         console.log("--- testTransferFlow ---");
         console.log("  ops:               ", ops.addr);
-        console.log("  vault:             ", address(vault));
+        console.log("  issuer:            ", address(issuer));
         console.log("  user:              ", user.addr);
 
-        if (token.balanceOf(address(vault)) < TEST_AMOUNT) {
+        if (token.balanceOf(address(issuer)) < TEST_AMOUNT) {
             vm.broadcast(ops.privateKey);
-            vault.mint(address(token), address(vault), TEST_AMOUNT);
+            issuer.mint(address(token), address(issuer), TEST_AMOUNT);
         }
         _adminFundIfNeeded(user.addr);
 
-        _transferFlowPhase1(token, vault, ops, user, TEST_AMOUNT / 2);
-        _transferFlowPhase2(token, vault, user, TEST_AMOUNT / 4);
-        _transferFlowPhase3(token, vault, ops, user, TEST_AMOUNT / 4);
+        _transferFlowPhase1(token, issuer, ops, user, TEST_AMOUNT / 2);
+        _transferFlowPhase2(token, issuer, user, TEST_AMOUNT / 4);
+        _transferFlowPhase3(token, issuer, ops, user, TEST_AMOUNT / 4);
 
-        console.log("  vault balance      ", token.balanceOf(address(vault)));
+        console.log("  issuer balance     ", token.balanceOf(address(issuer)));
         console.log("  user balance       ", token.balanceOf(user.addr));
         console.log("  [PASS] testTransferFlow");
     }
 
     function _transferFlowPhase1(
         ScaledToken token,
-        IssuerVault vault,
+        TokenIssuer issuer,
         Vm.Wallet memory ops,
         Vm.Wallet memory user,
         uint256 amount
     ) internal {
         uint256 userBefore = token.balanceOf(user.addr);
         vm.broadcast(ops.privateKey);
-        vault.transfer(address(token), user.addr, amount);
+        issuer.transfer(address(token), user.addr, amount);
         require(
             token.balanceOf(user.addr) == userBefore + amount,
             "user did not receive expected tokens"
@@ -167,64 +224,64 @@ contract Smoke is Script {
 
     function _transferFlowPhase2(
         ScaledToken token,
-        IssuerVault vault,
+        TokenIssuer issuer,
         Vm.Wallet memory user,
         uint256 amount
     ) internal {
         uint256 userBefore = token.balanceOf(user.addr);
-        uint256 vaultBefore = token.balanceOf(address(vault));
+        uint256 issuerBefore = token.balanceOf(address(issuer));
         vm.broadcast(user.privateKey);
-        require(token.transfer(address(vault), amount), "user -> vault transfer failed");
+        require(token.transfer(address(issuer), amount), "user -> issuer transfer failed");
         require(token.balanceOf(user.addr) == userBefore - amount, "user balance mismatch");
         require(
-            token.balanceOf(address(vault)) == vaultBefore + amount,
-            "vault balance mismatch"
+            token.balanceOf(address(issuer)) == issuerBefore + amount,
+            "issuer balance mismatch"
         );
     }
 
-    /// @dev Phase 3: user approves vault, ops calls vault.burn(token, user, amount); vault
+    /// @dev Phase 3: user approves issuer, ops calls issuer.burn(token, user, amount); issuer
     ///      transferFroms `amount` from user to itself then burns it. Exercises the
     ///      approve / burn path through the operational layer.
     function _transferFlowPhase3(
         ScaledToken token,
-        IssuerVault vault,
+        TokenIssuer issuer,
         Vm.Wallet memory ops,
         Vm.Wallet memory user,
         uint256 amount
     ) internal {
         vm.broadcast(user.privateKey);
-        require(token.approve(address(vault), amount), "approve failed");
+        require(token.approve(address(issuer), amount), "approve failed");
         require(
-            token.allowance(user.addr, address(vault)) == amount,
+            token.allowance(user.addr, address(issuer)) == amount,
             "allowance not set"
         );
 
         uint256 supplyBefore = token.totalSupply();
         uint256 userBefore = token.balanceOf(user.addr);
         vm.broadcast(ops.privateKey);
-        vault.burn(address(token), user.addr, amount);
+        issuer.burn(address(token), user.addr, amount);
         require(token.balanceOf(user.addr) == userBefore - amount, "user post-burn mismatch");
         require(token.totalSupply() == supplyBefore - amount, "totalSupply not reduced by burn");
-        require(token.allowance(user.addr, address(vault)) == 0, "allowance not consumed");
+        require(token.allowance(user.addr, address(issuer)) == 0, "allowance not consumed");
     }
 
-    /// @notice Pause individual + global, verify vault.transfer reverts, then unpause.
+    /// @notice Pause individual + global, verify issuer.transfer reverts, then unpause.
     function testPause(address tokenAddr) public {
         ScaledToken token = ScaledToken(tokenAddr);
-        (Vm.Wallet memory ops, IssuerVault vault) = _setupOps(token);
+        (Vm.Wallet memory ops, TokenIssuer issuer) = _setupOps(token);
         Vm.Wallet memory user = _user();
         PauseRegistry pm = PauseRegistry(address(token.pauseManager()));
         console.log("--- testPause ---");
 
-        if (token.balanceOf(address(vault)) < 1 ether) {
+        if (token.balanceOf(address(issuer)) < 1 ether) {
             vm.broadcast(ops.privateKey);
-            vault.mint(address(token), address(vault), TEST_AMOUNT);
+            issuer.mint(address(token), address(issuer), TEST_AMOUNT);
         }
 
         vm.broadcast(ops.privateKey);
         pm.pauseToken(tokenAddr);
         require(pm.isTokenPaused(tokenAddr), "token not flagged paused");
-        _expectVaultTransferReverts(vault, address(token), ops.addr, user.addr, 1 ether, "expected pause revert");
+        _expectIssuerTransferReverts(issuer, address(token), ops.addr, user.addr, 1 ether, "expected pause revert");
 
         vm.broadcast(ops.privateKey);
         pm.unpauseToken(tokenAddr);
@@ -233,28 +290,28 @@ contract Smoke is Script {
         vm.broadcast(ops.privateKey);
         pm.pauseGlobally();
         require(pm.isTokenPaused(tokenAddr), "global pause not in effect");
-        _expectVaultTransferReverts(vault, address(token), ops.addr, user.addr, 1 ether, "expected global-pause revert");
+        _expectIssuerTransferReverts(issuer, address(token), ops.addr, user.addr, 1 ether, "expected global-pause revert");
 
         vm.broadcast(ops.privateKey);
         pm.unpauseGlobally();
         require(!pm.isTokenPaused(tokenAddr), "global unpause failed");
 
         vm.broadcast(ops.privateKey);
-        vault.transfer(address(token), user.addr, 1 ether);
+        issuer.transfer(address(token), user.addr, 1 ether);
         console.log("  [PASS] testPause");
     }
 
     /// @notice Blocklist (token-scoped) + sanctions (global) flow.
     function testCompliance(address tokenAddr) public {
         ScaledToken token = ScaledToken(tokenAddr);
-        (Vm.Wallet memory ops, IssuerVault vault) = _setupOps(token);
+        (Vm.Wallet memory ops, TokenIssuer issuer) = _setupOps(token);
         Vm.Wallet memory user = _user();
         ComplianceRegistry c = ComplianceRegistry(address(token.compliance()));
         console.log("--- testCompliance ---");
 
-        if (token.balanceOf(address(vault)) < 1 ether) {
+        if (token.balanceOf(address(issuer)) < 1 ether) {
             vm.broadcast(ops.privateKey);
-            vault.mint(address(token), address(vault), TEST_AMOUNT);
+            issuer.mint(address(token), address(issuer), TEST_AMOUNT);
         }
 
         address[] memory list = new address[](1);
@@ -263,7 +320,7 @@ contract Smoke is Script {
         vm.broadcast(ops.privateKey);
         c.blockUsers(tokenAddr, list);
         require(c.isBlocked(tokenAddr, user.addr), "user not on blocklist");
-        _expectVaultTransferReverts(vault, address(token), ops.addr, user.addr, 1 ether, "expected blocklist revert");
+        _expectIssuerTransferReverts(issuer, address(token), ops.addr, user.addr, 1 ether, "expected blocklist revert");
 
         vm.broadcast(ops.privateKey);
         c.unblockUsers(tokenAddr, list);
@@ -272,7 +329,7 @@ contract Smoke is Script {
         vm.broadcast(ops.privateKey);
         c.sanctionUsers(list);
         require(c.isSanctioned(user.addr), "user not on sanctions list");
-        _expectVaultTransferReverts(vault, address(token), ops.addr, user.addr, 1 ether, "expected sanctions revert");
+        _expectIssuerTransferReverts(issuer, address(token), ops.addr, user.addr, 1 ether, "expected sanctions revert");
 
         vm.broadcast(ops.privateKey);
         c.unsanctionUsers(list);
@@ -286,7 +343,7 @@ contract Smoke is Script {
         require(!c.isSanctioned(user.addr), "epoch reset did not clear sanction");
 
         vm.broadcast(ops.privateKey);
-        vault.transfer(address(token), user.addr, 1 ether);
+        issuer.transfer(address(token), user.addr, 1 ether);
         console.log("  [PASS] testCompliance");
     }
 
@@ -298,7 +355,12 @@ contract Smoke is Script {
 
         uint256 current = token.uiMultiplier();
         uint256 next = current == 1 ether ? 2 ether : 1 ether;
+        // The schedule must sit at least `minMultiplierNotice` in the future. Honor
+        // SMOKE_MULTIPLIER_OFFSET but floor it to minNotice + a small buffer (for sim->broadcast
+        // time drift) so the default never trips "minimum notice period not met".
+        uint256 minNotice = token.minMultiplierNotice();
         uint256 offset = vm.envOr("SMOKE_MULTIPLIER_OFFSET", uint256(3600));
+        if (offset < minNotice + 300) offset = minNotice + 300;
         uint256 effective = block.timestamp + offset;
 
         vm.broadcast(ops.privateKey);
@@ -309,6 +371,7 @@ contract Smoke is Script {
 
         console.log("  current:           ", current);
         console.log("  scheduled:         ", next);
+        console.log("  minNotice (s):     ", minNotice);
         console.log("  effectiveAt:       ", effective);
         console.log("  [PASS] testMultiplier (scheduling verified)");
     }
@@ -340,7 +403,17 @@ contract Smoke is Script {
         testCompliance(tokenAddr);
         testMultiplier(tokenAddr);
         testIssuerRole(tokenAddr);
+        // Always revoke the deterministic wallets' privileges before finishing, so no
+        // derivable-key address is left holding roles on the target deployment.
+        _teardownOps(ScaledToken(tokenAddr));
         console.log("=== ALL SMOKE TESTS PASSED ===");
+    }
+
+    /// @notice Standalone teardown: revokes every role granted to the deterministic ops wallet
+    ///         and removes the deterministic user recipient. Run this after invoking individual
+    ///         `test*` entrypoints (runAll already tears down automatically). Admin signs.
+    function teardown(address tokenAddr) external {
+        _teardownOps(ScaledToken(tokenAddr));
     }
 
     function _ops() internal returns (Vm.Wallet memory) {
@@ -359,89 +432,89 @@ contract Smoke is Script {
         return msg.sender;
     }
 
-    /// @dev Resolves the IssuerVault to use for this run. Resolution order:
-    ///      1. `_vault` cached by a previous call in this script run
-    ///      2. SMOKE_ISSUER_VAULT env var (a pre-deployed vault — must have the
+    /// @dev Resolves the TokenIssuer to use for this run. Resolution order:
+    ///      1. `_issuer` cached by a previous call in this script run
+    ///      2. SMOKE_TOKEN_ISSUER env var (a pre-deployed issuer — must have the
     ///         broadcaster as DEFAULT_ADMIN_ROLE)
-    ///      3. deploy a fresh vault (broadcaster becomes admin)
-    function _getOrDeployVault() internal returns (IssuerVault v) {
-        if (address(_vault) != address(0)) return _vault;
+    ///      3. deploy a fresh issuer (broadcaster becomes admin)
+    function _getOrDeployIssuer() internal returns (TokenIssuer v) {
+        if (address(_issuer) != address(0)) return _issuer;
 
-        address envAddr = vm.envOr("SMOKE_ISSUER_VAULT", address(0));
+        address envAddr = vm.envOr("SMOKE_TOKEN_ISSUER", address(0));
         if (envAddr != address(0)) {
-            _vault = IssuerVault(payable(envAddr));
+            _issuer = TokenIssuer(payable(envAddr));
             require(
-                _vault.hasRole(bytes32(0), _admin()),
-                "Smoke: broadcaster lacks DEFAULT_ADMIN_ROLE on the configured IssuerVault"
+                _issuer.hasRole(bytes32(0), _admin()),
+                "Smoke: broadcaster lacks DEFAULT_ADMIN_ROLE on the configured TokenIssuer"
             );
-            return _vault;
+            return _issuer;
         }
 
-        console.log("    SMOKE_ISSUER_VAULT not set - deploying a fresh vault");
+        console.log("    SMOKE_TOKEN_ISSUER not set - deploying a fresh issuer");
         vm.startBroadcast();
-        IssuerVault impl = new IssuerVault();
-        bytes memory initData = abi.encodeWithSelector(IssuerVault.initialize.selector, _admin());
-        _vault = IssuerVault(payable(address(new ERC1967Proxy(address(impl), initData))));
+        TokenIssuer impl = new TokenIssuer();
+        bytes memory initData = abi.encodeWithSelector(TokenIssuer.initialize.selector, _admin());
+        _issuer = TokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
         vm.stopBroadcast();
-        console.log("    deployed IssuerVault at", address(_vault));
-        return _vault;
+        console.log("    deployed TokenIssuer at", address(_issuer));
+        return _issuer;
     }
 
     /// @dev Idempotently provisions the operational setup:
-    ///      1. resolves / deploys the IssuerVault
-    ///      2. grants the vault ISSUER_ROLE on the token (so it can mint / burn)
-    ///      3. grants ops the OPS_ROLE on the vault (so ops can drive mint / burn / transfer)
-    ///      4. adds user as an approved recipient on the vault
+    ///      1. resolves / deploys the TokenIssuer
+    ///      2. grants the issuer ISSUER_ROLE on the token (so it can mint / burn)
+    ///      3. grants ops the OPS_ROLE on the issuer (so ops can drive mint / burn / transfer)
+    ///      4. adds user as an approved recipient on the issuer
     ///      5. grants ops the OPS_ROLE on token, ComplianceRegistry, and PauseRegistry
     ///      6. tops up ops's native gas
-    function _setupOps(ScaledToken token) internal returns (Vm.Wallet memory ops, IssuerVault vault) {
+    function _setupOps(ScaledToken token) internal returns (Vm.Wallet memory ops, TokenIssuer issuer) {
         ops = _ops();
         Vm.Wallet memory user = _user();
-        vault = _getOrDeployVault();
+        issuer = _getOrDeployIssuer();
 
         ComplianceRegistry c = ComplianceRegistry(address(token.compliance()));
         PauseRegistry p = PauseRegistry(address(token.pauseManager()));
 
         bytes32 tIssuer = token.ISSUER_ROLE();
-        bytes32 tOps = token.OPS_ROLE();
-        bytes32 vaultOps = vault.OPS_ROLE();
+        bytes32 tScheduler = token.MULTIPLIER_SCHEDULER_ROLE();
+        bytes32 issuerOps = issuer.OPS_ROLE();
         bytes32 cOps = c.OPS_ROLE();
         bytes32 pOps = p.OPS_ROLE();
 
-        bool needIssuerOnVault = !token.hasRole(tIssuer, address(vault));
-        bool needOpsOnVault = !vault.hasRole(vaultOps, ops.addr);
-        bool needApprovedRecipient = !vault.isApprovedRecipient(user.addr);
-        bool needTOps = !token.hasRole(tOps, ops.addr);
+        bool needIssuerOnIssuer = !token.hasRole(tIssuer, address(issuer));
+        bool needOpsOnIssuer = !issuer.hasRole(issuerOps, ops.addr);
+        bool needApprovedRecipient = !issuer.isApprovedRecipient(user.addr);
+        bool needScheduler = !token.hasRole(tScheduler, ops.addr);
         bool needCOps = !c.hasRole(cOps, ops.addr);
         bool needPOps = !p.hasRole(pOps, ops.addr);
         bool needGas = ops.addr.balance
             < vm.envOr("SMOKE_USER_GAS_THRESHOLD", DEFAULT_GAS_THRESHOLD);
 
         if (
-            !needIssuerOnVault && !needOpsOnVault && !needApprovedRecipient && !needTOps
+            !needIssuerOnIssuer && !needOpsOnIssuer && !needApprovedRecipient && !needScheduler
                 && !needCOps && !needPOps && !needGas
         ) {
-            return (ops, vault);
+            return (ops, issuer);
         }
 
         console.log("    setup ops:           ", ops.addr);
         vm.startBroadcast();
         if (needGas) _topUpAddr(ops.addr);
-        if (needIssuerOnVault) {
-            token.grantRole(tIssuer, address(vault));
-            console.log("      granted token.ISSUER_ROLE to IssuerVault");
+        if (needIssuerOnIssuer) {
+            token.grantRole(tIssuer, address(issuer));
+            console.log("      granted token.ISSUER_ROLE to TokenIssuer");
         }
-        if (needOpsOnVault) {
-            vault.grantRole(vaultOps, ops.addr);
-            console.log("      granted vault.OPS_ROLE to ops");
+        if (needOpsOnIssuer) {
+            issuer.grantRole(issuerOps, ops.addr);
+            console.log("      granted issuer.OPS_ROLE to ops");
         }
         if (needApprovedRecipient) {
-            vault.addApprovedRecipient(user.addr);
-            console.log("      added user as approved recipient on the IssuerVault");
+            issuer.addApprovedRecipient(user.addr);
+            console.log("      added user as approved recipient on the TokenIssuer");
         }
-        if (needTOps) {
-            token.grantRole(tOps, ops.addr);
-            console.log("      granted token.OPS_ROLE to ops");
+        if (needScheduler) {
+            token.grantRole(tScheduler, ops.addr);
+            console.log("      granted token.MULTIPLIER_SCHEDULER_ROLE to ops");
         }
         if (needCOps) {
             c.grantRole(cOps, ops.addr);
@@ -450,6 +523,57 @@ contract Smoke is Script {
         if (needPOps) {
             p.grantRole(pOps, ops.addr);
             console.log("      granted pauseRegistry.OPS_ROLE to ops");
+        }
+        vm.stopBroadcast();
+    }
+
+    /// @dev Revokes every privileged role granted to the deterministic ops wallet during
+    ///      {_setupOps} and removes the deterministic user as an approved recipient, so no
+    ///      derivable-key address (private key = keccak256 of the label) is left holding
+    ///      privileges after the run. Admin (broadcaster) signs. Idempotent — each revoke is
+    ///      guarded by a hasRole/isApprovedRecipient check. Does not deploy an issuer: if none
+    ///      is cached or configured via SMOKE_TOKEN_ISSUER, issuer-scoped revokes are skipped.
+    function _teardownOps(ScaledToken token) internal {
+        Vm.Wallet memory ops = _ops();
+        Vm.Wallet memory user = _user();
+
+        ComplianceRegistry c = ComplianceRegistry(address(token.compliance()));
+        PauseRegistry p = PauseRegistry(address(token.pauseManager()));
+
+        TokenIssuer issuer = _issuer;
+        if (address(issuer) == address(0)) {
+            address envAddr = vm.envOr("SMOKE_TOKEN_ISSUER", address(0));
+            if (envAddr != address(0)) issuer = TokenIssuer(payable(envAddr));
+        }
+
+        bytes32 tScheduler = token.MULTIPLIER_SCHEDULER_ROLE();
+        bytes32 cOps = c.OPS_ROLE();
+        bytes32 pOps = p.OPS_ROLE();
+
+        console.log("--- teardown: revoking deterministic wallet privileges ---");
+        vm.startBroadcast();
+        if (token.hasRole(tScheduler, ops.addr)) {
+            token.revokeRole(tScheduler, ops.addr);
+            console.log("  revoked token.MULTIPLIER_SCHEDULER_ROLE from ops");
+        }
+        if (c.hasRole(cOps, ops.addr)) {
+            c.revokeRole(cOps, ops.addr);
+            console.log("  revoked compliance.OPS_ROLE from ops");
+        }
+        if (p.hasRole(pOps, ops.addr)) {
+            p.revokeRole(pOps, ops.addr);
+            console.log("  revoked pauseRegistry.OPS_ROLE from ops");
+        }
+        if (address(issuer) != address(0)) {
+            bytes32 issuerOps = issuer.OPS_ROLE();
+            if (issuer.hasRole(issuerOps, ops.addr)) {
+                issuer.revokeRole(issuerOps, ops.addr);
+                console.log("  revoked issuer.OPS_ROLE from ops");
+            }
+            if (issuer.isApprovedRecipient(user.addr)) {
+                issuer.removeApprovedRecipient(user.addr);
+                console.log("  removed user as approved recipient on the TokenIssuer");
+            }
         }
         vm.stopBroadcast();
     }
@@ -474,11 +598,11 @@ contract Smoke is Script {
         vm.stopBroadcast();
     }
 
-    /// @dev Asserts that `vault.transfer(token, to, amount)` reverts when called by `caller`.
+    /// @dev Asserts that `issuer.transfer(token, to, amount)` reverts when called by `caller`.
     ///      Uses vm.prank + low-level call so the check stays in-simulator (forge's broadcast
     ///      bundle would otherwise reject the expected revert as a failed transaction).
-    function _expectVaultTransferReverts(
-        IssuerVault vault,
+    function _expectIssuerTransferReverts(
+        TokenIssuer issuer,
         address token,
         address caller,
         address to,
@@ -486,7 +610,7 @@ contract Smoke is Script {
         string memory reason
     ) internal {
         vm.prank(caller);
-        (bool ok,) = address(vault).call(
+        (bool ok,) = address(issuer).call(
             abi.encodeWithSignature("transfer(address,address,uint256)", token, to, amount)
         );
         require(!ok, reason);

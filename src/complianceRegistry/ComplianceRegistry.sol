@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
@@ -36,6 +36,7 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
     error MissingOpsRole();
     error ZeroAddress();
     error SelfGrantNotAllowed();
+    error CannotRenounceLastAdmin();
 
     constructor(address admin) {
         if (admin == address(0)) revert ZeroAddress();
@@ -67,20 +68,30 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
 
     function blockUsers(address token, address[] calldata users) external onlyOps {
         if (users.length == 0) revert EmptyAddressList();
+        address[] memory effectivelyBlocked = new address[](users.length);
+        uint256 count = 0;
         for (uint256 i = 0; i < users.length; ++i) {
             if (users[i] == address(0)) revert ZeroAddress();
+            if (isBlocked[token][users[i]]) continue;
             isBlocked[token][users[i]] = true;
+            effectivelyBlocked[count++] = users[i];
         }
-        emit UsersBlocked(token, users);
+        assembly { mstore(effectivelyBlocked, count) }
+        emit UsersBlocked(token, effectivelyBlocked);
     }
 
     function unblockUsers(address token, address[] calldata users) external onlyOps {
         if (users.length == 0) revert EmptyAddressList();
+        address[] memory effectivelyUnblocked = new address[](users.length);
+        uint256 count = 0;
         for (uint256 i = 0; i < users.length; ++i) {
             if (users[i] == address(0)) revert ZeroAddress();
+            if (!isBlocked[token][users[i]]) continue;
             isBlocked[token][users[i]] = false;
+            effectivelyUnblocked[count++] = users[i];
         }
-        emit UsersUnblocked(token, users);
+        assembly { mstore(effectivelyUnblocked, count) }
+        emit UsersUnblocked(token, effectivelyUnblocked);
     }
 
     function sanctionUsers(address[] calldata users) external onlyOps {
@@ -123,7 +134,11 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
 
     /// @notice Replaces the sanctions list with `newList` (O(1) invalidation of the
     ///         old set, then O(N) write of the new). Duplicates are silently deduped.
+    ///         Empty input reverts — callers wanting to fully clear must use
+    ///         {clearSanctions} explicitly, so an ops script that accidentally
+    ///         passes an empty array cannot silently wipe the entire list.
     function replaceSanctions(address[] calldata newList) external onlyOps {
+        if (newList.length == 0) revert EmptyAddressList();
         uint256 epoch = ++currentEpoch;
         for (uint256 i = 0; i < newList.length; ++i) {
             address addr = newList[i];
@@ -142,5 +157,18 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
     {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
+    }
+
+    /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
+    ///         permanently strip this non-upgradeable contract of admin capability.
+    function renounceRole(bytes32 role, address callerConfirmation)
+        public
+        virtual
+        override(AccessControl, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 }

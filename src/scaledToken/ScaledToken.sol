@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {AccessControlEnumerableUpgradeable} from
@@ -24,7 +24,15 @@ contract ScaledToken is
     PauseGuardUpgradeable
 {
     bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
-    bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
+    bytes32 public constant MULTIPLIER_SCHEDULER_ROLE = keccak256("MULTIPLIER_SCHEDULER_ROLE");
+
+    /// @notice Minimum window between scheduling a multiplier change and its effective time.
+    ///         Bounds the front-running / acceleration attack window to at least this duration,
+    ///         giving integrators time to observe UIMultiplierUpdated and hedge / halt as needed.
+    ///         Set once in the constructor of this beacon implementation (shared by every token
+    ///         a factory deploys); change it by deploying a new implementation and upgrading the
+    ///         beacon.
+    uint256 public immutable minMultiplierNotice;
 
     bool public mintAllowed;
     bool public burnAllowed;
@@ -47,9 +55,17 @@ contract ScaledToken is
     error EmptyString();
     error ZeroAddress();
     error SelfGrantNotAllowed();
+    /// @dev Symbols must be 1–32 characters of [A-Za-z0-9-].
+    error InvalidSymbol();
+    /// @dev Asset codes must be 1–32 characters of [A-Za-z0-9-].
+    error InvalidAssetCode();
+    error CannotRenounceLastAdmin();
     /// @dev ISSUER_ROLE governs mint/burn and must be held by a contract with its own
     ///      access control — never a plain EOA.
     error IssuerNotContract();
+    /// @dev Notice period must be non-zero and no larger than the 365-day scheduling
+    ///      horizon, otherwise no multiplier change could ever be scheduled.
+    error InvalidNoticePeriod();
 
     modifier onlyIssuer() {
         _requireIssuer();
@@ -60,12 +76,16 @@ contract ScaledToken is
         if (!hasRole(ISSUER_ROLE, msg.sender)) revert UnauthorizedRole();
     }
 
-    function _requireOperator() private view {
-        if (!hasRole(OPS_ROLE, msg.sender)) revert UnauthorizedRole();
+    function _requireMultiplierScheduler() private view {
+        if (!hasRole(MULTIPLIER_SCHEDULER_ROLE, msg.sender)) revert UnauthorizedRole();
     }
 
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    /// @param minMultiplierNotice_ Minimum lead time enforced on every scheduled multiplier
+    ///        change. Baked into this implementation and shared by all proxies pointing at it.
+    /// @custom:oz-upgrades-unsafe-allow constructor state-variable-immutable
+    constructor(uint256 minMultiplierNotice_) {
+        if (minMultiplierNotice_ == 0 || minMultiplierNotice_ > 365 days) revert InvalidNoticePeriod();
+        minMultiplierNotice = minMultiplierNotice_;
         _disableInitializers();
     }
 
@@ -77,9 +97,9 @@ contract ScaledToken is
         address pauseManager_,
         address admin_,
         address[] memory issuers_,
-        address[] memory operators_
+        address[] memory multiplierSchedulers_
     ) public initializer {
-        __scaledToken_init(name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, operators_);
+        __scaledToken_init(name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, multiplierSchedulers_);
     }
 
     function __scaledToken_init(
@@ -90,11 +110,15 @@ contract ScaledToken is
         address pauseManager_,
         address admin_,
         address[] memory issuers_,
-        address[] memory operators_
+        address[] memory multiplierSchedulers_
     ) internal onlyInitializing {
         if (bytes(name_).length == 0) revert EmptyString();
         if (bytes(symbol_).length == 0) revert EmptyString();
         if (bytes(assetCode_).length == 0) revert EmptyString();
+        // Defense in depth: factory already rejects zero admin in createToken, but initialize()
+        // is a public entrypoint on the impl and any BeaconProxy pointing at the shared beacon
+        // could bypass that check. Match the pattern used for compliance/pauseManager/issuers.
+        if (admin_ == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
         __erc8056Base_init(name_, symbol_);
         // EIP-712 domain commits to the *initial* name; later updateName() does not
@@ -107,14 +131,14 @@ contract ScaledToken is
         __PauseGuard_init_unchained(pauseManager_);
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _setRoleAdmin(ISSUER_ROLE, DEFAULT_ADMIN_ROLE);
-        _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(MULTIPLIER_SCHEDULER_ROLE, DEFAULT_ADMIN_ROLE);
         for (uint256 i = 0; i < issuers_.length; ++i) {
             if (issuers_[i] == address(0)) revert ZeroAddress();
             _grantRole(ISSUER_ROLE, issuers_[i]);
         }
-        for (uint256 i = 0; i < operators_.length; ++i) {
-            if (operators_[i] == address(0)) revert ZeroAddress();
-            _grantRole(OPS_ROLE, operators_[i]);
+        for (uint256 i = 0; i < multiplierSchedulers_.length; ++i) {
+            if (multiplierSchedulers_[i] == address(0)) revert ZeroAddress();
+            _grantRole(MULTIPLIER_SCHEDULER_ROLE, multiplierSchedulers_[i]);
         }
         mintAllowed = true;
         burnAllowed = true;
@@ -137,15 +161,53 @@ contract ScaledToken is
     }
 
     function updateSymbol(string memory symbol_) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (bytes(symbol_).length == 0) revert EmptyString();
+        _assertSymbol(symbol_);
         emit SymbolUpdated(_storedSymbol, symbol_);
         _storedSymbol = symbol_;
     }
 
+    /// @dev Same length / charset rules the factory uses at creation. Mirrored here so a
+    ///      direct `updateSymbol` call cannot leave the token with a malformed on-token
+    ///      symbol that would then fail {ScaledTokenFactory.renameSymbol}.
+    function _assertSymbol(string memory symbol_) internal pure {
+        bytes memory b = bytes(symbol_);
+        if (b.length == 0 || b.length > 32) revert InvalidSymbol();
+        for (uint256 i = 0; i < b.length; ++i) {
+            bytes1 c = b[i];
+            if (
+                (c < 0x41 || c > 0x5A) // not A-Z
+                    && (c < 0x61 || c > 0x7A) // not a-z
+                    && (c < 0x30 || c > 0x39) // not 0-9
+                    && c != 0x2D // not hyphen (-)
+            ) {
+                revert InvalidSymbol();
+            }
+        }
+    }
+
     function updateAssetCode(string memory assetCode_) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (bytes(assetCode_).length == 0) revert EmptyString();
+        _assertAssetCode(assetCode_);
         emit AssetCodeUpdated(assetCode, assetCode_);
         assetCode = assetCode_;
+    }
+
+    /// @dev Same length / charset rules the factory uses at creation. Mirrored here so a
+    ///      direct `updateAssetCode` call cannot bypass the format guard and leave the token
+    ///      with a malformed on-token asset code that would then fail {ScaledTokenFactory.renameAssetCode}.
+    function _assertAssetCode(string memory assetCode_) internal pure {
+        bytes memory b = bytes(assetCode_);
+        if (b.length == 0 || b.length > 32) revert InvalidAssetCode();
+        for (uint256 i = 0; i < b.length; ++i) {
+            bytes1 c = b[i];
+            if (
+                (c < 0x41 || c > 0x5A) // not A-Z
+                    && (c < 0x61 || c > 0x7A) // not a-z
+                    && (c < 0x30 || c > 0x39) // not 0-9
+                    && c != 0x2D // not hyphen (-)
+            ) {
+                revert InvalidAssetCode();
+            }
+        }
     }
 
     function setMintAllowed(bool allowed) external onlyRole(DEFAULT_ADMIN_ROLE) {
@@ -180,9 +242,9 @@ contract ScaledToken is
         _setPauseManager(_pauseManager);
     }
 
-    /// @dev OPS_ROLE authorises scheduled multiplier updates; admin only grants the role.
+    /// @dev MULTIPLIER_SCHEDULER_ROLE authorises scheduled multiplier updates; admin only grants the role.
     function _authorizeMultiplierUpdate() internal view override {
-        _requireOperator();
+        _requireMultiplierScheduler();
     }
 
     /// @dev Multipliers use 1e18 == 1.0x. Allowed range [1e9, 1e27] guards against UI
@@ -193,9 +255,16 @@ contract ScaledToken is
     }
 
     /// @dev Caps the scheduling horizon at 365 days so no single change can lock the
-    ///      multiplier indefinitely.
+    ///      multiplier indefinitely, and enforces minMultiplierNotice so any scheduled
+    ///      change — initial or overwrite — sits at least that far in the future. This bounds
+    ///      the acceleration/front-running window without blocking legitimate value
+    ///      corrections (integrators must monitor UIMultiplierUpdated for reschedules).
     function _setUIMultiplier(uint256 newMultiplier, uint256 effectiveAtTimestamp) internal override {
         require(effectiveAtTimestamp <= block.timestamp + 365 days, "ScaledToken: effective time too far in future");
+        require(
+            effectiveAtTimestamp >= block.timestamp + minMultiplierNotice,
+            "ScaledToken: minimum notice period not met"
+        );
         super._setUIMultiplier(newMultiplier, effectiveAtTimestamp);
     }
 
@@ -237,6 +306,19 @@ contract ScaledToken is
     {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
+    }
+
+    /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
+    ///         permanently strip the contract of admin capability.
+    function renounceRole(bytes32 role, address callerConfirmation)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.renounceRole(role, callerConfirmation);
     }
 
     /// @dev Covers both the public grantRole flow and the initializer path (initial issuers

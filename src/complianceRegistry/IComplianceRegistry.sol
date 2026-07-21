@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: BUSL-1.1
-pragma solidity ^0.8.20;
+pragma solidity ^0.8.24;
 
 /// @notice Compliance check interface used by token transfer hooks.
 interface IComplianceRegistry {

@@ -1,39 +1,46 @@
-# Deployment configuration for mStocks protocol.
-# Read natively by `script/Deploy.s.sol` via Foundry's vm.parseToml* cheatcodes.
-#
-# Address fields set to the zero address (0x0000...0000) fall back to the
-# broadcaster (the EOA signing the transactions).
 
-admin = "0x0000000000000000000000000000000000000000"
 proxyAdmin = "0x0000000000000000000000000000000000000000"
 
-# Optional role grants performed after each contract is deployed.
-# Each list contains addresses that will be granted the named role.
-# Role admin for every role below is DEFAULT_ADMIN_ROLE — grants are only emitted
-# when the broadcaster IS the admin; otherwise the script skips them and prints
-# a hint so the operator can grant them manually from the admin account.
+[factory]
+
+finalAdmin = "0x0000000000000000000000000000000000000000"
+
+minMultiplierNotice = 86400
+
 [compliance]
-opsRole = []        # OPS_ROLE on ComplianceRegistry  — manage blocklist + sanctions
+finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
+opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on ComplianceRegistry  — manage blocklist + sanctions
 
 [pauseManager]
-opsRole = []        # OPS_ROLE on PauseRegistry       — pause/unpause tokens
+finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
+opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on PauseRegistry       — pause/unpause tokens
 
-# IssuerVault (optional — only used when calling deployIssuerVault()).
-# - opsRole: addresses granted OPS_ROLE on the vault (mint/burn/transfer through it)
-# - approvedRecipients: addresses pre-registered as approved outbound recipients
-[issuerVault]
-opsRole = []
-approvedRecipients = []
+[tokenIssuer]
+finalAdmin = "0x0000000000000000000000000000000000000000"
+opsRole = ["0x0000000000000000000000000000000000000000"]
+approvedRecipients = ["0x0000000000000000000000000000000000000000"]
 
-# Optional initial-token deployment.
-# Remove the entire `[token]` block to skip the first token deploy.
 [token]
 name = "Apple Inc."
 symbol = "AAPL"
 identifier = "US0378331005"
-# Defaults to top-level `admin` if zero.
-admin = "0x0000000000000000000000000000000000000000"
-# Addresses granted ISSUER_ROLE on the new token (mint / burn). Must be contracts.
+finalAdmin = "0x0000000000000000000000000000000000000000"
 issuers = []
-# Addresses granted OPS_ROLE on the new token (UI multiplier scheduling).
-operators = []
+multiplierSchedulers = ["0x0000000000000000000000000000000000000000"]
+
+
+# [[tokens]]
+# name = "Tesla Inc."
+# symbol = "TSLA"
+# identifier = "US88160R1014"
+# admin = "0x..."                 # this token's admin (multisig)
+# issuers = []                    # usually empty; grant ISSUER_ROLE later via grantIssuer(...)
+# multiplierSchedulers = ["0x..."]
+#
+# [[tokens]]
+# name = "Amazon.com Inc."
+# symbol = "AMZN"
+# identifier = "US0231351067"
+# admin = "0x..."
+# issuers = []
+# multiplierSchedulers = ["0x..."]
