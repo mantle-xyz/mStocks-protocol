@@ -29,25 +29,25 @@ src/
 
 ## Role model — strict separation of duties
 
-| Role                                      | 授权动作                                                                                        | 授权方                                 |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `DEFAULT_ADMIN_ROLE`                      | 仅 grant / revoke role + 改配置（`updateName` / `setMintAllowed` 等），**不能执行任何运维操作** | 团队 multisig                          |
-| `ISSUER_ROLE` (ScaledToken)               | mint / burn。**必须是合约**（EOA 会被拒）                                                       | `TokenIssuer` 或其它经审计的发行方合约 |
-| `MULTIPLIER_SCHEDULER_ROLE` (ScaledToken) | 调度 `setUIMultiplier`（拆股 / 合股 / 分红）                                                    | 运维 EOA / KMS                         |
-| `OPS_ROLE` (ComplianceRegistry)           | 管理 blocklist + sanctions                                                                      | 合规 EOA / KMS                         |
-| `OPS_ROLE` (PauseRegistry)                | pause / unpause（单 token + 全局）                                                              | 运维 EOA / KMS                         |
-| `OPS_ROLE` (TokenIssuer)                  | 通过 issuer 调 `mint` / `burn` / `transfer`                                                     | 运维 EOA / KMS                         |
+| Role                                      | Authorized actions                                                                              | Held by                                   |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| `DEFAULT_ADMIN_ROLE`                      | Only grant / revoke roles + change config (`updateName` / `setMintAllowed`, etc.); **cannot perform any operational action** | Team multisig               |
+| `ISSUER_ROLE` (ScaledToken)               | mint / burn. **Must be a contract** (EOAs are rejected)                                          | `TokenIssuer` or another audited issuer contract |
+| `MULTIPLIER_SCHEDULER_ROLE` (ScaledToken) | Schedule `setUIMultiplier` (splits / reverse splits / dividends)                                 | Ops EOA / KMS                            |
+| `OPS_ROLE` (ComplianceRegistry)           | Manage blocklist + sanctions                                                                     | Compliance EOA / KMS                     |
+| `OPS_ROLE` (PauseRegistry)                | pause / unpause (single token + global)                                                          | Ops EOA / KMS                            |
+| `OPS_ROLE` (TokenIssuer)                  | mint / burn / transfer through the issuer                                                        | Ops EOA / KMS                            |
 
-三条护栏在所有 role 授予点强制执行：
+Three guards are enforced at every role-granting point:
 
-- **Self-grant guard**：任何合约都 override 了 `grantRole`，admin 无法给自己授权
-- **ISSUER_ROLE must be contract**：`ScaledToken._grantRole` 校验 `account.code.length > 0`，EOA 在 init 与 grantRole 两条路径都会被拒
-- **Admin 不接触运维**：`_requireIssuer` / `_requireMultiplierScheduler` / `_requireOps` 全部拒绝 admin
+- **Self-grant guard**: every contract overrides `grantRole`, so an admin cannot grant a role to itself.
+- **ISSUER_ROLE must be a contract**: `ScaledToken._grantRole` checks `account.code.length > 0`; EOAs are rejected on both the init and grantRole paths.
+- **Admin never touches operations**: `_requireIssuer` / `_requireMultiplierScheduler` / `_requireOps` all reject the admin.
 
 ## Prerequisites
 
-- Foundry（≥ 2024.10；用 `foundryup` 拉最新）
-- Solc `0.8.30`（`foundry.toml` 里指定，无需手动装）
+- Foundry (≥ 2024.10; use `foundryup` for the latest)
+- Solc `0.8.30` (pinned in `foundry.toml`; no manual install needed)
 
 ## Build
 
@@ -55,17 +55,17 @@ src/
 forge build
 ```
 
-`foundry.toml` 已启用：`via_ir = true`、`evm_version = "cancun"`、200 runs optimizer。
+`foundry.toml` enables: `via_ir = true`, `evm_version = "cancun"`, optimizer at 200 runs.
 
 ## Test
 
 ```bash
-forge test          # 96 用例，秒级完成
-forge test -vv      # 打印 pass/fail 明细
+forge test          # full suite, completes in seconds
+forge test -vv      # print per-test pass/fail
 forge test --gas-report
 ```
 
-只跑单个 suite：
+Run a single suite:
 
 ```bash
 forge test --match-path test/ScaledToken.t.sol
@@ -74,37 +74,37 @@ forge test --match-path test/TokenIssuer.t.sol
 
 ## Deploy
 
-部署由 `script/Deploy.s.sol` 驱动、`config.toml` 提供参数（零地址回落到 broadcaster）。入口：
+Deployment is driven by `script/Deploy.s.sol` with parameters from `config.toml` (zero addresses fall back to the broadcaster). Entry points:
 
-| `--sig`                          | 说明                                                                   |
+| `--sig`                          | Description                                                            |
 | -------------------------------- | ---------------------------------------------------------------------- |
-| `run()`（默认）                  | 全栈：ComplianceRegistry → PauseRegistry → Factory →（可选）初始 token |
-| `deployCompliance()`             | 只部 ComplianceRegistry                                                |
-| `deployPauseManager()`           | 只部 PauseRegistry                                                     |
+| `run()` (default)                | Full stack: ComplianceRegistry → PauseRegistry → Factory → (optional) initial token |
+| `deployCompliance()`             | Deploy ComplianceRegistry only                                         |
+| `deployPauseManager()`           | Deploy PauseRegistry only                                              |
 | `deployFactory(address,address)` | ScaledTokenFactory(compliance, pauseRegistry)                          |
-| `deployToken(address)`           | 通过既有 factory 部一个 token                                          |
+| `deployToken(address)`           | Deploy a token via an existing factory                                 |
 | `deployTokenIssuer()`            | ERC1967-proxied TokenIssuer                                            |
 
 ```bash
 export RPC=https://rpc.sepolia.mantle.xyz
 export PRIVATE_KEY=0xYourDeployerPk
 
-# 全栈
+# full stack
 forge script script/Deploy.s.sol:Deploy \
   --rpc-url $RPC --private-key $PRIVATE_KEY --broadcast -vvv
 
-# 单独部 TokenIssuer
+# deploy TokenIssuer on its own
 forge script script/Deploy.s.sol:Deploy --sig "deployTokenIssuer()" \
   --rpc-url $RPC --private-key $PRIVATE_KEY --broadcast
 ```
 
-带浏览器验证：`--verify --etherscan-api-key $VERIFY_API_KEY`。
+For explorer verification, append: `--verify --etherscan-api-key $VERIFY_API_KEY`.
 
-配置文件示例见 `config.toml`；常用字段：
+See `config.toml` for a full example; common fields:
 
 ```toml
-admin      = "0x..."           # multisig；留 0 回落到 broadcaster
-proxyAdmin = "0x..."           # beacon owner（可升级 implementation）
+admin      = "0x..."           # multisig; zero falls back to the broadcaster
+proxyAdmin = "0x..."           # beacon owner (can upgrade the implementation)
 
 [compliance]
 opsRole = ["0x..."]
@@ -119,20 +119,20 @@ approvedRecipients = ["0x..."]
 [token]
 name = "Apple Inc."
 symbol = "AAPL"
-identifier = "US0378331005"    # 传给 ScaledToken.assetCode
+identifier = "US0378331005"    # passed to ScaledToken.assetCode
 admin = "0x..."
-issuers = []                   # 必须是合约地址
+issuers = []                   # must be contract addresses
 multiplierSchedulers = ["0x..."]
 ```
 
-## Smoke tests (链上端到端)
+## Smoke tests (on-chain end-to-end)
 
-已部署到链上之后，跑 `script/Smoke.s.sol` 走一遍 mint / burn / transfer / pause / compliance / multiplier / issuer-guard 全流程。ops EOA 与 user EOA 由 `vm.createWallet(label)` 确定性派生（私钥 = label 的 keccak256，公开可推导）。
+Once deployed on-chain, run `script/Smoke.s.sol` to exercise the full mint / burn / transfer / pause / compliance / multiplier / issuer-guard flow. The ops and user EOAs are derived deterministically via `vm.createWallet(label)` (private key = keccak256 of the label, publicly derivable).
 
-> ⚠️ **仅用于一次性 / 测试网部署，切勿对生产或承载真实价值的部署运行。** 由于 ops / user 钱包的私钥可被任何人推导，`runAll` 会在结束前通过 `teardown` 撤销授予这两个钱包的所有角色；若单独运行某个 `test*` 入口，请随后手动执行 `teardown(address)`，确保不残留可推导私钥的特权地址。
+> ⚠️ **For throwaway / testnet deployments only — never run against a production or value-bearing deployment.** Because the ops / user wallet private keys are publicly derivable, `runAll` revokes every role granted to those wallets via `teardown` before finishing; if you run an individual `test*` entry point, call `teardown(address)` afterwards so no derivable-key privileged address is left behind.
 
 ```bash
-# 单独测试后清理（撤销 ops/user 的角色）
+# cleanup after running individual tests (revoke ops/user roles)
 forge script script/Smoke.s.sol:Smoke --sig "teardown(address)" $TOKEN \
   --rpc-url $RPC --private-key $ADMIN_PK --broadcast
 ```
@@ -141,46 +141,46 @@ forge script script/Smoke.s.sol:Smoke --sig "teardown(address)" $TOKEN \
 export RPC=https://rpc.sepolia.mantle.xyz
 export ADMIN_PK=0x...
 export TOKEN=0xDeployedScaledTokenProxy
-# 可选：复用已有 issuer
+# optional: reuse an existing issuer
 # export SMOKE_TOKEN_ISSUER=0xIssuerProxy
 
-# 只读巡检
+# read-only inspection
 forge script script/Smoke.s.sol:Smoke --sig "testInfo(address)" $TOKEN --rpc-url $RPC
 
-# 全量端到端
+# full end-to-end
 forge script script/Smoke.s.sol:Smoke --sig "runAll(address)" $TOKEN \
   --rpc-url $RPC --private-key $ADMIN_PK --broadcast -vvv
 ```
 
-可选调参：`SMOKE_OPS_LABEL` / `SMOKE_USER_LABEL` / `SMOKE_USER_GAS_THRESHOLD` / `SMOKE_USER_GAS_TARGET` / `SMOKE_MULTIPLIER_OFFSET`。
+Optional tuning: `SMOKE_OPS_LABEL` / `SMOKE_USER_LABEL` / `SMOKE_USER_GAS_THRESHOLD` / `SMOKE_USER_GAS_TARGET` / `SMOKE_MULTIPLIER_OFFSET`.
 
-## UI Multiplier 一次性调度（拆股 / 合股 / 分红）
+## UI Multiplier one-off scheduling (splits / reverse splits / dividends)
 
 ```bash
-# 相对延迟（秒）
+# relative delay (seconds)
 forge script script/SetUIMultiplier.s.sol \
   --sig "run(address,uint256,uint256)" \
   <token> <newMultiplier> <delaySeconds> \
   --rpc-url $RPC --private-key $SCHEDULER_PK --broadcast
 
-# 绝对时间戳
+# absolute timestamp
 forge script script/SetUIMultiplier.s.sol \
   --sig "runAt(address,uint256,uint256)" \
   <token> <newMultiplier> <effectiveAt> \
   --rpc-url $RPC --private-key $SCHEDULER_PK --broadcast
 ```
 
-Multiplier 定点小数：`2e18` = 2-for-1 split，`5e17` = 1-for-2 reverse。链上校验：`1e9 ≤ mul ≤ 1e27`、`effectiveAt ∈ (now, now + 365 days]`。
+Multiplier is fixed-point: `2e18` = 2-for-1 split, `5e17` = 1-for-2 reverse. On-chain checks: `1e9 ≤ mul ≤ 1e27`, `effectiveAt ∈ (now, now + 365 days]`.
 
-## 使用的 EIP / 标准
+## EIPs / standards used
 
 - ERC-20 / ERC-165
-- EIP-712 typed-data + EIP-2612 permit（`ERC20PermitUpgradeable`）
-- EIP-5267 `eip712Domain()` 域自省
-- **EIP-8056 Scaled UI Amount extension**（拆股 / 合股 / 分红核心）
-- ERC-7201 namespaced storage（OZ v5 各 module 自带）
-- EIP-1967 proxy storage slots（BeaconProxy + UpgradeableBeacon + ERC1967Proxy）
+- EIP-712 typed-data + EIP-2612 permit (`ERC20PermitUpgradeable`)
+- EIP-5267 `eip712Domain()` domain introspection
+- **EIP-8056 Scaled UI Amount extension** (core of splits / reverse splits / dividends)
+- ERC-7201 namespaced storage (built into each OZ v5 module)
+- EIP-1967 proxy storage slots (BeaconProxy + UpgradeableBeacon + ERC1967Proxy)
 
 ## License
 
-BUSL-1.1（`src/ERC8056/` vendored 部分为 MIT）
+BUSL-1.1 (the vendored `src/ERC8056/` portion is MIT).
