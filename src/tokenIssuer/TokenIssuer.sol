@@ -10,6 +10,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IMintAndBurnable} from "./IMintAndBurnable.sol";
 
@@ -29,10 +30,29 @@ contract TokenIssuer is
 
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
 
+    /// @notice Fixed-point scale for privatization rates. 1e18 == "1.0 per old raw unit".
+    uint256 public constant RATE_SCALE = 1e18;
+
     /// @dev recipient => 1-based index in `approvedRecipients`. 0 means "not approved".
     mapping(address => uint256) private recipientIndex;
     /// @notice Enumerable whitelist of mint/burn counterparties.
     address[] public approvedRecipients;
+
+    /// @notice Per-old-token privatization / delisting configuration (方案二 of
+    ///         docs/corporate-actions-td.md). When `active`, holders of `oldToken` may
+    ///         {claimPrivatization} to swap it, at a fixed per-share rate, for `newToken`
+    ///         (minted on demand) and/or `usdc` (pre-funded into this issuer).
+    struct PrivatizationConfig {
+        address newToken; // address(0) = no stock leg
+        address usdc; // address(0) = no cash leg
+        uint256 newRate; // newToken raw delivered per RATE_SCALE of old raw surrendered
+        uint256 usdcRate; // usdc units delivered per RATE_SCALE of old raw surrendered
+        uint64 deadline; // claims accepted up to and including this timestamp
+        bool active;
+    }
+
+    /// @notice oldToken => its privatization configuration.
+    mapping(address => PrivatizationConfig) public privatizations;
 
     event RecipientApproved(address indexed recipient);
     event RecipientRevoked(address indexed recipient);
@@ -53,6 +73,17 @@ contract TokenIssuer is
     ///         filter without inspecting the log emitter.
     event Transferred(address indexed issuer, address indexed token, address indexed recipient, uint256 amount);
 
+    /// @notice Emitted when a privatization is configured (or reconfigured) for `oldToken`.
+    event PrivatizationConfigured(
+        address indexed oldToken, address newToken, address usdc, uint256 newRate, uint256 usdcRate, uint64 deadline
+    );
+    /// @notice Emitted when a privatization is closed for `oldToken`.
+    event PrivatizationClosed(address indexed oldToken);
+    /// @notice Emitted on every successful privatization claim.
+    event PrivatizationClaimed(
+        address indexed oldToken, address indexed holder, uint256 oldAmount, uint256 newOut, uint256 usdcOut
+    );
+
     error ZeroAddress();
     error RecipientAlreadyApproved();
     error RecipientNotApproved();
@@ -62,6 +93,11 @@ contract TokenIssuer is
     error BurnFailed();
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
+    error NoConsiderationConfigured();
+    error PrivatizationInactive();
+    error PrivatizationClaimClosed();
+    error ZeroAmount();
+    error NothingToDeliver();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -176,6 +212,90 @@ contract TokenIssuer is
         emit Transferred(address(this), token, recipient, amount);
     }
 
+    // ─── Privatization / delisting (方案二) ──────────────────────────────────────
+    // A retired mStocks security (`oldToken`) is swapped, at a fixed per-share rate, for a
+    // new mStocks token and/or USDC. This issuer already holds ISSUER_ROLE on the tokens it
+    // manages, so it burns the surrendered old token and mints the new one on demand. The
+    // fixed rate + a frozen old-token supply (`ScaledToken.setMintAllowed(false)`) mean no
+    // record-date snapshot / Merkle / escrow is needed — see docs/corporate-actions-td.md §4.
+
+    /// @notice Configure (or reconfigure) the privatization of `oldToken`. Admin-only: this
+    ///         sets economic parameters, not an operational action. Requires at least one
+    ///         consideration leg (stock or cash) with a non-zero rate. Operator must
+    ///         separately: freeze the old token's supply, grant this issuer ISSUER_ROLE on
+    ///         both `oldToken` and `newToken`, and fund this issuer with the owed USDC.
+    function configurePrivatization(
+        address oldToken,
+        address newToken,
+        address usdc,
+        uint256 newRate,
+        uint256 usdcRate,
+        uint64 deadline
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (oldToken == address(0)) revert ZeroAddress();
+        bool hasStock = newToken != address(0) && newRate != 0;
+        bool hasCash = usdc != address(0) && usdcRate != 0;
+        if (!hasStock && !hasCash) revert NoConsiderationConfigured();
+        privatizations[oldToken] = PrivatizationConfig({
+            newToken: newToken,
+            usdc: usdc,
+            newRate: newRate,
+            usdcRate: usdcRate,
+            deadline: deadline,
+            active: true
+        });
+        emit PrivatizationConfigured(oldToken, newToken, usdc, newRate, usdcRate, deadline);
+    }
+
+    /// @notice Close a privatization (stops further claims). Leftover USDC can be recovered
+    ///         with {withdraw}.
+    function closePrivatization(address oldToken) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        privatizations[oldToken].active = false;
+        emit PrivatizationClosed(oldToken);
+    }
+
+    /// @notice Consideration for surrendering `oldAmount` (raw) of `oldToken`.
+    function previewPrivatizationClaim(address oldToken, uint256 oldAmount)
+        public
+        view
+        returns (uint256 newOut, uint256 usdcOut)
+    {
+        PrivatizationConfig memory cfg = privatizations[oldToken];
+        newOut = cfg.newToken == address(0) ? 0 : Math.mulDiv(oldAmount, cfg.newRate, RATE_SCALE);
+        usdcOut = cfg.usdc == address(0) ? 0 : Math.mulDiv(oldAmount, cfg.usdcRate, RATE_SCALE);
+    }
+
+    /// @notice Surrender `amount` (raw) of `oldToken` and receive the fixed-rate consideration.
+    ///         Caller must `approve` this issuer for `amount` first. The old tokens are pulled
+    ///         in and burned; the new token is minted on demand and USDC paid from inventory.
+    ///         A compliance-blocked holder's new-token transfer reverts, rolling back the whole
+    ///         claim — they keep the old token and can retry once unblocked (no escrow needed).
+    function claimPrivatization(address oldToken, uint256 amount) external whenNotPaused nonReentrant {
+        PrivatizationConfig memory cfg = privatizations[oldToken];
+        if (!cfg.active) revert PrivatizationInactive();
+        if (block.timestamp > cfg.deadline) revert PrivatizationClaimClosed();
+        if (amount == 0) revert ZeroAmount();
+
+        uint256 newOut = cfg.newToken == address(0) ? 0 : Math.mulDiv(amount, cfg.newRate, RATE_SCALE);
+        uint256 usdcOut = cfg.usdc == address(0) ? 0 : Math.mulDiv(amount, cfg.usdcRate, RATE_SCALE);
+        if (newOut == 0 && usdcOut == 0) revert NothingToDeliver();
+
+        // Pull the old token in and burn it (this issuer holds ISSUER_ROLE on `oldToken`).
+        IERC20(oldToken).safeTransferFrom(msg.sender, address(this), amount);
+        if (!IMintAndBurnable(oldToken).burn(amount)) revert BurnFailed();
+
+        // Deliver consideration: mint the new token on demand, pay USDC from inventory.
+        if (newOut != 0) {
+            if (!IMintAndBurnable(cfg.newToken).mint(newOut)) revert MintFailed();
+            IERC20(cfg.newToken).safeTransfer(msg.sender, newOut);
+        }
+        if (usdcOut != 0) {
+            IERC20(cfg.usdc).safeTransfer(msg.sender, usdcOut);
+        }
+
+        emit PrivatizationClaimed(oldToken, msg.sender, amount, newOut, usdcOut);
+    }
+
     /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
     function grantRole(bytes32 role, address account)
         public
@@ -199,10 +319,11 @@ contract TokenIssuer is
         super.renounceRole(role, callerConfirmation);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 2 vars (recipientIndex, approvedRecipients)
-    ///      + 48 = 50 slots reserved, matching the convention used by ScaledToken / ERC8056Base
-    ///      / Guards. TokenIssuer is deployed behind a TransparentUpgradeableProxy — upgrade
-    ///      authority lives on the auto-created ProxyAdmin (owned by `cfg.proxyAdmin`),
-    ///      separate from `DEFAULT_ADMIN_ROLE` (day-to-day ops).
-    uint256[48] private __gap;
+    /// @dev Storage gap for upgrade-safe additions. 3 vars (recipientIndex, approvedRecipients,
+    ///      privatizations) + 47 = 50 slots reserved, matching the convention used by
+    ///      ScaledToken / ERC8056Base / Guards. TokenIssuer is deployed behind a
+    ///      TransparentUpgradeableProxy — upgrade authority lives on the auto-created
+    ///      ProxyAdmin (owned by `cfg.proxyAdmin`), separate from `DEFAULT_ADMIN_ROLE`
+    ///      (day-to-day ops).
+    uint256[47] private __gap;
 }
