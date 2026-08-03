@@ -38,6 +38,8 @@ contract TokenIssuerPrivatizationTest is Test {
     address internal admin = makeAddr("admin");
     address internal proxyAdmin = makeAddr("proxyAdmin");
     address internal complianceOps = makeAddr("complianceOps");
+    address internal ops = makeAddr("ops");
+    address internal custody = makeAddr("custody");
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
 
@@ -61,6 +63,16 @@ contract TokenIssuerPrivatizationTest is Test {
         newToken = ScaledToken(factory.createToken("New Co", "NEW", "US0000000002", admin, issuers, schedulers));
 
         compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
+        issuer.grantRole(issuer.OPS_ROLE(), ops);
+        vm.stopPrank();
+    }
+
+    /// @dev Fund + reserve `amount` of USDC for `oldToken`'s privatization via the accounted path.
+    function _fundCash(uint256 amount) internal {
+        usdc.mint(ops, amount);
+        vm.startPrank(ops);
+        usdc.approve(address(issuer), amount);
+        issuer.depositPrivatizationCash(address(oldToken), amount);
         vm.stopPrank();
     }
 
@@ -93,7 +105,7 @@ contract TokenIssuerPrivatizationTest is Test {
     function test_claim_stockPlusCash_mintsNewOnDemand() public {
         _seedOld(alice, 100 ether);
         _configure(2e18, 3e6, uint64(block.timestamp + 7 days));
-        usdc.mint(address(issuer), 300e6); // fund cash leg; new token minted on demand
+        _fundCash(300e6); // fund + reserve cash leg; new token minted on demand
 
         (uint256 newOut, uint256 usdcOut) = issuer.previewPrivatizationClaim(address(oldToken), 100 ether);
         assertEq(newOut, 200 ether);
@@ -114,7 +126,7 @@ contract TokenIssuerPrivatizationTest is Test {
     function test_claim_cashOnly() public {
         _seedOld(alice, 50 ether);
         _configure(0, 5e6, uint64(block.timestamp + 7 days));
-        usdc.mint(address(issuer), 250e6);
+        _fundCash(250e6);
 
         vm.startPrank(alice);
         oldToken.approve(address(issuer), 50 ether);
@@ -123,6 +135,18 @@ contract TokenIssuerPrivatizationTest is Test {
 
         assertEq(oldToken.balanceOf(alice), 0);
         assertEq(usdc.balanceOf(alice), 250e6);
+    }
+
+    function test_claim_insufficientReservedCashReverts() public {
+        _seedOld(alice, 100 ether);
+        _configure(0, 5e6, uint64(block.timestamp + 7 days));
+        _fundCash(100e6); // underfunded: owed 500e6
+
+        vm.startPrank(alice);
+        oldToken.approve(address(issuer), 100 ether);
+        vm.expectRevert(TokenIssuer.InsufficientReservedCash.selector);
+        issuer.claimPrivatization(address(oldToken), 100 ether);
+        vm.stopPrank();
     }
 
     function test_claim_blockedHolderReverts() public {
@@ -188,12 +212,51 @@ contract TokenIssuerPrivatizationTest is Test {
         vm.stopPrank();
     }
 
-    function test_adminCanWithdrawLeftoverUsdc() public {
-        _configure(0, 5e6, uint64(block.timestamp + 7 days));
-        usdc.mint(address(issuer), 250e6);
-        // reuse existing emergency withdraw to recover unclaimed cash
+    function test_sweepUnclaimed_deadlineGated() public {
+        _seedOld(alice, 100 ether);
+        _configure(0, 5e6, uint64(block.timestamp + 1 days));
+        _fundCash(500e6);
+
+        // Before the deadline the reserved cash cannot be swept — protects live claimers.
         vm.prank(admin);
-        issuer.withdraw(address(usdc));
-        assertEq(usdc.balanceOf(admin), 250e6);
+        vm.expectRevert(TokenIssuer.PrivatizationClaimStillOpen.selector);
+        issuer.sweepUnclaimed(address(oldToken), custody);
+
+        // Alice claims half; 250e6 remains reserved.
+        vm.startPrank(alice);
+        oldToken.approve(address(issuer), 50 ether);
+        issuer.claimPrivatization(address(oldToken), 50 ether);
+        vm.stopPrank();
+        assertEq(issuer.usdcReserved(address(oldToken)), 250e6);
+
+        // After the deadline, the unclaimed remainder sweeps to custody and the event closes.
+        vm.warp(block.timestamp + 2 days);
+        vm.prank(admin);
+        issuer.sweepUnclaimed(address(oldToken), custody);
+        assertEq(usdc.balanceOf(custody), 250e6);
+        assertEq(issuer.usdcReserved(address(oldToken)), 0);
+
+        (,,,,, bool active) = issuer.privatizations(address(oldToken));
+        assertFalse(active, "closed after sweep");
+    }
+
+    function test_sweepUnclaimed_onlyAdmin() public {
+        _configure(0, 5e6, uint64(block.timestamp + 1 days));
+        _fundCash(100e6);
+        vm.warp(block.timestamp + 2 days);
+        vm.prank(ops);
+        vm.expectRevert();
+        issuer.sweepUnclaimed(address(oldToken), custody);
+    }
+
+    function test_depositCash_requiresCashLeg() public {
+        _seedOld(alice, 1 ether);
+        _configure(2e18, 0, uint64(block.timestamp + 7 days)); // stock-only, no cash leg
+        usdc.mint(ops, 1e6);
+        vm.startPrank(ops);
+        usdc.approve(address(issuer), 1e6);
+        vm.expectRevert(TokenIssuer.NoCashLeg.selector);
+        issuer.depositPrivatizationCash(address(oldToken), 1e6);
+        vm.stopPrank();
     }
 }

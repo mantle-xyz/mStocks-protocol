@@ -54,6 +54,14 @@ contract TokenIssuer is
     /// @notice oldToken => its privatization configuration.
     mapping(address => PrivatizationConfig) public privatizations;
 
+    /// @notice oldToken => USDC still reserved to back its outstanding privatization claims.
+    ///         Increased by {depositPrivatizationCash}, decreased as claims pay out. After the
+    ///         deadline the remainder is the unclaimed cash, recoverable via {sweepUnclaimed}.
+    ///         Isolating cash per event (rather than relying on the commingled issuer balance)
+    ///         lets a claim never dip into another event's funds and lets the sweep be both
+    ///         precise and deadline-gated.
+    mapping(address => uint256) public usdcReserved;
+
     event RecipientApproved(address indexed recipient);
     event RecipientRevoked(address indexed recipient);
     event Withdrawn(address indexed token, address indexed to, uint256 amount);
@@ -83,6 +91,10 @@ contract TokenIssuer is
     event PrivatizationClaimed(
         address indexed oldToken, address indexed holder, uint256 oldAmount, uint256 newOut, uint256 usdcOut
     );
+    /// @notice Emitted when USDC is funded + reserved to back an old token's claims.
+    event PrivatizationCashDeposited(address indexed oldToken, address indexed from, uint256 amount);
+    /// @notice Emitted when unclaimed reserved USDC is swept to custody after the deadline.
+    event PrivatizationCashSwept(address indexed oldToken, address indexed to, uint256 amount);
 
     error ZeroAddress();
     error RecipientAlreadyApproved();
@@ -96,8 +108,11 @@ contract TokenIssuer is
     error NoConsiderationConfigured();
     error PrivatizationInactive();
     error PrivatizationClaimClosed();
+    error PrivatizationClaimStillOpen();
     error ZeroAmount();
     error NothingToDeliver();
+    error InsufficientReservedCash();
+    error NoCashLeg();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -290,10 +305,46 @@ contract TokenIssuer is
             IERC20(cfg.newToken).safeTransfer(msg.sender, newOut);
         }
         if (usdcOut != 0) {
+            // Draw strictly from this event's reserved cash so a claim can never dip into
+            // another event's (or unrelated) USDC held by the issuer.
+            if (usdcReserved[oldToken] < usdcOut) revert InsufficientReservedCash();
+            usdcReserved[oldToken] -= usdcOut;
             IERC20(cfg.usdc).safeTransfer(msg.sender, usdcOut);
         }
 
         emit PrivatizationClaimed(oldToken, msg.sender, amount, newOut, usdcOut);
+    }
+
+    /// @notice Fund the USDC leg of `oldToken`'s privatization and reserve it to back claims.
+    ///         Caller must `approve` this issuer for `amount` first. Funding goes through this
+    ///         accounted entrypoint (rather than a raw transfer) so the reserved amount is
+    ///         tracked — enabling a precise, deadline-gated {sweepUnclaimed}.
+    function depositPrivatizationCash(address oldToken, uint256 amount) external onlyRole(OPS_ROLE) nonReentrant {
+        PrivatizationConfig memory cfg = privatizations[oldToken];
+        if (!cfg.active) revert PrivatizationInactive();
+        if (cfg.usdc == address(0)) revert NoCashLeg();
+        if (amount == 0) revert ZeroAmount();
+        usdcReserved[oldToken] += amount;
+        IERC20(cfg.usdc).safeTransferFrom(msg.sender, address(this), amount);
+        emit PrivatizationCashDeposited(oldToken, msg.sender, amount);
+    }
+
+    /// @notice After the deadline, sweep `oldToken`'s remaining reserved (unclaimed) USDC to a
+    ///         custody address and close the privatization. Deadline-gated so committed funds
+    ///         cannot be pulled out from under holders while they can still claim. The new-token
+    ///         leg is minted on demand, so there is no pre-funded stock to sweep here.
+    ///
+    ///         The unrestricted {withdraw} remains a break-glass emergency override consistent
+    ///         with the custodial trust model; {sweepUnclaimed} is the normal, claimer-safe path.
+    function sweepUnclaimed(address oldToken, address to) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+        if (to == address(0)) revert ZeroAddress();
+        PrivatizationConfig storage cfg = privatizations[oldToken];
+        if (block.timestamp <= cfg.deadline) revert PrivatizationClaimStillOpen();
+        uint256 amount = usdcReserved[oldToken];
+        usdcReserved[oldToken] = 0;
+        cfg.active = false;
+        if (amount != 0) IERC20(cfg.usdc).safeTransfer(to, amount);
+        emit PrivatizationCashSwept(oldToken, to, amount);
     }
 
     /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
@@ -319,11 +370,11 @@ contract TokenIssuer is
         super.renounceRole(role, callerConfirmation);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 3 vars (recipientIndex, approvedRecipients,
-    ///      privatizations) + 47 = 50 slots reserved, matching the convention used by
-    ///      ScaledToken / ERC8056Base / Guards. TokenIssuer is deployed behind a
+    /// @dev Storage gap for upgrade-safe additions. 4 vars (recipientIndex, approvedRecipients,
+    ///      privatizations, usdcReserved) + 46 = 50 slots reserved, matching the convention used
+    ///      by ScaledToken / ERC8056Base / Guards. TokenIssuer is deployed behind a
     ///      TransparentUpgradeableProxy — upgrade authority lives on the auto-created
     ///      ProxyAdmin (owned by `cfg.proxyAdmin`), separate from `DEFAULT_ADMIN_ROLE`
     ///      (day-to-day ops).
-    uint256[47] private __gap;
+    uint256[46] private __gap;
 }
