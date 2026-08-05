@@ -11,25 +11,29 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
-/// @notice Registry for warrant / 配资 (leverage) issuance — see docs/corporate-actions-td.md §7.
+/// @notice Registry for warrant issuance and 配资 (leverage) records — see
+///         docs/corporate-actions-td.md §7.
 ///
-///         Warrants are a *rights-offering-style* entitlement: eligibility and per-account amount
-///         are fixed at a **record-date snapshot** (resource limits, per-holder caps, leverage
-///         credit lines — none derivable from any surrender), published as a Merkle root. There
-///         is **no on-chain option exercise**; instead the model is "**record + settle**":
-///           - `claim` always **records** the account's allocation (`recorded`), replay-guarded.
-///           - if the allocation is convertible to a settlement asset (e.g. USDC "U"), the same
-///             call **settles it immediately** (pays U at `settleRate`).
-///           - otherwise only the record stands; for a general warrant it can be settled later
-///             via {claimSettlement} once `configureSettlement` + {fund} happen; for **配资** the
-///             short window simply **expires** (record-only, no later settlement).
+///         Warrants are a *rights-offering-style* entitlement whose per-account amount is fixed
+///         at a **record-date snapshot** and published as a Merkle root. There is **no on-chain
+///         option exercise** and **no separate "register" step** — the root already encodes every
+///         eligible holder and amount, and it is immutable, so a single {claim} does it all:
+///         verify the proof, record the account's amount on-chain (`warrant[programId][account]`,
+///         queryable), and settle it in the settlement asset (e.g. USDC "U").
 ///
-///         One contract manages many programs, keyed by `programId`. A per-program
-///         `deferredSettlement` flag distinguishes a general warrant (`true`, later settlement
-///         allowed) from 配资 (`false`, expires at the deadline).
+///         If settlement is not ready yet (`settlementToken` unset or under-funded), {claim}
+///         reverts so the holder simply retries once the operator has `configureSettlement` +
+///         {fund} — the proof stays valid and the Merkle index is not consumed. So there is no
+///         need to "record now, settle later".
 ///
-///         Merkle leaf = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount)))).
-///         Rates are per {RATE_SCALE} (1e18) of warrant raw.
+///         **配资 (leverage)** reuses this contract only as an on-chain **record anchor**: the
+///         operator `createProgram`s the credit-line snapshot root and nobody claims — the actual
+///         leverage is used / settled elsewhere. Such a program simply keeps `settlementToken`
+///         zero, is never funded and never claimed.
+///
+///         One contract manages many programs, keyed by `programId`. Merkle leaf =
+///         keccak256(bytes.concat(keccak256(abi.encode(index, account, amount)))). Rates are per
+///         {RATE_SCALE} (1e18) of warrant raw.
 contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using BitMaps for BitMaps.BitMap;
@@ -39,31 +43,27 @@ contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
 
     struct Program {
         bytes32 merkleRoot; // record-date snapshot: leaf(index, account, amount)
-        uint64 deadline; // registration (claim) window upper bound
-        bool deferredSettlement; // true = general warrant (settle later); false = 配资 (expire at deadline)
-        address settlementToken; // convertible asset (e.g. USDC); zero = not yet convertible
+        address settlementToken; // convertible asset (e.g. USDC); zero = not-yet-convertible / 配资 record-only
         uint256 settleRate; // settlement raw per RATE_SCALE of warrant
+        uint64 deadline; // claim window upper bound (short for 配资, long for a general warrant)
         bool exists;
     }
 
     mapping(uint256 => Program) public programs;
-    /// @notice programId => account => warrant amount recorded (allocation claimed).
-    mapping(uint256 => mapping(address => uint256)) public recorded;
-    /// @notice programId => account => warrant amount already settled (paid out in the asset).
-    mapping(uint256 => mapping(address => uint256)) public settled;
+    /// @notice programId => account => warrant amount claimed (persistent, on-chain queryable).
+    mapping(uint256 => mapping(address => uint256)) public warrant;
     /// @notice programId => settlement asset still reserved to back settlements.
     mapping(uint256 => uint256) public settleReserve;
 
     mapping(uint256 => BitMaps.BitMap) private _claimed; // programId => merkle index bitmap
-    mapping(uint256 => uint256) public totalRecorded; // programId => Σ recorded (warrant units)
-    mapping(uint256 => uint256) public totalSettled; // programId => Σ settled (warrant units)
     uint256 public programCount;
 
-    event ProgramCreated(uint256 indexed programId, bytes32 merkleRoot, uint64 deadline, bool deferredSettlement);
+    event ProgramCreated(
+        uint256 indexed programId, bytes32 merkleRoot, address settlementToken, uint256 settleRate, uint64 deadline
+    );
     event SettlementConfigured(uint256 indexed programId, address token, uint256 rate);
     event Funded(uint256 indexed programId, address indexed from, uint256 amount);
-    event WarrantClaimed(uint256 indexed programId, uint256 index, address indexed account, uint256 amount);
-    event WarrantSettled(uint256 indexed programId, address indexed account, uint256 warrantAmount, uint256 assetOut);
+    event Claimed(uint256 indexed programId, uint256 index, address indexed account, uint256 amount, uint256 assetOut);
     event Swept(uint256 indexed programId, address indexed to, uint256 amount);
 
     error ZeroAddress();
@@ -74,8 +74,7 @@ contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
     error ClaimStillOpen();
     error AlreadyClaimed();
     error InvalidProof();
-    error NoSettlementToken();
-    error NotDeferred();
+    error NotConvertibleYet();
     error NothingToSettle();
     error InsufficientReserved();
     error SelfGrantNotAllowed();
@@ -89,30 +88,29 @@ contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
 
     // ── program lifecycle ─────────────────────────────────────────────────────
 
-    /// @notice Register a warrant / 配资 program. Admin-only. `settlementToken` may be zero
-    ///         (not-yet-convertible); if non-zero, `settleRate` must be non-zero.
-    function createProgram(
-        bytes32 merkleRoot,
-        uint64 deadline,
-        bool deferredSettlement,
-        address settlementToken,
-        uint256 settleRate
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256 programId) {
+    /// @notice Register a program. Admin-only. `settlementToken` may be zero — for a general
+    ///         warrant whose milestone hasn't resolved yet (set later via {configureSettlement}),
+    ///         or for a 配资 record whose root is anchored on-chain but never settled here. A
+    ///         non-zero `settlementToken` requires a non-zero `settleRate`.
+    function createProgram(bytes32 merkleRoot, address settlementToken, uint256 settleRate, uint64 deadline)
+        external
+        onlyRole(DEFAULT_ADMIN_ROLE)
+        returns (uint256 programId)
+    {
         if (settlementToken != address(0) && settleRate == 0) revert BadTerms();
         programId = programCount++;
         programs[programId] = Program({
             merkleRoot: merkleRoot,
-            deadline: deadline,
-            deferredSettlement: deferredSettlement,
             settlementToken: settlementToken,
             settleRate: settleRate,
+            deadline: deadline,
             exists: true
         });
-        emit ProgramCreated(programId, merkleRoot, deadline, deferredSettlement);
+        emit ProgramCreated(programId, merkleRoot, settlementToken, settleRate, deadline);
     }
 
-    /// @notice Set / update the convertible settlement asset for a program (e.g. once a milestone
-    ///         resolves). Admin-only.
+    /// @notice Set / update the convertible settlement asset (e.g. once a milestone resolves).
+    ///         Admin-only.
     function configureSettlement(uint256 programId, address token, uint256 rate)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
@@ -125,27 +123,36 @@ contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
         emit SettlementConfigured(programId, token, rate);
     }
 
-    /// @notice Fund + reserve settlement asset for a program. OPS-only; caller must `approve`
-    ///         the registry for `amount` of the program's `settlementToken` first.
+    /// @notice Fund + reserve settlement asset for a program. OPS-only; caller must `approve` the
+    ///         registry for `amount` of the program's `settlementToken` first.
     function fund(uint256 programId, uint256 amount) external onlyRole(OPS_ROLE) nonReentrant {
         Program storage p = programs[programId];
         if (!p.exists) revert UnknownProgram();
-        if (p.settlementToken == address(0)) revert NoSettlementToken();
+        if (p.settlementToken == address(0)) revert NotConvertibleYet();
         if (amount == 0) revert ZeroAmount();
         settleReserve[programId] += amount;
         IERC20(p.settlementToken).safeTransferFrom(msg.sender, address(this), amount);
         emit Funded(programId, msg.sender, amount);
     }
 
-    // ── claim / settle ──────────────────────────────────────────────────────────
+    // ── views ─────────────────────────────────────────────────────────────────
 
     function isClaimed(uint256 programId, uint256 index) external view returns (bool) {
         return _claimed[programId].get(index);
     }
 
-    /// @notice Record `account`'s snapshot warrant allocation (and settle immediately if the
-    ///         program is already convertible + funded). Anyone may submit a valid proof on an
-    ///         account's behalf; the record / settlement always accrues to `account`.
+    /// @notice Settlement asset paid for claiming `amount` warrants (0 if not yet convertible).
+    function previewClaim(uint256 programId, uint256 amount) external view returns (uint256) {
+        uint256 rate = programs[programId].settleRate;
+        return rate == 0 ? 0 : Math.mulDiv(amount, rate, RATE_SCALE);
+    }
+
+    // ── claim / sweep ───────────────────────────────────────────────────────────
+
+    /// @notice Verify `account`'s snapshot allocation and settle it in the settlement asset, in
+    ///         one call. Anyone may submit a valid proof on an account's behalf; the record /
+    ///         payout always accrues to `account`. Reverts (leaving the index unconsumed) if the
+    ///         program is not yet convertible or under-funded — retry once ready.
     function claim(uint256 programId, uint256 index, address account, uint256 amount, bytes32[] calldata proof)
         external
         nonReentrant
@@ -158,65 +165,36 @@ contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
         bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
         if (!MerkleProof.verify(proof, p.merkleRoot, leaf)) revert InvalidProof();
 
+        if (p.settlementToken == address(0)) revert NotConvertibleYet();
+        uint256 out = Math.mulDiv(amount, p.settleRate, RATE_SCALE);
+        if (out == 0) revert NothingToSettle();
+        uint256 reserve = settleReserve[programId];
+        if (reserve < out) revert InsufficientReserved();
+
+        // effects
         _claimed[programId].set(index);
-        recorded[programId][account] += amount;
-        totalRecorded[programId] += amount;
-        emit WarrantClaimed(programId, index, account, amount);
+        warrant[programId][account] += amount; // on-chain queryable record
+        settleReserve[programId] = reserve - out;
 
-        // Convertible now → settle in the same call.
-        if (p.settlementToken != address(0) && p.settleRate != 0) {
-            _settle(programId, account, amount);
-        }
-    }
-
-    /// @notice Settle a general warrant's recorded-but-unsettled allocation once the asset is
-    ///         ready (deferred path). Reverts for 配资 (`deferredSettlement == false`), whose
-    ///         unsettled records simply expire.
-    function claimSettlement(uint256 programId) external nonReentrant {
-        Program storage p = programs[programId];
-        if (!p.exists) revert UnknownProgram();
-        if (!p.deferredSettlement) revert NotDeferred();
-        if (p.settlementToken == address(0)) revert NoSettlementToken();
-        uint256 owed = recorded[programId][msg.sender] - settled[programId][msg.sender];
-        if (owed == 0) revert NothingToSettle();
-        _settle(programId, msg.sender, owed);
-    }
-
-    function _settle(uint256 programId, address account, uint256 warrantAmount) private {
-        Program storage p = programs[programId];
-        uint256 out = Math.mulDiv(warrantAmount, p.settleRate, RATE_SCALE);
-        if (out == 0) return;
-        uint256 r = settleReserve[programId];
-        if (r < out) revert InsufficientReserved();
-        settleReserve[programId] = r - out;
-        settled[programId][account] += warrantAmount;
-        totalSettled[programId] += warrantAmount;
+        // interaction
         IERC20(p.settlementToken).safeTransfer(account, out);
-        emit WarrantSettled(programId, account, warrantAmount, out);
+        emit Claimed(programId, index, account, amount, out);
     }
 
-    /// @notice After the deadline, sweep the genuinely-excess settlement reserve to custody.
-    ///         For 配资 the unsettled records have expired, so the whole reserve is swept; for a
-    ///         general warrant the reserve backing outstanding (recorded-but-unsettled)
-    ///         allocations is retained so deferred {claimSettlement} stays honoured.
-    function sweepUnsettled(uint256 programId, address to) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+    /// @notice After the deadline, sweep the program's remaining (unclaimed) settlement reserve to
+    ///         a custody address. Deadline-gated; since every claim settles immediately, whatever
+    ///         is left is exactly the unclaimed holders' share.
+    function sweepUnclaimed(uint256 programId, address to) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         Program storage p = programs[programId];
         if (!p.exists) revert UnknownProgram();
         if (block.timestamp <= p.deadline) revert ClaimStillOpen();
         if (to == address(0)) revert ZeroAddress();
-
         uint256 reserve = settleReserve[programId];
-        uint256 sweepable = reserve;
-        if (p.deferredSettlement && p.settleRate != 0) {
-            uint256 outstanding = totalRecorded[programId] - totalSettled[programId];
-            uint256 owedAsset = Math.mulDiv(outstanding, p.settleRate, RATE_SCALE);
-            sweepable = reserve > owedAsset ? reserve - owedAsset : 0;
+        if (reserve != 0) {
+            settleReserve[programId] = 0;
+            IERC20(p.settlementToken).safeTransfer(to, reserve);
         }
-        if (sweepable != 0) {
-            settleReserve[programId] = reserve - sweepable;
-            IERC20(p.settlementToken).safeTransfer(to, sweepable);
-        }
-        emit Swept(programId, to, sweepable);
+        emit Swept(programId, to, reserve);
     }
 
     // ── role guards (repo convention) ───────────────────────────────────────────

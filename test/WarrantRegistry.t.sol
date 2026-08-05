@@ -5,8 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {WarrantRegistry} from "../src/privatization/WarrantRegistry.sol";
 import {MockUSD} from "./mocks/MockUSD.sol";
 
-/// @notice Tests for WarrantRegistry: snapshot + Merkle "record + settle", program-ified, with a
-///         deferredSettlement flag distinguishing a general warrant from 配资.
+/// @notice Tests for WarrantRegistry: snapshot + Merkle, single-step "claim = record + settle".
+///         配资 reuses the contract as a record anchor only (createProgram, never claimed).
 contract WarrantRegistryTest is Test {
     WarrantRegistry internal reg;
     MockUSD internal usd;
@@ -53,101 +53,65 @@ contract WarrantRegistryTest is Test {
         vm.stopPrank();
     }
 
-    // ── general warrant: immediate settlement at claim ──────────────────────────
+    // ── warrant: single-step claim = record + settle ────────────────────────────
 
-    function test_warrant_immediateSettleAtClaim() public {
+    function test_claim_recordsAndSettles() public {
         vm.prank(admin);
-        uint256 id = reg.createProgram(_root(), uint64(block.timestamp + 7 days), true, address(usd), 2e6); // 2 USD / warrant
+        uint256 id = reg.createProgram(_root(), address(usd), 2e6, uint64(block.timestamp + 7 days)); // 2 USD / warrant
         _fund(id, 300e6);
 
+        assertEq(reg.previewClaim(id, 100 ether), 200e6);
+
         vm.prank(alice);
         reg.claim(id, 0, alice, 100 ether, _proofAlice());
 
-        assertEq(reg.recorded(id, alice), 100 ether, "recorded");
-        assertEq(reg.settled(id, alice), 100 ether, "settled immediately");
-        assertEq(usd.balanceOf(alice), 200e6, "paid 100*2 USD");
+        assertEq(reg.warrant(id, alice), 100 ether, "on-chain queryable warrant amount");
+        assertEq(usd.balanceOf(alice), 200e6, "settled in U");
         assertEq(reg.settleReserve(id), 100e6, "reserve drawn down");
+        assertTrue(reg.isClaimed(id, 0));
     }
 
-    // ── general warrant: deferred — record now, settle later ────────────────────
+    // ── not-convertible-yet → revert → configure + fund → retry succeeds ────────
 
-    function test_warrant_deferredThenSettle() public {
+    function test_claim_notConvertibleYet_thenRetry() public {
         vm.prank(admin);
-        uint256 id = reg.createProgram(_root(), uint64(block.timestamp + 30 days), true, address(0), 0); // not convertible yet
+        uint256 id = reg.createProgram(_root(), address(0), 0, uint64(block.timestamp + 30 days)); // settlement unknown
 
         vm.prank(alice);
+        vm.expectRevert(WarrantRegistry.NotConvertibleYet.selector);
         reg.claim(id, 0, alice, 100 ether, _proofAlice());
-        assertEq(reg.recorded(id, alice), 100 ether);
-        assertEq(reg.settled(id, alice), 0, "only recorded");
-        assertEq(usd.balanceOf(alice), 0);
+        assertFalse(reg.isClaimed(id, 0), "index not consumed on failed claim");
 
-        // Milestone resolves: configure + fund, then holder settles.
+        // Milestone resolves.
         vm.prank(admin);
         reg.configureSettlement(id, address(usd), 2e6);
         _fund(id, 200e6);
 
         vm.prank(alice);
-        reg.claimSettlement(id);
-        assertEq(reg.settled(id, alice), 100 ether);
+        reg.claim(id, 0, alice, 100 ether, _proofAlice()); // same proof, now settles
+        assertEq(reg.warrant(id, alice), 100 ether);
         assertEq(usd.balanceOf(alice), 200e6);
     }
 
-    // ── 配资: record-only, expires; unclaimed reserve fully sweepable ────────────
-
-    function test_leverage_expiresAndSweeps() public {
+    function test_claim_insufficientReservedReverts_thenRetry() public {
         vm.prank(admin);
-        uint256 id = reg.createProgram(_root(), uint64(block.timestamp + 1 days), false, address(usd), 2e6); // 配资
-        _fund(id, 300e6); // covers alice(100) + bob(50)
+        uint256 id = reg.createProgram(_root(), address(usd), 2e6, uint64(block.timestamp + 7 days));
+        _fund(id, 100e6); // alice needs 200e6
 
         vm.prank(alice);
-        reg.claim(id, 0, alice, 100 ether, _proofAlice()); // settles immediately
-        assertEq(usd.balanceOf(alice), 200e6);
-        assertEq(reg.settleReserve(id), 100e6); // bob's untouched portion
+        vm.expectRevert(WarrantRegistry.InsufficientReserved.selector);
+        reg.claim(id, 0, alice, 100 ether, _proofAlice());
+        assertFalse(reg.isClaimed(id, 0));
 
-        // 配资 has no deferred settlement path.
-        vm.prank(bob);
-        vm.expectRevert(WarrantRegistry.NotDeferred.selector);
-        reg.claimSettlement(id);
-
-        // After deadline bob's unclaimed allocation expires → full remaining reserve sweeps.
-        vm.warp(block.timestamp + 2 days);
-        vm.prank(admin);
-        reg.sweepUnsettled(id, custody);
-        assertEq(usd.balanceOf(custody), 100e6);
-        assertEq(reg.settleReserve(id), 0);
-    }
-
-    // ── deferred sweep retains outstanding (recorded-but-unsettled) ─────────────
-
-    function test_deferredSweep_retainsOutstanding() public {
-        vm.prank(admin);
-        uint256 id = reg.createProgram(_root(), uint64(block.timestamp + 1 days), true, address(0), 0);
-
+        _fund(id, 100e6); // top up
         vm.prank(alice);
-        reg.claim(id, 0, alice, 100 ether, _proofAlice()); // recorded only
-
-        vm.prank(admin);
-        reg.configureSettlement(id, address(usd), 2e6);
-        _fund(id, 300e6); // overfunded; alice owed 200e6
-
-        vm.warp(block.timestamp + 2 days);
-        vm.prank(admin);
-        reg.sweepUnsettled(id, custody); // must retain alice's 200e6
-
-        assertEq(usd.balanceOf(custody), 100e6, "only the excess swept");
-        assertEq(reg.settleReserve(id), 200e6, "outstanding retained");
-
-        // alice can still settle after the deadline (deferred).
-        vm.prank(alice);
-        reg.claimSettlement(id);
+        reg.claim(id, 0, alice, 100 ether, _proofAlice());
         assertEq(usd.balanceOf(alice), 200e6);
     }
-
-    // ── guards ───────────────────────────────────────────────────────────────
 
     function test_claim_doubleClaimReverts() public {
         vm.prank(admin);
-        uint256 id = reg.createProgram(_root(), uint64(block.timestamp + 7 days), true, address(usd), 2e6);
+        uint256 id = reg.createProgram(_root(), address(usd), 2e6, uint64(block.timestamp + 7 days));
         _fund(id, 300e6);
 
         vm.prank(alice);
@@ -159,11 +123,55 @@ contract WarrantRegistryTest is Test {
 
     function test_claim_invalidProofReverts() public {
         vm.prank(admin);
-        uint256 id = reg.createProgram(_root(), uint64(block.timestamp + 7 days), true, address(usd), 2e6);
+        uint256 id = reg.createProgram(_root(), address(usd), 2e6, uint64(block.timestamp + 7 days));
         _fund(id, 300e6);
 
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.InvalidProof.selector);
-        reg.claim(id, 0, alice, 999 ether, _proofAlice()); // wrong amount
+        reg.claim(id, 0, alice, 999 ether, _proofAlice());
+    }
+
+    function test_claim_afterDeadlineReverts_and_sweep() public {
+        vm.prank(admin);
+        uint256 id = reg.createProgram(_root(), address(usd), 2e6, uint64(block.timestamp + 1 days));
+        _fund(id, 300e6);
+
+        // alice claims within window; bob never does.
+        vm.prank(alice);
+        reg.claim(id, 0, alice, 100 ether, _proofAlice());
+        assertEq(reg.settleReserve(id), 100e6);
+
+        vm.prank(admin);
+        vm.expectRevert(WarrantRegistry.ClaimStillOpen.selector);
+        reg.sweepUnclaimed(id, custody);
+
+        vm.warp(block.timestamp + 2 days);
+        bytes32[] memory proofBob = new bytes32[](1);
+        proofBob[0] = _leaf(0, alice, 100 ether);
+        vm.prank(bob);
+        vm.expectRevert(WarrantRegistry.ClaimClosed.selector);
+        reg.claim(id, 1, bob, 50 ether, proofBob);
+
+        vm.prank(admin);
+        reg.sweepUnclaimed(id, custody);
+        assertEq(usd.balanceOf(custody), 100e6, "bob's unclaimed share swept");
+        assertEq(reg.settleReserve(id), 0);
+    }
+
+    // ── 配资: record anchor only — createProgram, no claim/fund ──────────────────
+
+    function test_leverage_recordAnchorOnly() public {
+        vm.prank(admin);
+        uint256 id = reg.createProgram(_root(), address(0), 0, uint64(block.timestamp + 1 days)); // settlementToken 0
+
+        (bytes32 root, address settlementToken,,,) = reg.programs(id);
+        assertEq(root, _root(), "credit-line root anchored on-chain");
+        assertEq(settlementToken, address(0), "no settlement - record only");
+        assertEq(reg.warrant(id, alice), 0, "nobody claims leverage record");
+
+        // No claim path: claiming reverts (not convertible), consistent with 配资 having no claim.
+        vm.prank(alice);
+        vm.expectRevert(WarrantRegistry.NotConvertibleYet.selector);
+        reg.claim(id, 0, alice, 100 ether, _proofAlice());
     }
 }
