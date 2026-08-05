@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.24;
 
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {AccessControlEnumerableUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -30,6 +32,10 @@ import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 ///         that CVR-mStock — the deferred settlement of the original event reuses this same
 ///         machinery, no bespoke contract.
 ///
+///         Upgradeable: deployed behind a TransparentUpgradeableProxy (like {TokenIssuer});
+///         upgrade authority lives on the auto-created ProxyAdmin, separate from
+///         DEFAULT_ADMIN_ROLE (day-to-day ops).
+///
 ///         Setup per program (operator):
 ///           1. `setMintAllowed(false)` on the old token (freeze supply)
 ///           2. grant this registry ISSUER_ROLE on that old token (to burn surrendered balances)
@@ -39,7 +45,7 @@ import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 ///         Rates are per {RATE_SCALE} (1e18) of old-token raw; the operator bakes any
 ///         UI-multiplier conversion into the rate (the old token's multiplier is frozen at
 ///         delisting). Fractional remainders truncate (round down).
-contract PrivatizationRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
+contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
@@ -82,8 +88,15 @@ contract PrivatizationRegistry is AccessControlEnumerable, ReentrancyGuardTransi
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
 
-    constructor(address admin) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address admin) external initializer {
         if (admin == address(0)) revert ZeroAddress();
+        __AccessControlEnumerable_init();
+        // ReentrancyGuardTransient (EIP-1153 TSTORE) uses transient storage — no initializer needed.
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
     }
@@ -197,7 +210,11 @@ contract PrivatizationRegistry is AccessControlEnumerable, ReentrancyGuardTransi
     // ── role guards (repo convention) ───────────────────────────────────────────
 
     /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
-    function grantRole(bytes32 role, address account) public virtual override(AccessControl, IAccessControl) {
+    function grantRole(bytes32 role, address account)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
     }
@@ -206,11 +223,15 @@ contract PrivatizationRegistry is AccessControlEnumerable, ReentrancyGuardTransi
     function renounceRole(bytes32 role, address callerConfirmation)
         public
         virtual
-        override(AccessControl, IAccessControl)
+        override(AccessControlUpgradeable, IAccessControl)
     {
         if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
             revert CannotRenounceLastAdmin();
         }
         super.renounceRole(role, callerConfirmation);
     }
+
+    /// @dev Storage gap for upgrade-safe additions. 4 vars (programs, _legs, reserved,
+    ///      programCount) + 46 = 50 slots reserved.
+    uint256[46] private __gap;
 }

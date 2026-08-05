@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {WarrantRegistry} from "../src/privatization/WarrantRegistry.sol";
 import {MockUSD} from "./mocks/MockUSD.sol";
 
@@ -19,7 +20,13 @@ contract WarrantRegistryTest is Test {
 
     function setUp() public {
         usd = new MockUSD();
-        reg = new WarrantRegistry(admin);
+        reg = WarrantRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(new WarrantRegistry()), abi.encodeCall(WarrantRegistry.initialize, (admin))
+                )
+            )
+        );
         bytes32 opsRole = reg.OPS_ROLE();
         vm.prank(admin);
         reg.grantRole(opsRole, ops);

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
@@ -39,7 +40,14 @@ contract PrivatizationRegistryTest is Test {
         pauseManager = new PauseRegistry(admin);
         factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
         usdc = new MockUSD();
-        registry = new PrivatizationRegistry(admin);
+        registry = PrivatizationRegistry(
+            address(
+                new ERC1967Proxy(
+                    address(new PrivatizationRegistry()),
+                    abi.encodeCall(PrivatizationRegistry.initialize, (admin))
+                )
+            )
+        );
 
         address[] memory issuers = new address[](1);
         issuers[0] = address(this);

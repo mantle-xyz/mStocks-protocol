@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.24;
 
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {AccessControlEnumerableUpgradeable} from
+    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {MerkleProof} from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
@@ -31,10 +33,12 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 ///         leverage is used / settled elsewhere. Such a program simply keeps `settlementToken`
 ///         zero, is never funded and never claimed.
 ///
+///         Upgradeable: deployed behind a TransparentUpgradeableProxy (like {TokenIssuer}).
+///
 ///         One contract manages many programs, keyed by `programId`. Merkle leaf =
 ///         keccak256(bytes.concat(keccak256(abi.encode(index, account, amount)))). Rates are per
 ///         {RATE_SCALE} (1e18) of warrant raw.
-contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
+contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using BitMaps for BitMaps.BitMap;
 
@@ -80,8 +84,14 @@ contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
 
-    constructor(address admin) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address admin) external initializer {
         if (admin == address(0)) revert ZeroAddress();
+        __AccessControlEnumerable_init();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
     }
@@ -199,7 +209,11 @@ contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
 
     // ── role guards (repo convention) ───────────────────────────────────────────
 
-    function grantRole(bytes32 role, address account) public virtual override(AccessControl, IAccessControl) {
+    function grantRole(bytes32 role, address account)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
     }
@@ -207,11 +221,15 @@ contract WarrantRegistry is AccessControlEnumerable, ReentrancyGuardTransient {
     function renounceRole(bytes32 role, address callerConfirmation)
         public
         virtual
-        override(AccessControl, IAccessControl)
+        override(AccessControlUpgradeable, IAccessControl)
     {
         if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
             revert CannotRenounceLastAdmin();
         }
         super.renounceRole(role, callerConfirmation);
     }
+
+    /// @dev Storage gap for upgrade-safe additions. 5 vars (programs, warrant, settleReserve,
+    ///      _claimed, programCount) + 45 = 50 slots reserved.
+    uint256[45] private __gap;
 }
