@@ -34,15 +34,16 @@ contract PrivatizationRegistryOps is Script {
         console.log("admin (DEFAULT_ADMIN_ROLE): ", admin);
     }
 
-    /// @notice Step 2 — freeze the old token's supply and grant the registry ISSUER_ROLE on it
-    ///         (so it can burn surrendered balances). Broadcaster must be the OLD token admin.
+    /// @notice Step 2 — freeze the old token's supply and grant the registry BURN_ROLE on it
+    ///         (burn-only: it can burn surrendered balances but never mint). Broadcaster must be
+    ///         the OLD token admin.
     function wire(address oldToken, address registry) external {
-        bytes32 issuerRole = ScaledToken(oldToken).ISSUER_ROLE();
+        bytes32 burnRole = ScaledToken(oldToken).BURN_ROLE();
         vm.startBroadcast();
-        ScaledToken(oldToken).grantRole(issuerRole, registry);
+        ScaledToken(oldToken).grantRole(burnRole, registry);
         ScaledToken(oldToken).setMintAllowed(false);
         vm.stopBroadcast();
-        console.log("Granted ISSUER_ROLE to registry + froze old supply:", oldToken);
+        console.log("Granted BURN_ROLE to registry + froze old supply:", oldToken);
     }
 
     /// @notice Step 3 — register a delisting program from parallel reward-leg arrays

@@ -1031,4 +1031,63 @@ contract ScaledTokenTest is Test {
         pauseManager.renounceRole(opsRole, pauseOps);
         assertFalse(pauseManager.hasRole(opsRole, pauseOps));
     }
+
+    // ── granular MINT_ROLE / BURN_ROLE (additive; ISSUER_ROLE unchanged) ─────────
+
+    function test_MintRole_canMintNotBurn() public {
+        address minter = address(new IssuerStub());
+        bytes32 mintRole = token.MINT_ROLE();
+        vm.prank(admin);
+        token.grantRole(mintRole, minter);
+
+        vm.prank(minter);
+        token.mint(100 ether);
+        assertEq(token.balanceOf(minter), 100 ether);
+
+        vm.prank(minter);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
+        token.burn(1 ether);
+    }
+
+    function test_BurnRole_canBurnNotMint() public {
+        address burner = address(new IssuerStub());
+        bytes32 burnRole = token.BURN_ROLE();
+        vm.prank(admin);
+        token.grantRole(burnRole, burner);
+
+        // Seed the burner with tokens via the issuer.
+        vm.prank(issuer);
+        token.mint(100 ether);
+        vm.prank(issuer);
+        token.transfer(burner, 100 ether);
+
+        vm.prank(burner);
+        token.burn(40 ether);
+        assertEq(token.balanceOf(burner), 60 ether);
+
+        vm.prank(burner);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
+        token.mint(1 ether);
+    }
+
+    function test_IssuerRole_stillMintsAndBurns() public {
+        // Regression: the combined ISSUER_ROLE keeps doing both.
+        vm.prank(issuer);
+        token.mint(100 ether);
+        vm.prank(issuer);
+        token.burn(30 ether);
+        assertEq(token.balanceOf(issuer), 70 ether);
+    }
+
+    function test_MintBurnRole_rejectEOAGrant() public {
+        bytes32 mintRole = token.MINT_ROLE();
+        bytes32 burnRole = token.BURN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(ScaledToken.IssuerNotContract.selector);
+        token.grantRole(mintRole, user1); // EOA
+
+        vm.prank(admin);
+        vm.expectRevert(ScaledToken.IssuerNotContract.selector);
+        token.grantRole(burnRole, stranger); // EOA
+    }
 }

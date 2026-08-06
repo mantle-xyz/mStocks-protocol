@@ -24,6 +24,12 @@ contract ScaledToken is
     PauseGuardUpgradeable
 {
     bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
+    /// @notice Granular capabilities. ISSUER_ROLE remains the combined role (mint AND burn);
+    ///         MINT_ROLE / BURN_ROLE grant only one side — e.g. a privatization registry that must
+    ///         burn surrendered tokens but must never be able to mint. Additive: existing
+    ///         ISSUER_ROLE holders are unaffected.
+    bytes32 public constant MINT_ROLE = keccak256("MINT_ROLE");
+    bytes32 public constant BURN_ROLE = keccak256("BURN_ROLE");
     bytes32 public constant MULTIPLIER_SCHEDULER_ROLE = keccak256("MULTIPLIER_SCHEDULER_ROLE");
 
     /// @notice Minimum window between scheduling a multiplier change and its effective time.
@@ -67,13 +73,14 @@ contract ScaledToken is
     ///      horizon, otherwise no multiplier change could ever be scheduled.
     error InvalidNoticePeriod();
 
-    modifier onlyIssuer() {
-        _requireIssuer();
+    modifier onlyMinter() {
+        if (!hasRole(ISSUER_ROLE, msg.sender) && !hasRole(MINT_ROLE, msg.sender)) revert UnauthorizedRole();
         _;
     }
 
-    function _requireIssuer() private view {
-        if (!hasRole(ISSUER_ROLE, msg.sender)) revert UnauthorizedRole();
+    modifier onlyBurner() {
+        if (!hasRole(ISSUER_ROLE, msg.sender) && !hasRole(BURN_ROLE, msg.sender)) revert UnauthorizedRole();
+        _;
     }
 
     function _requireMultiplierScheduler() private view {
@@ -131,6 +138,8 @@ contract ScaledToken is
         __PauseGuard_init_unchained(pauseManager_);
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _setRoleAdmin(ISSUER_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(MINT_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(BURN_ROLE, DEFAULT_ADMIN_ROLE);
         _setRoleAdmin(MULTIPLIER_SCHEDULER_ROLE, DEFAULT_ADMIN_ROLE);
         for (uint256 i = 0; i < issuers_.length; ++i) {
             if (issuers_[i] == address(0)) revert ZeroAddress();
@@ -220,15 +229,15 @@ contract ScaledToken is
         emit BurnAllowedSet(allowed);
     }
 
-    /// @notice Mints `amount` to the caller. Requires ISSUER_ROLE and mintAllowed.
-    function mint(uint256 amount) external onlyIssuer returns (bool) {
+    /// @notice Mints `amount` to the caller. Requires ISSUER_ROLE or MINT_ROLE, and mintAllowed.
+    function mint(uint256 amount) external onlyMinter returns (bool) {
         if (!mintAllowed) revert MintNotAllowed();
         _mint(msg.sender, amount);
         return true;
     }
 
-    /// @notice Burns `amount` from the caller. Requires ISSUER_ROLE and burnAllowed.
-    function burn(uint256 amount) external onlyIssuer returns (bool) {
+    /// @notice Burns `amount` from the caller. Requires ISSUER_ROLE or BURN_ROLE, and burnAllowed.
+    function burn(uint256 amount) external onlyBurner returns (bool) {
         if (!burnAllowed) revert BurnNotAllowed();
         _burn(msg.sender, amount);
         return true;
@@ -322,15 +331,18 @@ contract ScaledToken is
     }
 
     /// @dev Covers both the public grantRole flow and the initializer path (initial issuers
-    ///      are seeded via internal _grantRole, bypassing the public override). Enforces
-    ///      that ISSUER_ROLE may only be granted to a contract.
+    ///      are seeded via internal _grantRole, bypassing the public override). Enforces that any
+    ///      balance-mutating role (ISSUER_ROLE / MINT_ROLE / BURN_ROLE) may only be granted to a
+    ///      contract with its own access control — never a plain EOA.
     function _grantRole(bytes32 role, address account)
         internal
         virtual
         override(AccessControlEnumerableUpgradeable)
         returns (bool)
     {
-        if (role == ISSUER_ROLE && account.code.length == 0) revert IssuerNotContract();
+        if (
+            (role == ISSUER_ROLE || role == MINT_ROLE || role == BURN_ROLE) && account.code.length == 0
+        ) revert IssuerNotContract();
         return super._grantRole(role, account);
     }
 

@@ -32,7 +32,7 @@ contract PrivatizationRegistryTest is Test {
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
 
-    bytes32 internal ISSUER_ROLE;
+    bytes32 internal BURN_ROLE;
 
     function setUp() public {
         vm.startPrank(admin);
@@ -60,7 +60,7 @@ contract PrivatizationRegistryTest is Test {
         registry.grantRole(registry.OPS_ROLE(), address(this)); // test funds programs
         vm.stopPrank();
 
-        ISSUER_ROLE = oldToken.ISSUER_ROLE();
+        BURN_ROLE = oldToken.BURN_ROLE();
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -82,11 +82,13 @@ contract PrivatizationRegistryTest is Test {
         registry.fund(programId, address(usdc), amount);
     }
 
-    function _grantIssuer(ScaledToken t) internal {
+    /// @dev The registry only ever burns surrendered old tokens, so it gets BURN_ROLE only
+    ///      (least privilege — it cannot mint), plus supply is frozen after seeding.
+    function _grantBurn(ScaledToken t) internal {
         vm.prank(admin);
-        t.grantRole(ISSUER_ROLE, address(registry));
+        t.grantRole(BURN_ROLE, address(registry));
         vm.prank(admin);
-        t.setMintAllowed(false); // freeze after seeding
+        t.setMintAllowed(false);
     }
 
     function _legs3() internal view returns (PrivatizationRegistry.Leg[] memory legs) {
@@ -110,7 +112,7 @@ contract PrivatizationRegistryTest is Test {
 
         vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), _legs3(), uint64(block.timestamp + 7 days));
-        _grantIssuer(oldToken);
+        _grantBurn(oldToken);
         _fundUsd(id, 300e6);
         _fund(id, newToken, 200 ether);
         _fund(id, cvr, 100 ether);
@@ -143,7 +145,7 @@ contract PrivatizationRegistryTest is Test {
         uint256 p0 = registry.createProgram(address(oldToken), legs, uint64(block.timestamp + 7 days));
         uint256 p1 = registry.createProgram(address(newToken), legs, uint64(block.timestamp + 7 days));
         vm.stopPrank();
-        _grantIssuer(oldToken);
+        _grantBurn(oldToken);
 
         _fundUsd(p0, 500e6);
         _fundUsd(p1, 999e6); // sibling program's money
@@ -164,7 +166,7 @@ contract PrivatizationRegistryTest is Test {
         legs[0] = PrivatizationRegistry.Leg(address(usdc), 5e6);
         vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), legs, uint64(block.timestamp + 7 days));
-        _grantIssuer(oldToken);
+        _grantBurn(oldToken);
         _fundUsd(id, 100e6); // underfunded: owed 500e6
 
         vm.startPrank(alice);
@@ -178,7 +180,7 @@ contract PrivatizationRegistryTest is Test {
         _seed(oldToken, bob, 100 ether);
         vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), _legs3(), uint64(block.timestamp + 7 days));
-        _grantIssuer(oldToken);
+        _grantBurn(oldToken);
         _fundUsd(id, 300e6);
         _fund(id, newToken, 200 ether);
         _fund(id, cvr, 100 ether);
@@ -198,7 +200,7 @@ contract PrivatizationRegistryTest is Test {
         legs[0] = PrivatizationRegistry.Leg(address(usdc), 5e6);
         vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), legs, uint64(block.timestamp + 1 days));
-        _grantIssuer(oldToken);
+        _grantBurn(oldToken);
         _fundUsd(id, 500e6);
 
         vm.prank(admin);
@@ -229,7 +231,7 @@ contract PrivatizationRegistryTest is Test {
 
         vm.prank(admin);
         uint256 id = registry.createProgram(address(cvr), legs, uint64(block.timestamp + 7 days));
-        _grantIssuer(cvr); // registry burns the surrendered CVR
+        _grantBurn(cvr); // registry burns the surrendered CVR
         _fundUsd(id, 400e6);
         _fund(id, newToken, 100 ether);
 
