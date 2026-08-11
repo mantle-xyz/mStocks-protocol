@@ -1,0 +1,46 @@
+
+proxyAdmin = "0x0000000000000000000000000000000000000000"
+
+[factory]
+
+finalAdmin = "0x0000000000000000000000000000000000000000"
+
+minMultiplierNotice = 86400
+
+[compliance]
+finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
+opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on ComplianceRegistry  — manage blocklist + sanctions
+
+[pauseManager]
+finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
+opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on PauseRegistry       — pause/unpause tokens
+
+[tokenIssuer]
+finalAdmin = "0x0000000000000000000000000000000000000000"
+opsRole = ["0x0000000000000000000000000000000000000000"]
+approvedRecipients = ["0x0000000000000000000000000000000000000000"]
+
+[token]
+name = "Apple Inc."
+symbol = "AAPL"
+identifier = "US0378331005"
+finalAdmin = "0x0000000000000000000000000000000000000000"
+issuers = []
+multiplierSchedulers = ["0x0000000000000000000000000000000000000000"]
+
+
+# [[tokens]]
+# name = "Tesla Inc."
+# symbol = "TSLA"
+# identifier = "US88160R1014"
+# admin = "0x..."                 # this token's admin (multisig)
+# issuers = []                    # usually empty; grant ISSUER_ROLE later via grantIssuer(...)
+# multiplierSchedulers = ["0x..."]
+#
+# [[tokens]]
+# name = "Amazon.com Inc."
+# symbol = "AMZN"
+# identifier = "US0231351067"
+# admin = "0x..."
+# issuers = []
+# multiplierSchedulers = ["0x..."]
