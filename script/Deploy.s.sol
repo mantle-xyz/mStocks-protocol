@@ -3,8 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {stdToml} from "forge-std/StdToml.sol";
-import {TransparentUpgradeableProxy} from
-    "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
@@ -103,10 +102,7 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    function deployFactory(address compliance, address pauseManager)
-        external
-        returns (ScaledTokenFactory factory)
-    {
+    function deployFactory(address compliance, address pauseManager) external returns (ScaledTokenFactory factory) {
         require(compliance != address(0), "Deploy: compliance is zero");
         require(pauseManager != address(0), "Deploy: pauseManager is zero");
         Config memory cfg = _loadConfig();
@@ -159,23 +155,13 @@ contract Deploy is Script {
     function _deployCompliance(Config memory cfg) internal returns (ComplianceRegistry compliance) {
         compliance = new ComplianceRegistry(_deployAdmin());
         console.log("ComplianceRegistry: ", address(compliance));
-        _grantRoles(
-            address(compliance),
-            compliance.OPS_ROLE(),
-            "OPS_ROLE (ComplianceRegistry)",
-            cfg.complianceOps
-        );
+        _grantRoles(address(compliance), compliance.OPS_ROLE(), "OPS_ROLE (ComplianceRegistry)", cfg.complianceOps);
     }
 
     function _deployPauseManager(Config memory cfg) internal returns (PauseRegistry pauseManager) {
         pauseManager = new PauseRegistry(_deployAdmin());
         console.log("PauseRegistry:      ", address(pauseManager));
-        _grantRoles(
-            address(pauseManager),
-            pauseManager.OPS_ROLE(),
-            "OPS_ROLE (PauseRegistry)",
-            cfg.pauseOps
-        );
+        _grantRoles(address(pauseManager), pauseManager.OPS_ROLE(), "OPS_ROLE (PauseRegistry)", cfg.pauseOps);
     }
 
     function _deployFactory(Config memory cfg, address compliance, address pauseManager)
@@ -184,9 +170,8 @@ contract Deploy is Script {
     {
         // Owner (DEFAULT_ADMIN_ROLE) = deploy admin (broadcaster / Ledger), handed over later.
         // proxyAdmin (beacon owner) = final value from config; no handover needed.
-        factory = new ScaledTokenFactory(
-            compliance, pauseManager, _deployAdmin(), cfg.proxyAdmin, cfg.minMultiplierNotice
-        );
+        factory =
+            new ScaledTokenFactory(compliance, pauseManager, _deployAdmin(), cfg.proxyAdmin, cfg.minMultiplierNotice);
         console.log("Factory:            ", address(factory));
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
@@ -195,27 +180,21 @@ contract Deploy is Script {
     function _deployTokenIssuer(Config memory cfg) internal returns (TokenIssuer issuer) {
         TokenIssuer impl = new TokenIssuer();
         // admin = deploy admin (broadcaster / Ledger), handed over later via TransferAdmin.
-        bytes memory initData =
-            abi.encodeWithSelector(TokenIssuer.initialize.selector, _deployAdmin());
-        issuer = TokenIssuer(payable(address(
-            new TransparentUpgradeableProxy(address(impl), cfg.proxyAdmin, initData)
-        )));
+        bytes memory initData = abi.encodeWithSelector(TokenIssuer.initialize.selector, _deployAdmin());
+        issuer = TokenIssuer(payable(address(new TransparentUpgradeableProxy(address(impl), cfg.proxyAdmin, initData))));
 
         // Auto-created ProxyAdmin address is stored in EIP-1967 admin slot.
-        address tokenIssuerProxyAdmin = address(uint160(uint256(
-            vm.load(address(issuer), 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103)
-        )));
+        address tokenIssuerProxyAdmin = address(
+            uint160(
+                uint256(vm.load(address(issuer), 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103))
+            )
+        );
         console.log("TokenIssuer impl:        ", address(impl));
         console.log("TokenIssuer proxy:       ", address(issuer));
         console.log("TokenIssuer ProxyAdmin:  ", tokenIssuerProxyAdmin);
         console.log("  (owner = cfg.proxyAdmin, sole upgrade authority)");
 
-        _grantRoles(
-            address(issuer),
-            issuer.OPS_ROLE(),
-            "OPS_ROLE (TokenIssuer)",
-            cfg.tokenIssuerOps
-        );
+        _grantRoles(address(issuer), issuer.OPS_ROLE(), "OPS_ROLE (TokenIssuer)", cfg.tokenIssuerOps);
 
         if (cfg.tokenIssuerApprovedRecipients.length > 0) {
             if (!_broadcasterIsAdminOf(address(issuer))) {
@@ -229,10 +208,7 @@ contract Deploy is Script {
         }
     }
 
-    function _deployToken(Config memory cfg, ScaledTokenFactory factory)
-        internal
-        returns (address proxy)
-    {
+    function _deployToken(Config memory cfg, ScaledTokenFactory factory) internal returns (address proxy) {
         if (!_broadcasterIsAdminOf(address(factory))) {
             console.log("Skipping token deploy: broadcaster lacks DEFAULT_ADMIN_ROLE on factory.");
             console.log("Run factory.createToken(...) from the admin instead.");
@@ -243,12 +219,7 @@ contract Deploy is Script {
         // by TransferAdmin. Keeping the broadcaster as admin lets deployTokenIssuer auto-grant
         // ISSUER_ROLE afterwards.
         proxy = factory.createToken(
-            cfg.tokenName,
-            cfg.tokenSymbol,
-            cfg.tokenIdentifier,
-            _deployAdmin(),
-            cfg.issuers,
-            cfg.multiplierSchedulers
+            cfg.tokenName, cfg.tokenSymbol, cfg.tokenIdentifier, _deployAdmin(), cfg.issuers, cfg.multiplierSchedulers
         );
         console.log("Token (proxy):      ", proxy);
     }
@@ -257,12 +228,7 @@ contract Deploy is Script {
     ///      broadcaster does not hold DEFAULT_ADMIN_ROLE on the target (AccessControl would
     ///      otherwise reject the call). On the fresh full-stack path this is always satisfied
     ///      because the contract was just deployed with the broadcaster as admin.
-    function _grantRoles(
-        address target,
-        bytes32 role,
-        string memory roleName,
-        address[] memory grantees
-    ) internal {
+    function _grantRoles(address target, bytes32 role, string memory roleName, address[] memory grantees) internal {
         if (grantees.length == 0) return;
         if (!_broadcasterIsAdminOf(target)) {
             console.log("Skipping role grants for", roleName, "- broadcaster != admin.");
@@ -340,22 +306,14 @@ contract Deploy is Script {
         }
     }
 
-    function _readAddressArrayOr(string memory toml, string memory key)
-        internal
-        view
-        returns (address[] memory)
-    {
+    function _readAddressArrayOr(string memory toml, string memory key) internal view returns (address[] memory) {
         return vm.keyExistsToml(toml, key) ? toml.readAddressArray(key) : new address[](0);
     }
 
     /// @dev Reads a per-section `finalAdmin` (e.g. ".compliance.finalAdmin"), or address(0) when the
     ///      key is absent. Informational for the header only — no fallback; TransferAdmin enforces
     ///      a valid non-zero value at handover time.
-    function _sectionFinalAdmin(string memory toml, string memory key)
-        internal
-        view
-        returns (address admin)
-    {
+    function _sectionFinalAdmin(string memory toml, string memory key) internal view returns (address admin) {
         if (vm.keyExistsToml(toml, key)) admin = toml.readAddress(key);
     }
 

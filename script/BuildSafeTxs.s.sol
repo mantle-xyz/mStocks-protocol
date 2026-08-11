@@ -43,10 +43,7 @@ contract BuildSafeTxs is Script {
             string memory symbol = toml.readString(string.concat(base, ".symbol"));
             string memory identifier = toml.readString(string.concat(base, ".identifier"));
             address admin = toml.readAddress(string.concat(base, ".admin"));
-            require(
-                admin != address(0),
-                string.concat("BuildSafeTxs: tokens[", vm.toString(i), "].admin is zero")
-            );
+            require(admin != address(0), string.concat("BuildSafeTxs: tokens[", vm.toString(i), "].admin is zero"));
             address[] memory issuers = _readAddrArr(toml, string.concat(base, ".issuers"));
             address[] memory schedulers = _readAddrArr(toml, string.concat(base, ".multiplierSchedulers"));
 

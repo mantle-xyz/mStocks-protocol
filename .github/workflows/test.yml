@@ -23,6 +23,10 @@ jobs:
 
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pin the Foundry version so `forge fmt --check` is deterministic and does not
+          # break when a newer `stable` release changes the formatter's style.
+          version: "1.4.1"
 
       - name: Show Forge version
         run: forge --version
