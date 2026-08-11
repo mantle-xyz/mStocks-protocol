@@ -2,11 +2,13 @@
 pragma solidity ^0.8.24;
 
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {AccessControlEnumerableUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import {
+    AccessControlEnumerableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import {ERC20PermitUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import {
+    ERC20PermitUpgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {ERC8056BaseUpgradeable} from "../ERC8056/ERC8056BaseUpgradeable.sol";
@@ -99,7 +101,9 @@ contract ScaledToken is
         address[] memory issuers_,
         address[] memory multiplierSchedulers_
     ) public initializer {
-        __scaledToken_init(name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, multiplierSchedulers_);
+        __scaledToken_init(
+            name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, multiplierSchedulers_
+        );
     }
 
     function __scaledToken_init(
@@ -262,8 +266,7 @@ contract ScaledToken is
     function _setUIMultiplier(uint256 newMultiplier, uint256 effectiveAtTimestamp) internal override {
         require(effectiveAtTimestamp <= block.timestamp + 365 days, "ScaledToken: effective time too far in future");
         require(
-            effectiveAtTimestamp >= block.timestamp + minMultiplierNotice,
-            "ScaledToken: minimum notice period not met"
+            effectiveAtTimestamp >= block.timestamp + minMultiplierNotice, "ScaledToken: minimum notice period not met"
         );
         super._setUIMultiplier(newMultiplier, effectiveAtTimestamp);
     }
@@ -330,7 +333,9 @@ contract ScaledToken is
         override(AccessControlEnumerableUpgradeable)
         returns (bool)
     {
-        if (role == ISSUER_ROLE && account.code.length == 0) revert IssuerNotContract();
+        if (role == ISSUER_ROLE && account.code.length == 0) {
+            revert IssuerNotContract();
+        }
         return super._grantRole(role, account);
     }
 

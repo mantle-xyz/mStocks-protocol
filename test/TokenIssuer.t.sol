@@ -32,9 +32,7 @@ contract TokenIssuerTest is Test {
         pauseManager = new PauseRegistry(admin);
         factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
         address[] memory empty = new address[](0);
-        token = ScaledToken(
-            factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty)
-        );
+        token = ScaledToken(factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty));
 
         TokenIssuer impl = new TokenIssuer();
         bytes memory initData = abi.encodeWithSelector(TokenIssuer.initialize.selector, admin);

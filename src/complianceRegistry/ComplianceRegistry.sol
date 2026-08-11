@@ -150,11 +150,7 @@ contract ComplianceRegistry is IComplianceRegistry, AccessControlEnumerable {
     }
 
     /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
-    function grantRole(bytes32 role, address account)
-        public
-        virtual
-        override(AccessControl, IAccessControl)
-    {
+    function grantRole(bytes32 role, address account) public virtual override(AccessControl, IAccessControl) {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
     }

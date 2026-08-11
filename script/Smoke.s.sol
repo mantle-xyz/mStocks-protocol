@@ -53,10 +53,8 @@ contract Smoke is Script {
 
     bytes32 internal constant OPS_ROLE = keccak256("OPS_ROLE");
     // EIP-1967 slots: beacon (BeaconProxy) and admin (TransparentUpgradeableProxy's ProxyAdmin).
-    bytes32 internal constant _EIP1967_BEACON_SLOT =
-        0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50;
-    bytes32 internal constant _EIP1967_ADMIN_SLOT =
-        0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+    bytes32 internal constant _EIP1967_BEACON_SLOT = 0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50;
+    bytes32 internal constant _EIP1967_ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
 
     /// @dev Cached TokenIssuer for the current forge script invocation. Within `runAll`,
     ///      resolved once on the first `_setupOps` call and reused.
@@ -146,10 +144,7 @@ contract Smoke is Script {
         issuer.mint(address(token), address(issuer), TEST_AMOUNT);
 
         require(token.totalSupply() == supplyBefore + TEST_AMOUNT, "totalSupply not bumped");
-        require(
-            token.balanceOf(address(issuer)) == balanceBefore + TEST_AMOUNT,
-            "issuer balance not bumped"
-        );
+        require(token.balanceOf(address(issuer)) == balanceBefore + TEST_AMOUNT, "issuer balance not bumped");
         console.log("  minted             ", TEST_AMOUNT);
         console.log("  issuer balance     ", token.balanceOf(address(issuer)));
         console.log("  [PASS] testMint");
@@ -172,10 +167,7 @@ contract Smoke is Script {
         issuer.burn(address(token), address(issuer), TEST_AMOUNT);
 
         require(token.totalSupply() == supplyBefore - TEST_AMOUNT, "totalSupply not reduced");
-        require(
-            token.balanceOf(address(issuer)) == balanceBefore - TEST_AMOUNT,
-            "issuer balance not reduced"
-        );
+        require(token.balanceOf(address(issuer)) == balanceBefore - TEST_AMOUNT, "issuer balance not reduced");
         console.log("  burned             ", TEST_AMOUNT);
         console.log("  [PASS] testBurn");
     }
@@ -216,27 +208,18 @@ contract Smoke is Script {
         uint256 userBefore = token.balanceOf(user.addr);
         vm.broadcast(ops.privateKey);
         issuer.transfer(address(token), user.addr, amount);
-        require(
-            token.balanceOf(user.addr) == userBefore + amount,
-            "user did not receive expected tokens"
-        );
+        require(token.balanceOf(user.addr) == userBefore + amount, "user did not receive expected tokens");
     }
 
-    function _transferFlowPhase2(
-        ScaledToken token,
-        TokenIssuer issuer,
-        Vm.Wallet memory user,
-        uint256 amount
-    ) internal {
+    function _transferFlowPhase2(ScaledToken token, TokenIssuer issuer, Vm.Wallet memory user, uint256 amount)
+        internal
+    {
         uint256 userBefore = token.balanceOf(user.addr);
         uint256 issuerBefore = token.balanceOf(address(issuer));
         vm.broadcast(user.privateKey);
         require(token.transfer(address(issuer), amount), "user -> issuer transfer failed");
         require(token.balanceOf(user.addr) == userBefore - amount, "user balance mismatch");
-        require(
-            token.balanceOf(address(issuer)) == issuerBefore + amount,
-            "issuer balance mismatch"
-        );
+        require(token.balanceOf(address(issuer)) == issuerBefore + amount, "issuer balance mismatch");
     }
 
     /// @dev Phase 3: user approves issuer, ops calls issuer.burn(token, user, amount); issuer
@@ -251,10 +234,7 @@ contract Smoke is Script {
     ) internal {
         vm.broadcast(user.privateKey);
         require(token.approve(address(issuer), amount), "approve failed");
-        require(
-            token.allowance(user.addr, address(issuer)) == amount,
-            "allowance not set"
-        );
+        require(token.allowance(user.addr, address(issuer)) == amount, "allowance not set");
 
         uint256 supplyBefore = token.totalSupply();
         uint256 userBefore = token.balanceOf(user.addr);
@@ -290,7 +270,9 @@ contract Smoke is Script {
         vm.broadcast(ops.privateKey);
         pm.pauseGlobally();
         require(pm.isTokenPaused(tokenAddr), "global pause not in effect");
-        _expectIssuerTransferReverts(issuer, address(token), ops.addr, user.addr, 1 ether, "expected global-pause revert");
+        _expectIssuerTransferReverts(
+            issuer, address(token), ops.addr, user.addr, 1 ether, "expected global-pause revert"
+        );
 
         vm.broadcast(ops.privateKey);
         pm.unpauseGlobally();
@@ -386,9 +368,7 @@ contract Smoke is Script {
         console.log("--- testIssuerRole ---");
 
         vm.prank(_admin());
-        (bool ok,) = address(token).call(
-            abi.encodeWithSignature("grantRole(bytes32,address)", issuerRole, user.addr)
-        );
+        (bool ok,) = address(token).call(abi.encodeWithSignature("grantRole(bytes32,address)", issuerRole, user.addr));
         require(!ok, "expected grantRole(ISSUER, EOA) to revert");
         require(!token.hasRole(issuerRole, user.addr), "EOA somehow gained ISSUER_ROLE");
         console.log("  [PASS] EOA correctly rejected as ISSUER_ROLE holder");
@@ -487,12 +467,11 @@ contract Smoke is Script {
         bool needScheduler = !token.hasRole(tScheduler, ops.addr);
         bool needCOps = !c.hasRole(cOps, ops.addr);
         bool needPOps = !p.hasRole(pOps, ops.addr);
-        bool needGas = ops.addr.balance
-            < vm.envOr("SMOKE_USER_GAS_THRESHOLD", DEFAULT_GAS_THRESHOLD);
+        bool needGas = ops.addr.balance < vm.envOr("SMOKE_USER_GAS_THRESHOLD", DEFAULT_GAS_THRESHOLD);
 
         if (
-            !needIssuerOnIssuer && !needOpsOnIssuer && !needApprovedRecipient && !needScheduler
-                && !needCOps && !needPOps && !needGas
+            !needIssuerOnIssuer && !needOpsOnIssuer && !needApprovedRecipient && !needScheduler && !needCOps
+                && !needPOps && !needGas
         ) {
             return (ops, issuer);
         }
@@ -610,9 +589,8 @@ contract Smoke is Script {
         string memory reason
     ) internal {
         vm.prank(caller);
-        (bool ok,) = address(issuer).call(
-            abi.encodeWithSignature("transfer(address,address,uint256)", token, to, amount)
-        );
+        (bool ok,) =
+            address(issuer).call(abi.encodeWithSignature("transfer(address,address,uint256)", token, to, amount));
         require(!ok, reason);
     }
 }

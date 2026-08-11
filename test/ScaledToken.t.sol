@@ -81,7 +81,7 @@ contract ScaledTokenTest is Test {
         assertTrue(token.burnAllowed());
         assertTrue(token.hasRole(DEFAULT_ADMIN_ROLE, admin));
         assertTrue(token.hasRole(ISSUER_ROLE, issuer));
-        assertTrue(token.hasRole(SCHEDULER_ROLE,operator));
+        assertTrue(token.hasRole(SCHEDULER_ROLE, operator));
     }
 
     function test_AdminCanRenameAndReSymbol() public {
@@ -528,9 +528,8 @@ contract ScaledTokenTest is Test {
         address[] memory noIssuers = new address[](0);
         address[] memory scheds = new address[](1);
         scheds[0] = operator;
-        ScaledToken customToken = ScaledToken(
-            customFactory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, noIssuers, scheds)
-        );
+        ScaledToken customToken =
+            ScaledToken(customFactory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, noIssuers, scheds));
         vm.stopPrank();
 
         assertEq(customToken.minMultiplierNotice(), 48 hours);
@@ -612,8 +611,8 @@ contract ScaledTokenTest is Test {
     function test_GrantingOpsRoleToEoaIsAllowed() public {
         address eoa = makeAddr("opsEoa");
         vm.prank(admin);
-        token.grantRole(SCHEDULER_ROLE,eoa);
-        assertTrue(token.hasRole(SCHEDULER_ROLE,eoa));
+        token.grantRole(SCHEDULER_ROLE, eoa);
+        assertTrue(token.hasRole(SCHEDULER_ROLE, eoa));
     }
 
     function test_FactoryDeployTokenRejectsEoaIssuer() public {
@@ -629,14 +628,14 @@ contract ScaledTokenTest is Test {
     function test_AdminCanGrantAndRevokeOperator() public {
         address newOps = makeAddr("newOps");
         vm.prank(admin);
-        token.grantRole(SCHEDULER_ROLE,newOps);
-        assertTrue(token.hasRole(SCHEDULER_ROLE,newOps));
+        token.grantRole(SCHEDULER_ROLE, newOps);
+        assertTrue(token.hasRole(SCHEDULER_ROLE, newOps));
 
         vm.prank(newOps);
         token.setUIMultiplier(2 ether, block.timestamp + 25 hours);
 
         vm.prank(admin);
-        token.revokeRole(SCHEDULER_ROLE,newOps);
+        token.revokeRole(SCHEDULER_ROLE, newOps);
 
         vm.prank(newOps);
         vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
@@ -669,8 +668,8 @@ contract ScaledTokenTest is Test {
 
     function test_AdminCanStillGrantToOthers() public {
         vm.prank(admin);
-        token.grantRole(SCHEDULER_ROLE,user1);
-        assertTrue(token.hasRole(SCHEDULER_ROLE,user1));
+        token.grantRole(SCHEDULER_ROLE, user1);
+        assertTrue(token.hasRole(SCHEDULER_ROLE, user1));
     }
 
     function test_InitialAdminRoleStillSetByConstructor() public view {
@@ -682,9 +681,7 @@ contract ScaledTokenTest is Test {
     function test_FactoryRejectsDuplicateSymbol() public {
         address[] memory empty = new address[](0);
         vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(ScaledTokenFactory.TokenSymbolAlreadyExists.selector, "AAPL")
-        );
+        vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.TokenSymbolAlreadyExists.selector, "AAPL"));
         factory.createToken("Apple v2", "AAPL", "ID2", admin, empty, empty);
     }
 
@@ -724,18 +721,14 @@ contract ScaledTokenTest is Test {
     function test_FactoryRejectsInvalidSymbol() public {
         address[] memory empty = new address[](0);
         vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, "AAPL!")
-        );
+        vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, "AAPL!"));
         factory.createToken("X", "AAPL!", "ID3", admin, empty, empty);
     }
 
     function test_FactoryRejectsDuplicateAssetCode() public {
         address[] memory empty = new address[](0);
         vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(ScaledTokenFactory.AssetCodeAlreadyExists.selector, "US0378331005")
-        );
+        vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.AssetCodeAlreadyExists.selector, "US0378331005"));
         // Same assetCode as the setUp AAPL token; different name/symbol so we hit the
         // asset-code uniqueness check specifically.
         factory.createToken("Copycat", "COPY", "US0378331005", admin, empty, empty);
@@ -744,9 +737,7 @@ contract ScaledTokenTest is Test {
     function test_FactoryRejectsInvalidAssetCode() public {
         address[] memory empty = new address[](0);
         vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(ScaledTokenFactory.InvalidAssetCode.selector, "BAD CODE!")
-        );
+        vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.InvalidAssetCode.selector, "BAD CODE!"));
         factory.createToken("New", "NEW", "BAD CODE!", admin, empty, empty);
     }
 
@@ -768,9 +759,7 @@ contract ScaledTokenTest is Test {
     function test_RenameAssetCodeRevertsWhenTokenNotYetUpdated() public {
         vm.prank(admin);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                ScaledTokenFactory.AssetCodeMismatch.selector, "US0378331005", "US0378331006"
-            )
+            abi.encodeWithSelector(ScaledTokenFactory.AssetCodeMismatch.selector, "US0378331005", "US0378331006")
         );
         factory.renameAssetCode(address(token), "US0378331005", "US0378331006");
     }
@@ -804,7 +793,14 @@ contract ScaledTokenTest is Test {
         address[] memory empty = new address[](0);
         bytes memory initData = abi.encodeWithSignature(
             "initialize(string,string,string,address,address,address,address[],address[])",
-            "X", "X", "ID", address(compliance), address(pauseManager), address(0), empty, empty
+            "X",
+            "X",
+            "ID",
+            address(compliance),
+            address(pauseManager),
+            address(0),
+            empty,
+            empty
         );
         address beaconAddr = address(factory.beacon());
         vm.expectRevert(ScaledToken.ZeroAddress.selector);
@@ -826,20 +822,14 @@ contract ScaledTokenTest is Test {
         // Caller forgot to call token.updateSymbol first — on-token symbol is still "AAPL",
         // so renaming the factory registry to "AAPL2" must revert with SymbolMismatch.
         vm.prank(admin);
-        vm.expectRevert(
-            abi.encodeWithSelector(ScaledTokenFactory.SymbolMismatch.selector, "AAPL", "AAPL2")
-        );
+        vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.SymbolMismatch.selector, "AAPL", "AAPL2"));
         factory.renameSymbol(address(token), "AAPL", "AAPL2");
     }
 
     function test_RenameSymbolRevertsIfTokenNotRegisteredUnderOldSymbol() public {
         vm.prank(admin);
         vm.expectRevert(
-            abi.encodeWithSelector(
-                ScaledTokenFactory.TokenNotRegisteredUnderSymbol.selector,
-                address(token),
-                "WRONG"
-            )
+            abi.encodeWithSelector(ScaledTokenFactory.TokenNotRegisteredUnderSymbol.selector, address(token), "WRONG")
         );
         factory.renameSymbol(address(token), "WRONG", "AAPL2");
     }
@@ -850,18 +840,15 @@ contract ScaledTokenTest is Test {
         factory.renameSymbol(address(0), "AAPL", "AAPL2");
     }
 
-    function _signTokenPermit(
-        Vm.Wallet memory wallet,
-        address spender,
-        uint256 value,
-        uint256 deadline
-    ) internal view returns (uint8 v, bytes32 r, bytes32 s) {
-        bytes32 PERMIT_TYPEHASH = keccak256(
-            "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-        );
+    function _signTokenPermit(Vm.Wallet memory wallet, address spender, uint256 value, uint256 deadline)
+        internal
+        view
+        returns (uint8 v, bytes32 r, bytes32 s)
+    {
+        bytes32 PERMIT_TYPEHASH =
+            keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
         uint256 nonce = IERC20Permit(address(token)).nonces(wallet.addr);
-        bytes32 structHash =
-            keccak256(abi.encode(PERMIT_TYPEHASH, wallet.addr, spender, value, nonce, deadline));
+        bytes32 structHash = keccak256(abi.encode(PERMIT_TYPEHASH, wallet.addr, spender, value, nonce, deadline));
         bytes32 domain = IERC20Permit(address(token)).DOMAIN_SEPARATOR();
         bytes32 digest = MessageHashUtils.toTypedDataHash(domain, structHash);
         (v, r, s) = vm.sign(wallet.privateKey, digest);
@@ -906,8 +893,7 @@ contract ScaledTokenTest is Test {
     function test_PermitExpiredDeadlineReverts() public {
         Vm.Wallet memory holder = vm.createWallet("permitHolder");
         uint256 deadline = block.timestamp - 1;
-        (uint8 v, bytes32 r, bytes32 s) =
-            _signTokenPermit(holder, user1, 100 ether, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = _signTokenPermit(holder, user1, 100 ether, deadline);
 
         vm.expectRevert();
         IERC20Permit(address(token)).permit(holder.addr, user1, 100 ether, deadline, v, r, s);
@@ -918,12 +904,10 @@ contract ScaledTokenTest is Test {
         Vm.Wallet memory imposter = vm.createWallet("imposter");
         uint256 deadline = block.timestamp + 1 hours;
 
-        bytes32 PERMIT_TYPEHASH = keccak256(
-            "Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"
-        );
+        bytes32 PERMIT_TYPEHASH =
+            keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
         uint256 nonce = IERC20Permit(address(token)).nonces(owner.addr);
-        bytes32 structHash =
-            keccak256(abi.encode(PERMIT_TYPEHASH, owner.addr, user1, 100 ether, nonce, deadline));
+        bytes32 structHash = keccak256(abi.encode(PERMIT_TYPEHASH, owner.addr, user1, 100 ether, nonce, deadline));
         bytes32 domain = IERC20Permit(address(token)).DOMAIN_SEPARATOR();
         bytes32 digest = MessageHashUtils.toTypedDataHash(domain, structHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(imposter.privateKey, digest);
@@ -935,8 +919,7 @@ contract ScaledTokenTest is Test {
     function test_PermitReplayReverts() public {
         Vm.Wallet memory holder = vm.createWallet("permitHolder");
         uint256 deadline = block.timestamp + 1 hours;
-        (uint8 v, bytes32 r, bytes32 s) =
-            _signTokenPermit(holder, user1, 100 ether, deadline);
+        (uint8 v, bytes32 r, bytes32 s) = _signTokenPermit(holder, user1, 100 ether, deadline);
 
         IERC20Permit(address(token)).permit(holder.addr, user1, 100 ether, deadline, v, r, s);
         assertEq(IERC20Permit(address(token)).nonces(holder.addr), 1);
@@ -946,11 +929,9 @@ contract ScaledTokenTest is Test {
     }
 
     function test_EIP712DomainExposed() public view {
-        (bool ok, bytes memory data) =
-            address(token).staticcall(abi.encodeWithSignature("eip712Domain()"));
+        (bool ok, bytes memory data) = address(token).staticcall(abi.encodeWithSignature("eip712Domain()"));
         require(ok, "eip712Domain call failed");
-        (, string memory name,,,,,) =
-            abi.decode(data, (bytes1, string, string, uint256, address, bytes32, uint256[]));
+        (, string memory name,,,,,) = abi.decode(data, (bytes1, string, string, uint256, address, bytes32, uint256[]));
         assertEq(name, "Apple Inc.");
     }
 

@@ -3,8 +3,9 @@ pragma solidity ^0.8.24;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {AccessControlEnumerableUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import {
+    AccessControlEnumerableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
@@ -140,7 +141,9 @@ contract TokenIssuer is
         onlyRole(OPS_ROLE)
         nonReentrant
     {
-        if (recipient != address(this) && !isApprovedRecipient(recipient)) revert RecipientNotApproved();
+        if (recipient != address(this) && !isApprovedRecipient(recipient)) {
+            revert RecipientNotApproved();
+        }
         if (!IMintAndBurnable(token).mint(amount)) revert MintFailed();
         if (recipient != address(this)) {
             IERC20(token).safeTransfer(recipient, amount);
@@ -150,12 +153,7 @@ contract TokenIssuer is
 
     /// @notice Burns `amount` of `token` from this issuer (`from == self`) or from an approved
     ///         recipient that has pre-approved the issuer to pull tokens.
-    function burn(address token, address from, uint256 amount)
-        external
-        whenNotPaused
-        onlyRole(OPS_ROLE)
-        nonReentrant
-    {
+    function burn(address token, address from, uint256 amount) external whenNotPaused onlyRole(OPS_ROLE) nonReentrant {
         if (from != address(this) && !isApprovedRecipient(from)) revert FromNotApproved();
         if (from != address(this)) {
             IERC20(token).safeTransferFrom(from, address(this), amount);
