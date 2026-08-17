@@ -16,7 +16,8 @@ import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
 /// Entrypoints:
 ///   createTokens(address factory)
 ///     Reads the `[[tokens]]` array from config.toml and emits one `factory.createToken(...)` tx per
-///     entry. Import ./safe-txs/createTokens.json into the Safe that holds the factory admin.
+///     entry. createToken is OPS_ROLE-gated, so import ./safe-txs/createTokens.json into the Safe
+///     that holds the factory OPS_ROLE.
 ///
 ///   grantIssuer(address issuer, address[] tokens)
 ///     Emits one `token.grantRole(ISSUER_ROLE, issuer)` tx per token — run AFTER createTokens has

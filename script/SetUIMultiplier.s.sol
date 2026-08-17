@@ -7,7 +7,7 @@ import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 /// @notice Schedules a UI-multiplier change on a ScaledToken — the on-chain primitive
 ///         behind stock splits, reverse splits, and accrual events.
 ///
-///         Broadcaster must hold OPS_ROLE on the token. On-chain checks:
+///         Broadcaster must hold MULTIPLIER_SCHEDULER_ROLE on the token. On-chain checks:
 ///           - 1e9 ≤ newMultiplier ≤ 1e27   (1e18 = 1.0x)
 ///           - effectiveAt > block.timestamp
 ///           - effectiveAt ≤ block.timestamp + 365 days

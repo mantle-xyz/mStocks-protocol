@@ -8,9 +8,11 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {IPauseRegistry} from "./IPauseRegistry.sol";
 
 /// @notice Per-token and global pause switches consulted by token transfer hooks.
-///         OPS_ROLE flips switches; admin only grants the role (separation of duties).
+///         PAUSE_ROLE pauses, UNPAUSE_ROLE unpauses; admin only grants the roles
+///         (separation of duties — pausing and unpausing are split).
 contract PauseRegistry is IPauseRegistry, AccessControlEnumerable {
-    bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
+    bytes32 public constant PAUSE_ROLE = keccak256("PAUSE_ROLE");
+    bytes32 public constant UNPAUSE_ROLE = keccak256("UNPAUSE_ROLE");
 
     /// @notice token => paused.
     mapping(address => bool) public pausedTokens;
@@ -23,7 +25,8 @@ contract PauseRegistry is IPauseRegistry, AccessControlEnumerable {
     event GlobalPaused(address indexed pauser);
     event GlobalUnpaused(address indexed unpauser);
 
-    error MissingOpsRole();
+    error MissingPauseRole();
+    error MissingUnpauseRole();
     error ZeroAddress();
     error SelfGrantNotAllowed();
     error TokenAlreadyPaused();
@@ -35,37 +38,39 @@ contract PauseRegistry is IPauseRegistry, AccessControlEnumerable {
     constructor(address admin) {
         if (admin == address(0)) revert ZeroAddress();
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(PAUSE_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(UNPAUSE_ROLE, DEFAULT_ADMIN_ROLE);
     }
 
-    modifier onlyOps() {
-        _requireOps();
+    modifier onlyPauser() {
+        if (!hasRole(PAUSE_ROLE, _msgSender())) revert MissingPauseRole();
         _;
     }
 
-    function _requireOps() private view {
-        if (!hasRole(OPS_ROLE, _msgSender())) revert MissingOpsRole();
+    modifier onlyUnpauser() {
+        if (!hasRole(UNPAUSE_ROLE, _msgSender())) revert MissingUnpauseRole();
+        _;
     }
 
-    function pauseToken(address token) external onlyOps {
+    function pauseToken(address token) external onlyPauser {
         if (pausedTokens[token]) revert TokenAlreadyPaused();
         pausedTokens[token] = true;
         emit TokenPaused(token, msg.sender);
     }
 
-    function unpauseToken(address token) external onlyOps {
+    function unpauseToken(address token) external onlyUnpauser {
         if (!pausedTokens[token]) revert TokenNotPaused();
         pausedTokens[token] = false;
         emit TokenUnpaused(token, msg.sender);
     }
 
-    function pauseGlobally() external onlyOps {
+    function pauseGlobally() external onlyPauser {
         if (globalPaused) revert AlreadyGloballyPaused();
         globalPaused = true;
         emit GlobalPaused(msg.sender);
     }
 
-    function unpauseGlobally() external onlyOps {
+    function unpauseGlobally() external onlyUnpauser {
         if (!globalPaused) revert NotGloballyPaused();
         globalPaused = false;
         emit GlobalUnpaused(msg.sender);
@@ -76,7 +81,7 @@ contract PauseRegistry is IPauseRegistry, AccessControlEnumerable {
         return pausedTokens[_token] || globalPaused;
     }
 
-    /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
+    /// @notice Disallows self-grant — admin must delegate PAUSE_ROLE / UNPAUSE_ROLE to separate accounts.
     function grantRole(bytes32 role, address account) public virtual override(AccessControl, IAccessControl) {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
