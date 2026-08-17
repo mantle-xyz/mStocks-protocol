@@ -33,8 +33,9 @@ abstract contract ComplianceGuardUpgradeable is Initializable {
         if (size == 0) revert InvalidComplianceContract();
 
         try IComplianceRegistry(_compliance).checkIsCompliant(address(this), address(this)) {
-            // OK
-        } catch (bytes memory) {
+        // OK
+        }
+        catch (bytes memory) {
             revert InvalidComplianceContract();
         }
 

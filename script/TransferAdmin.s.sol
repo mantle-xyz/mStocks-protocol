@@ -103,9 +103,7 @@ contract TransferAdmin is Script {
     /// @dev Grant DEFAULT_ADMIN_ROLE to `newAdmin`, then revoke it from `from`. Grant-before-revoke
     ///      guarantees the role is never left with zero holders. Idempotent: skips a step already
     ///      satisfied. Verifies `newAdmin` holds the role before revoking `from`.
-    function _handover(address target, string memory label, address newAdmin, address from)
-        internal
-    {
+    function _handover(address target, string memory label, address newAdmin, address from) internal {
         if (target == address(0)) return;
         require(newAdmin != address(0), "TransferAdmin: finalAdmin is zero");
         if (newAdmin == from) {
@@ -123,10 +121,7 @@ contract TransferAdmin is Script {
         }
 
         // Never revoke the broadcaster unless the new admin is confirmed in place.
-        require(
-            ac.hasRole(DEFAULT_ADMIN_ROLE, newAdmin),
-            string.concat("TransferAdmin: new admin not set on ", label)
-        );
+        require(ac.hasRole(DEFAULT_ADMIN_ROLE, newAdmin), string.concat("TransferAdmin: new admin not set on ", label));
 
         if (ac.hasRole(DEFAULT_ADMIN_ROLE, from)) {
             ac.revokeRole(DEFAULT_ADMIN_ROLE, from);
@@ -150,10 +145,7 @@ contract TransferAdmin is Script {
             string.concat("TransferAdmin: missing [", section, "].finalAdmin in config")
         );
         admin = toml.readAddress(sectionKey);
-        require(
-            admin != address(0),
-            string.concat("TransferAdmin: [", section, "].finalAdmin is zero")
-        );
+        require(admin != address(0), string.concat("TransferAdmin: [", section, "].finalAdmin is zero"));
     }
 
     /// @dev Mirrors forge-script's signer resolution: PRIVATE_KEY env, else tx.origin.

@@ -2,11 +2,13 @@
 pragma solidity ^0.8.24;
 
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
-import {AccessControlEnumerableUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
+import {
+    AccessControlEnumerableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import {ERC20PermitUpgradeable} from
-    "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import {
+    ERC20PermitUpgradeable
+} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {ERC8056BaseUpgradeable} from "../ERC8056/ERC8056BaseUpgradeable.sol";
@@ -25,6 +27,9 @@ contract ScaledToken is
 {
     bytes32 public constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
     bytes32 public constant MULTIPLIER_SCHEDULER_ROLE = keccak256("MULTIPLIER_SCHEDULER_ROLE");
+    /// @notice Operational role: token metadata (name / symbol / assetCode) and the mint/burn
+    ///         switches. Admin only grants/revokes it; admin does not perform these directly.
+    bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
 
     /// @notice Minimum window between scheduling a multiplier change and its effective time.
     ///         Bounds the front-running / acceleration attack window to at least this duration,
@@ -99,7 +104,9 @@ contract ScaledToken is
         address[] memory issuers_,
         address[] memory multiplierSchedulers_
     ) public initializer {
-        __scaledToken_init(name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, multiplierSchedulers_);
+        __scaledToken_init(
+            name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, multiplierSchedulers_
+        );
     }
 
     function __scaledToken_init(
@@ -132,6 +139,7 @@ contract ScaledToken is
         _grantRole(DEFAULT_ADMIN_ROLE, admin_);
         _setRoleAdmin(ISSUER_ROLE, DEFAULT_ADMIN_ROLE);
         _setRoleAdmin(MULTIPLIER_SCHEDULER_ROLE, DEFAULT_ADMIN_ROLE);
+        _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
         for (uint256 i = 0; i < issuers_.length; ++i) {
             if (issuers_[i] == address(0)) revert ZeroAddress();
             _grantRole(ISSUER_ROLE, issuers_[i]);
@@ -154,13 +162,13 @@ contract ScaledToken is
         return _storedSymbol;
     }
 
-    function updateName(string memory name_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function updateName(string memory name_) external onlyRole(OPS_ROLE) {
         if (bytes(name_).length == 0) revert EmptyString();
         emit NameUpdated(_storedName, name_);
         _storedName = name_;
     }
 
-    function updateSymbol(string memory symbol_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function updateSymbol(string memory symbol_) external onlyRole(OPS_ROLE) {
         _assertSymbol(symbol_);
         emit SymbolUpdated(_storedSymbol, symbol_);
         _storedSymbol = symbol_;
@@ -185,7 +193,7 @@ contract ScaledToken is
         }
     }
 
-    function updateAssetCode(string memory assetCode_) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function updateAssetCode(string memory assetCode_) external onlyRole(OPS_ROLE) {
         _assertAssetCode(assetCode_);
         emit AssetCodeUpdated(assetCode, assetCode_);
         assetCode = assetCode_;
@@ -210,12 +218,12 @@ contract ScaledToken is
         }
     }
 
-    function setMintAllowed(bool allowed) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setMintAllowed(bool allowed) external onlyRole(OPS_ROLE) {
         mintAllowed = allowed;
         emit MintAllowedSet(allowed);
     }
 
-    function setBurnAllowed(bool allowed) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function setBurnAllowed(bool allowed) external onlyRole(OPS_ROLE) {
         burnAllowed = allowed;
         emit BurnAllowedSet(allowed);
     }
@@ -262,8 +270,7 @@ contract ScaledToken is
     function _setUIMultiplier(uint256 newMultiplier, uint256 effectiveAtTimestamp) internal override {
         require(effectiveAtTimestamp <= block.timestamp + 365 days, "ScaledToken: effective time too far in future");
         require(
-            effectiveAtTimestamp >= block.timestamp + minMultiplierNotice,
-            "ScaledToken: minimum notice period not met"
+            effectiveAtTimestamp >= block.timestamp + minMultiplierNotice, "ScaledToken: minimum notice period not met"
         );
         super._setUIMultiplier(newMultiplier, effectiveAtTimestamp);
     }
@@ -330,7 +337,9 @@ contract ScaledToken is
         override(AccessControlEnumerableUpgradeable)
         returns (bool)
     {
-        if (role == ISSUER_ROLE && account.code.length == 0) revert IssuerNotContract();
+        if (role == ISSUER_ROLE && account.code.length == 0) {
+            revert IssuerNotContract();
+        }
         return super._grantRole(role, account);
     }
 

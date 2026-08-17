@@ -33,8 +33,9 @@ abstract contract PauseGuardUpgradeable is Initializable {
         if (size == 0) revert InvalidPauseManagerContract();
 
         try IPauseRegistry(_pauseManager).isTokenPaused(address(this)) {
-            // OK
-        } catch (bytes memory) {
+        // OK
+        }
+        catch (bytes memory) {
             revert InvalidPauseManagerContract();
         }
 

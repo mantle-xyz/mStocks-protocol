@@ -4,8 +4,9 @@ proxyAdmin = "0x0000000000000000000000000000000000000000"
 [factory]
 
 finalAdmin = "0x0000000000000000000000000000000000000000"
+opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on Factory — createToken / renameSymbol / renameAssetCode
 
-minMultiplierNotice = 86400
+minMultiplierNotice = 300
 
 [compliance]
 finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
@@ -13,7 +14,8 @@ opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on Co
 
 [pauseManager]
 finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
-opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on PauseRegistry       — pause/unpause tokens
+pauseRole = ["0x0000000000000000000000000000000000000000"]      # PAUSE_ROLE on PauseRegistry     — pause tokens / global
+unpauseRole = ["0x0000000000000000000000000000000000000000"]    # UNPAUSE_ROLE on PauseRegistry   — unpause tokens / global
 
 [tokenIssuer]
 finalAdmin = "0x0000000000000000000000000000000000000000"
@@ -25,6 +27,7 @@ name = "Apple Inc."
 symbol = "AAPL"
 identifier = "US0378331005"
 finalAdmin = "0x0000000000000000000000000000000000000000"
+opsRole = ["0x0000000000000000000000000000000000000000"]         # OPS_ROLE on the token — updateName/Symbol/AssetCode + setMint/BurnAllowed
 issuers = []
 multiplierSchedulers = ["0x0000000000000000000000000000000000000000"]
 

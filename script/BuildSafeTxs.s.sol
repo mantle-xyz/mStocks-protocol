@@ -16,7 +16,8 @@ import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
 /// Entrypoints:
 ///   createTokens(address factory)
 ///     Reads the `[[tokens]]` array from config.toml and emits one `factory.createToken(...)` tx per
-///     entry. Import ./safe-txs/createTokens.json into the Safe that holds the factory admin.
+///     entry. createToken is OPS_ROLE-gated, so import ./safe-txs/createTokens.json into the Safe
+///     that holds the factory OPS_ROLE.
 ///
 ///   grantIssuer(address issuer, address[] tokens)
 ///     Emits one `token.grantRole(ISSUER_ROLE, issuer)` tx per token — run AFTER createTokens has
@@ -43,10 +44,7 @@ contract BuildSafeTxs is Script {
             string memory symbol = toml.readString(string.concat(base, ".symbol"));
             string memory identifier = toml.readString(string.concat(base, ".identifier"));
             address admin = toml.readAddress(string.concat(base, ".admin"));
-            require(
-                admin != address(0),
-                string.concat("BuildSafeTxs: tokens[", vm.toString(i), "].admin is zero")
-            );
+            require(admin != address(0), string.concat("BuildSafeTxs: tokens[", vm.toString(i), "].admin is zero"));
             address[] memory issuers = _readAddrArr(toml, string.concat(base, ".issuers"));
             address[] memory schedulers = _readAddrArr(toml, string.concat(base, ".multiplierSchedulers"));
 

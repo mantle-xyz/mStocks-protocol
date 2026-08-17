@@ -23,6 +23,7 @@ contract TokenIssuerTest is Test {
     address internal recipient1 = makeAddr("recipient1");
     address internal recipient2 = makeAddr("recipient2");
     address internal stranger = makeAddr("stranger");
+    address internal tokenOps = makeAddr("tokenOps");
 
     bytes32 internal OPS_ROLE;
 
@@ -31,10 +32,10 @@ contract TokenIssuerTest is Test {
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
         factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
+        factory.grantRole(factory.OPS_ROLE(), admin); // admin self-grants factory OPS to createToken
         address[] memory empty = new address[](0);
-        token = ScaledToken(
-            factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty)
-        );
+        token = ScaledToken(factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty));
+        token.grantRole(token.OPS_ROLE(), tokenOps); // token metadata / mint-burn switches
 
         TokenIssuer impl = new TokenIssuer();
         bytes memory initData = abi.encodeWithSelector(TokenIssuer.initialize.selector, admin);
@@ -374,7 +375,7 @@ contract TokenIssuerTest is Test {
 
     function test_BurnNotAllowedOnTokenReverts() public {
         _seedRecipientForBurn();
-        vm.prank(admin);
+        vm.prank(tokenOps);
         token.setBurnAllowed(false);
 
         vm.prank(ops);
