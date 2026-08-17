@@ -74,11 +74,6 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     event ProgramCreated(uint256 indexed programId, address indexed oldToken, uint64 deadline);
     event Funded(uint256 indexed programId, address indexed token, address indexed from, uint256 amount);
     event Claimed(uint256 indexed programId, address indexed holder, uint256 oldAmount);
-    /// @notice Emitted additionally when a claim was executed by a delegate on `account`'s behalf
-    ///         via {claimFor}. `caller` is the delegate; consideration still accrued to `account`.
-    event ClaimedOnBehalf(
-        uint256 indexed programId, address indexed account, address indexed caller, uint256 oldAmount
-    );
     event Swept(uint256 indexed programId, address indexed to);
 
     error ZeroAddress();
@@ -161,44 +156,18 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
     // ── claim / sweep ───────────────────────────────────────────────────────────
 
-    /// @notice Surrender your OWN `amount` (raw) of the program's old token for the fixed-rate
-    ///         basket. Caller must `approve` this registry for `amount` first.
+    /// @notice Surrender `amount` (raw) of the program's old token for the fixed-rate basket.
+    ///         Caller must `approve` this registry for `amount` first. The old tokens are pulled in
+    ///         and burned (registry holds BURN_ROLE on the old token); each leg is paid from that
+    ///         program's reserve. A compliance-blocked mStocks leg reverts the whole claim (old
+    ///         token stays with the holder) — retry once unblocked, so no escrow is needed.
     function claim(uint256 programId, uint256 amount) external nonReentrant {
-        _claim(programId, msg.sender, amount);
-    }
-
-    /// @notice Claim on behalf of `account`: pulls `account`'s old tokens (they must have
-    ///         `approve`d this registry for `amount`) and delivers the basket back to `account`.
-    ///
-    ///         Anyone may call — this is a safe assist, not a way to seize funds: a delegate can
-    ///         neither redirect the consideration (it always goes to `account`) nor pull more than
-    ///         `account`'s own allowance. `account` opts in by approving.
-    ///
-    ///         Purpose (CEX compatibility): a hot wallet that, for compliance, can `approve` a
-    ///         token but cannot call arbitrary contracts is stuck — `claim` calls this registry,
-    ///         which the hot wallet may not invoke. But `approve` targets the *token* (a
-    ///         whitelisted ERC-20; the registry is only the `spender` argument, not the callee),
-    ///         which the hot wallet CAN do. So the hot wallet approves, and an operator calls
-    ///         `claimFor` for it; the basket lands back in the hot wallet.
-    function claimFor(uint256 programId, address account, uint256 amount) external nonReentrant {
-        if (account == address(0)) revert ZeroAddress();
-        _claim(programId, account, amount);
-        emit ClaimedOnBehalf(programId, account, msg.sender, amount);
-    }
-
-    /// @dev Shared claim path. `account` is BOTH the source of the surrendered old tokens and the
-    ///      recipient of every reward leg, so the caller is irrelevant to fund flow. The old
-    ///      tokens are pulled in and burned (registry holds BURN_ROLE on the old token); each
-    ///      leg is paid from that program's reserve. A compliance-blocked mStocks leg reverts the
-    ///      whole claim (old token stays with `account`) — retry once unblocked, no escrow needed.
-    ///      `nonReentrant` is enforced by the external entrypoints ({claim} / {claimFor}).
-    function _claim(uint256 programId, address account, uint256 amount) internal {
         Program storage p = programs[programId];
         if (!p.exists) revert UnknownProgram();
         if (block.timestamp > p.deadline) revert ClaimClosed();
         if (amount == 0) revert ZeroAmount();
 
-        IERC20(p.oldToken).safeTransferFrom(account, address(this), amount);
+        IERC20(p.oldToken).safeTransferFrom(msg.sender, address(this), amount);
         if (!IMintAndBurnable(p.oldToken).burn(amount)) revert BurnFailed();
 
         Leg[] storage legs = _legs[programId];
@@ -210,12 +179,12 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
             uint256 r = reserved[programId][token];
             if (r < out) revert InsufficientReserved();
             reserved[programId][token] = r - out;
-            IERC20(token).safeTransfer(account, out);
+            IERC20(token).safeTransfer(msg.sender, out);
             delivered = true;
         }
         if (!delivered) revert NothingToDeliver(); // guard a dust claim that burns for nothing
 
-        emit Claimed(programId, account, amount);
+        emit Claimed(programId, msg.sender, amount);
     }
 
     /// @notice After the program deadline, sweep its remaining (unclaimed) reserve of every leg
