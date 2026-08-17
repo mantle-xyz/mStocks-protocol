@@ -6,7 +6,7 @@ proxyAdmin = "0x0000000000000000000000000000000000000000"
 finalAdmin = "0x0000000000000000000000000000000000000000"
 opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on Factory — createToken / renameSymbol / renameAssetCode
 
-minMultiplierNotice = 86400
+minMultiplierNotice = 300
 
 [compliance]
 finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
