@@ -1019,4 +1019,77 @@ contract ScaledTokenTest is Test {
         pauseManager.renounceRole(opsRole, pauseOps);
         assertFalse(pauseManager.hasRole(opsRole, pauseOps));
     }
+
+    // ── role optimization: separation-of-duties invariants ─────────────────────
+
+    /// @dev Factory createToken/rename are OPS-gated: a non-OPS caller is rejected.
+    function test_Factory_NonOpsCannotCreateToken() public {
+        address[] memory empty = new address[](0);
+        vm.prank(stranger);
+        vm.expectRevert(); // AccessControlUnauthorizedAccount
+        factory.createToken("X", "XYZ", "IDXYZ", admin, empty, empty);
+    }
+
+    function test_Factory_NonOpsCannotRename() public {
+        vm.prank(stranger);
+        vm.expectRevert();
+        factory.renameSymbol(address(token), "AAPL", "AAPL2");
+    }
+
+    /// @dev Token metadata / switches are OPS-gated and downgraded off admin: the admin,
+    ///      holding only DEFAULT_ADMIN_ROLE (not token OPS), can no longer call them directly.
+    function test_Token_AdminWithoutOpsCannotUpdateName() public {
+        vm.prank(admin);
+        vm.expectRevert();
+        token.updateName("Nope");
+    }
+
+    function test_Token_AdminWithoutOpsCannotSetMintAllowed() public {
+        vm.prank(admin);
+        vm.expectRevert();
+        token.setMintAllowed(false);
+    }
+
+    /// @dev A PAUSE_ROLE-only holder can pause but must NOT be able to unpause.
+    function test_Pause_PauserCannotUnpause() public {
+        address pauser = makeAddr("pauserOnly");
+        vm.prank(admin);
+        pauseManager.grantRole(PAUSE_ROLE, pauser); // cached in setUp — avoids prank-consuming arg call
+
+        vm.prank(pauser);
+        pauseManager.pauseToken(address(token));
+
+        vm.prank(pauser);
+        vm.expectRevert(PauseRegistry.MissingUnpauseRole.selector);
+        pauseManager.unpauseToken(address(token));
+    }
+
+    /// @dev An UNPAUSE_ROLE-only holder can unpause but must NOT be able to pause.
+    function test_Pause_UnpauserCannotPause() public {
+        address unpauser = makeAddr("unpauserOnly");
+        vm.prank(admin);
+        pauseManager.grantRole(UNPAUSE_ROLE, unpauser); // cached in setUp — avoids prank-consuming arg call
+
+        vm.prank(unpauser);
+        vm.expectRevert(PauseRegistry.MissingPauseRole.selector);
+        pauseManager.pauseToken(address(token));
+    }
+
+    /// @dev Split roles compose: a pauser pauses, a separate unpauser lifts it.
+    function test_Pause_SplitRolesCompose() public {
+        address pauser = makeAddr("pauserOnly2");
+        address unpauser = makeAddr("unpauserOnly2");
+        vm.startPrank(admin);
+        pauseManager.grantRole(pauseManager.PAUSE_ROLE(), pauser);
+        pauseManager.grantRole(pauseManager.UNPAUSE_ROLE(), unpauser);
+        vm.stopPrank();
+
+        vm.prank(pauser);
+        pauseManager.pauseGlobally();
+        assertTrue(pauseManager.isTokenPaused(address(token)));
+
+        vm.prank(unpauser);
+        pauseManager.unpauseGlobally();
+        assertFalse(pauseManager.isTokenPaused(address(token)));
+    }
 }
