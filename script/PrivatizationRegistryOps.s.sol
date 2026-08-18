@@ -12,11 +12,12 @@ import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 ///         §4, privatization-runbook.md §2). Deployed behind a TransparentUpgradeableProxy, like
 ///         TokenIssuer. Each entrypoint is broadcast by the appropriate role — run them in order.
 ///
-///         1) deploy         — deployer (proxyAdmin owns upgrades; admin = DEFAULT_ADMIN_ROLE)
-///         2) wire           — OLD token admin (freeze supply + grant registry ISSUER_ROLE)
-///         3) createProgram  — registry admin (DEFAULT_ADMIN_ROLE)
-///         4) fund           — OPS (holds reward tokens)
-///         5) sweep          — registry admin, after the program deadline
+///         1)  deploy        — deployer (proxyAdmin owns upgrades; admin = DEFAULT_ADMIN_ROLE)
+///         2a) wireBurnRole  — OLD token ADMIN (grant registry BURN_ROLE)
+///         2b) freezeSupply  — OLD token OPS   (setMintAllowed=false; ≠ admin — self-grant is blocked)
+///         3)  createProgram — registry admin (DEFAULT_ADMIN_ROLE)
+///         4)  fund          — registry OPS (holds reward tokens)
+///         5)  sweep         — registry admin, after the program deadline
 contract PrivatizationRegistryOps is Script {
     /// @notice Step 1 — deploy behind a TransparentUpgradeableProxy. `proxyAdmin` owns the
     ///         auto-created ProxyAdmin (sole upgrade authority); `admin` gets DEFAULT_ADMIN_ROLE.
@@ -33,16 +34,26 @@ contract PrivatizationRegistryOps is Script {
         console.log("admin (DEFAULT_ADMIN_ROLE): ", admin);
     }
 
-    /// @notice Step 2 — freeze the old token's supply and grant the registry BURN_ROLE on it
-    ///         (burn-only: it can burn surrendered balances but never mint). Broadcaster must be
-    ///         the OLD token admin.
-    function wire(address oldToken, address registry) external {
+    /// @notice Step 2a — grant the registry BURN_ROLE on the old token (burn-only: it can burn
+    ///         surrendered balances but never mint). Broadcaster must be the OLD token ADMIN
+    ///         (DEFAULT_ADMIN_ROLE). Split from {freezeSupply} because that is OPS-gated and the
+    ///         admin and OPS must be different accounts (self-grant is blocked).
+    function wireBurnRole(address oldToken, address registry) external {
         bytes32 burnRole = ScaledToken(oldToken).BURN_ROLE();
         vm.startBroadcast();
         ScaledToken(oldToken).grantRole(burnRole, registry);
+        vm.stopBroadcast();
+        console.log("Granted BURN_ROLE to registry on:", oldToken);
+    }
+
+    /// @notice Step 2b — freeze the old token's supply so nobody can mint more and dilute the
+    ///         fixed-rate consideration. `setMintAllowed` is OPS-gated, so the broadcaster must
+    ///         hold the token's OPS_ROLE — a DIFFERENT address than the admin used in {wireBurnRole}.
+    function freezeSupply(address oldToken) external {
+        vm.startBroadcast();
         ScaledToken(oldToken).setMintAllowed(false);
         vm.stopBroadcast();
-        console.log("Granted BURN_ROLE to registry + froze old supply:", oldToken);
+        console.log("Froze old supply (setMintAllowed=false):", oldToken);
     }
 
     /// @notice Step 3 — register a delisting program from parallel reward-leg arrays
