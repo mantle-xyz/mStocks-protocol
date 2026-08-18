@@ -53,15 +53,18 @@ contract Deploy is Script {
         address proxyAdmin;
         uint256 minMultiplierNotice;
         address[] complianceOps;
-        address[] pauseOps;
+        address[] pauseRole;
+        address[] unpauseRole;
         address[] tokenIssuerOps;
         address[] tokenIssuerApprovedRecipients;
+        address[] factoryOps;
         bool deployInitialToken;
         string tokenName;
         string tokenSymbol;
         string tokenIdentifier;
         address[] issuers;
         address[] multiplierSchedulers;
+        address[] tokenOps;
     }
 
     function run()
@@ -161,7 +164,8 @@ contract Deploy is Script {
     function _deployPauseManager(Config memory cfg) internal returns (PauseRegistry pauseManager) {
         pauseManager = new PauseRegistry(_deployAdmin());
         console.log("PauseRegistry:      ", address(pauseManager));
-        _grantRoles(address(pauseManager), pauseManager.OPS_ROLE(), "OPS_ROLE (PauseRegistry)", cfg.pauseOps);
+        _grantRoles(address(pauseManager), pauseManager.PAUSE_ROLE(), "PAUSE_ROLE (PauseRegistry)", cfg.pauseRole);
+        _grantRoles(address(pauseManager), pauseManager.UNPAUSE_ROLE(), "UNPAUSE_ROLE (PauseRegistry)", cfg.unpauseRole);
     }
 
     function _deployFactory(Config memory cfg, address compliance, address pauseManager)
@@ -175,6 +179,11 @@ contract Deploy is Script {
         console.log("Factory:            ", address(factory));
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
+        // createToken / rename are now OPS_ROLE-gated: give the deploy admin OPS so _deployToken
+        // can create the initial token, then grant any configured operational addresses.
+        factory.grantRole(factory.OPS_ROLE(), _deployAdmin());
+        console.log("  granted Factory OPS_ROLE to deploy admin (createToken / rename)");
+        _grantRoles(address(factory), factory.OPS_ROLE(), "OPS_ROLE (Factory)", cfg.factoryOps);
     }
 
     function _deployTokenIssuer(Config memory cfg) internal returns (TokenIssuer issuer) {
@@ -222,6 +231,7 @@ contract Deploy is Script {
             cfg.tokenName, cfg.tokenSymbol, cfg.tokenIdentifier, _deployAdmin(), cfg.issuers, cfg.multiplierSchedulers
         );
         console.log("Token (proxy):      ", proxy);
+        _grantRoles(proxy, ScaledToken(proxy).OPS_ROLE(), "OPS_ROLE (Token)", cfg.tokenOps);
     }
 
     /// @dev Grants `role` on `target` to every address in `grantees`. Skips with a hint when the
@@ -289,9 +299,11 @@ contract Deploy is Script {
             : 24 hours;
 
         cfg.complianceOps = _readAddressArrayOr(toml, ".compliance.opsRole");
-        cfg.pauseOps = _readAddressArrayOr(toml, ".pauseManager.opsRole");
+        cfg.pauseRole = _readAddressArrayOr(toml, ".pauseManager.pauseRole");
+        cfg.unpauseRole = _readAddressArrayOr(toml, ".pauseManager.unpauseRole");
         cfg.tokenIssuerOps = _readAddressArrayOr(toml, ".tokenIssuer.opsRole");
         cfg.tokenIssuerApprovedRecipients = _readAddressArrayOr(toml, ".tokenIssuer.approvedRecipients");
+        cfg.factoryOps = _readAddressArrayOr(toml, ".factory.opsRole");
 
         cfg.deployInitialToken = vm.keyExistsToml(toml, ".token");
         if (cfg.deployInitialToken) {
@@ -303,6 +315,7 @@ contract Deploy is Script {
             // TransferAdmin — not here.
             cfg.issuers = _readAddressArrayOr(toml, ".token.issuers");
             cfg.multiplierSchedulers = _readAddressArrayOr(toml, ".token.multiplierSchedulers");
+            cfg.tokenOps = _readAddressArrayOr(toml, ".token.opsRole");
         }
     }
 

@@ -102,7 +102,8 @@ contract Smoke is Script {
         _printRole("Compliance DEFAULT_ADMIN_ROLE", address(c), 0x00);
         _printRole("Compliance OPS_ROLE", address(c), c.OPS_ROLE());
         _printRole("Pause DEFAULT_ADMIN_ROLE", address(p), 0x00);
-        _printRole("Pause OPS_ROLE", address(p), p.OPS_ROLE());
+        _printRole("Pause PAUSE_ROLE", address(p), p.PAUSE_ROLE());
+        _printRole("Pause UNPAUSE_ROLE", address(p), p.UNPAUSE_ROLE());
 
         address envIssuer = vm.envOr("SMOKE_TOKEN_ISSUER", address(0));
         if (envIssuer != address(0)) {
@@ -459,19 +460,21 @@ contract Smoke is Script {
         bytes32 tScheduler = token.MULTIPLIER_SCHEDULER_ROLE();
         bytes32 issuerOps = issuer.OPS_ROLE();
         bytes32 cOps = c.OPS_ROLE();
-        bytes32 pOps = p.OPS_ROLE();
+        bytes32 pPause = p.PAUSE_ROLE();
+        bytes32 pUnpause = p.UNPAUSE_ROLE();
 
         bool needIssuerOnIssuer = !token.hasRole(tIssuer, address(issuer));
         bool needOpsOnIssuer = !issuer.hasRole(issuerOps, ops.addr);
         bool needApprovedRecipient = !issuer.isApprovedRecipient(user.addr);
         bool needScheduler = !token.hasRole(tScheduler, ops.addr);
         bool needCOps = !c.hasRole(cOps, ops.addr);
-        bool needPOps = !p.hasRole(pOps, ops.addr);
+        bool needPPause = !p.hasRole(pPause, ops.addr);
+        bool needPUnpause = !p.hasRole(pUnpause, ops.addr);
         bool needGas = ops.addr.balance < vm.envOr("SMOKE_USER_GAS_THRESHOLD", DEFAULT_GAS_THRESHOLD);
 
         if (
             !needIssuerOnIssuer && !needOpsOnIssuer && !needApprovedRecipient && !needScheduler && !needCOps
-                && !needPOps && !needGas
+                && !needPPause && !needPUnpause && !needGas
         ) {
             return (ops, issuer);
         }
@@ -499,9 +502,13 @@ contract Smoke is Script {
             c.grantRole(cOps, ops.addr);
             console.log("      granted compliance.OPS_ROLE to ops");
         }
-        if (needPOps) {
-            p.grantRole(pOps, ops.addr);
-            console.log("      granted pauseRegistry.OPS_ROLE to ops");
+        if (needPPause) {
+            p.grantRole(pPause, ops.addr);
+            console.log("      granted pauseRegistry.PAUSE_ROLE to ops");
+        }
+        if (needPUnpause) {
+            p.grantRole(pUnpause, ops.addr);
+            console.log("      granted pauseRegistry.UNPAUSE_ROLE to ops");
         }
         vm.stopBroadcast();
     }
@@ -527,7 +534,8 @@ contract Smoke is Script {
 
         bytes32 tScheduler = token.MULTIPLIER_SCHEDULER_ROLE();
         bytes32 cOps = c.OPS_ROLE();
-        bytes32 pOps = p.OPS_ROLE();
+        bytes32 pPause = p.PAUSE_ROLE();
+        bytes32 pUnpause = p.UNPAUSE_ROLE();
 
         console.log("--- teardown: revoking deterministic wallet privileges ---");
         vm.startBroadcast();
@@ -539,9 +547,13 @@ contract Smoke is Script {
             c.revokeRole(cOps, ops.addr);
             console.log("  revoked compliance.OPS_ROLE from ops");
         }
-        if (p.hasRole(pOps, ops.addr)) {
-            p.revokeRole(pOps, ops.addr);
-            console.log("  revoked pauseRegistry.OPS_ROLE from ops");
+        if (p.hasRole(pPause, ops.addr)) {
+            p.revokeRole(pPause, ops.addr);
+            console.log("  revoked pauseRegistry.PAUSE_ROLE from ops");
+        }
+        if (p.hasRole(pUnpause, ops.addr)) {
+            p.revokeRole(pUnpause, ops.addr);
+            console.log("  revoked pauseRegistry.UNPAUSE_ROLE from ops");
         }
         if (address(issuer) != address(0)) {
             bytes32 issuerOps = issuer.OPS_ROLE();

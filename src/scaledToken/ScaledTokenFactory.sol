@@ -15,10 +15,14 @@ import {IPauseRegistry} from "../pauseRegistry/IPauseRegistry.sol";
 /// @notice Deploys ScaledToken instances behind a shared UpgradeableBeacon. Each deployment
 ///         is a BeaconProxy; upgrading the beacon upgrades every token at once.
 ///
-///         owner (DEFAULT_ADMIN_ROLE) creates tokens and rotates the default compliance /
-///         pause registries. proxyAdmin owns the beacon and is the only address that can
-///         upgrade the implementation.
+///         OPS_ROLE creates tokens and renames symbol / asset code; owner (DEFAULT_ADMIN_ROLE)
+///         grants that role and rotates the default compliance / pause registries. proxyAdmin
+///         owns the beacon and is the only address that can upgrade the implementation.
 contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
+    /// @notice Operational role: creates tokens and renames symbol / asset code. Admin only
+    ///         grants/revokes it (separation of duties — admin does not perform these directly).
+    bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
+
     UpgradeableBeacon public immutable beacon;
 
     /// @notice Default compliance registry passed to every new token.
@@ -92,6 +96,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         defaultPauseManager = _pauseManager;
 
         _grantRole(DEFAULT_ADMIN_ROLE, _owner);
+        _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
     }
 
     /// @notice Deploys a new ScaledToken behind a BeaconProxy and initializes it atomically.
@@ -105,7 +110,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         address _admin,
         address[] memory _issuers,
         address[] memory _multiplierSchedulers
-    ) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant returns (address proxy) {
+    ) external onlyRole(OPS_ROLE) nonReentrant returns (address proxy) {
         if (bytes(_name).length == 0) revert EmptyString();
         if (bytes(_symbol).length == 0) revert EmptyString();
         if (bytes(_assetCode).length == 0) revert EmptyString();
@@ -247,7 +252,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     ///         sync the map otherwise, closing the drift between factory registry and reality.
     function renameSymbol(address token, string calldata oldSymbol, string calldata newSymbol)
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
+        onlyRole(OPS_ROLE)
     {
         if (token == address(0)) revert ZeroAddress();
         if (bytes(newSymbol).length == 0) revert EmptyString();
@@ -275,7 +280,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     ///         `newAssetCode` and refuses to sync the map otherwise.
     function renameAssetCode(address token, string calldata oldAssetCode, string calldata newAssetCode)
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
+        onlyRole(OPS_ROLE)
     {
         if (token == address(0)) revert ZeroAddress();
         if (bytes(newAssetCode).length == 0) revert EmptyString();
