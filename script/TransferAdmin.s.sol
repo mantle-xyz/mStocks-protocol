@@ -10,7 +10,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 ///         Deploy.s.sol.
 ///
 /// Per-contract admins: each contract's handover target is read from its own
-/// `[section].finalAdmin` in config.toml (sections: compliance / pauseManager / factory /
+/// `[section].finalAdmin` in config.toml (sections: compliance / pauseRegistry / factory /
 /// tokenIssuer / token), so different multisigs can own different contracts. There is NO global
 /// default and NO fallback — a missing or zero `finalAdmin` for any target being handed over
 /// REVERTS, so a handover can never silently land on the broadcaster or a wrong default.
@@ -33,7 +33,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 /// Usage (Ledger):
 ///   forge script script/TransferAdmin.s.sol:TransferAdmin \
 ///     --sig "run(address,address,address,address,address[])" \
-///     <compliance> <pauseManager> <factory> <tokenIssuer> "[<token1>,<token2>]" \
+///     <compliance> <pauseRegistry> <factory> <tokenIssuer> "[<token1>,<token2>]" \
 ///     --rpc-url $RPC --ledger --sender <ledgerAddr> --broadcast -vvv
 ///
 ///   # single target with an explicit new admin:
@@ -45,13 +45,13 @@ contract TransferAdmin is Script {
     bytes32 internal constant DEFAULT_ADMIN_ROLE = bytes32(0);
 
     /// @param compliance   ComplianceRegistry  (address(0) to skip)
-    /// @param pauseManager PauseRegistry        (address(0) to skip)
+    /// @param pauseRegistry PauseRegistry        (address(0) to skip)
     /// @param factory      ScaledTokenFactory   (address(0) to skip)
     /// @param tokenIssuer  TokenIssuer proxy    (address(0) to skip)
     /// @param tokens       ScaledToken proxies  (empty to skip)
     function run(
         address compliance,
-        address pauseManager,
+        address pauseRegistry,
         address factory,
         address tokenIssuer,
         address[] calldata tokens
@@ -67,8 +67,8 @@ contract TransferAdmin is Script {
         if (compliance != address(0)) {
             _handover(compliance, "ComplianceRegistry", _sectionAdmin("compliance"), from);
         }
-        if (pauseManager != address(0)) {
-            _handover(pauseManager, "PauseRegistry", _sectionAdmin("pauseManager"), from);
+        if (pauseRegistry != address(0)) {
+            _handover(pauseRegistry, "PauseRegistry", _sectionAdmin("pauseRegistry"), from);
         }
         if (factory != address(0)) {
             _handover(factory, "ScaledTokenFactory", _sectionAdmin("factory"), from);
