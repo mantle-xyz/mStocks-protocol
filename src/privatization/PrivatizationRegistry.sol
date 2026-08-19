@@ -14,55 +14,70 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 
+/// @dev Minimal freeze view on the old token — used to assert supply is frozen before snapshotting.
+interface IFreezableSupply {
+    function mintAllowed() external view returns (bool);
+    function totalSupply() external view returns (uint256);
+}
+
 /// @notice Registry for privatization / take-private (delisting) events — see
 ///         docs/corporate-actions-td.md §4.
 ///
 ///         One contract manages many delisting **programs**. In each program a retired mStocks
-///         security (`oldToken`) is swapped, at FIXED per-share rates, for a basket of
-///         standardized reward tokens (USDC, new mStocks, a CVR-mStock, …), one {Leg} each.
-///         Because rates are fixed and the old token's supply is frozen
-///         (`ScaledToken.setMintAllowed(false)`), there is no record-date snapshot, Merkle tree
-///         or escrow: whoever holds the old token can surrender any amount for proportional
-///         consideration.
+///         security (`oldToken`) is swapped for a basket of standardized reward tokens (USDC, new
+///         mStocks, a CVR-mStock, …), one {Leg} each. Each leg carries a **`total`** — the whole
+///         amount of that reward token to be distributed — and a holder surrendering `amount` of
+///         the old token receives a **pro-rata** slice:
 ///
-///         Reward funds are accounted **per program** (`reserved[programId][token]`): a claim
-///         only ever draws from its own program's reserve, so programs never touch each other's
-///         money, and `sweepUnclaimed` is precise and deadline-gated.
+///             out_i = amount * leg.total / oldSupplySnapshot
 ///
-///         A CVR-mStock is redeemed by simply registering another program whose `oldToken` is
-///         that CVR-mStock — the deferred settlement of the original event reuses this same
-///         machinery, no bespoke contract.
+///         `oldSupplySnapshot` is the old token's `totalSupply()` captured **once**, at
+///         {configureProgram}, AFTER supply is frozen. It must be a fixed snapshot — never live
+///         supply — because {claim} burns the surrendered old tokens, so live `totalSupply` shrinks
+///         as people claim; dividing by a shrinking denominator would over-distribute.
 ///
-///         Upgradeable: deployed behind a TransparentUpgradeableProxy (like {TokenIssuer});
-///         upgrade authority lives on the auto-created ProxyAdmin, separate from
-///         DEFAULT_ADMIN_ROLE (day-to-day ops).
+///         Lifecycle (state machine): `Created` → (operator `setMintAllowed(false)` off-registry)
+///         → `Active` (configureProgram: snapshot supply + open the [startTime, deadline] window)
+///         → funded → claimed within the window → `Closed` (sweepUnclaimed after deadline).
+///
+///         Reward funds are accounted **per program** (`reserved[programId][token]`): a claim only
+///         ever draws from its own program's reserve, so programs never touch each other's money,
+///         and `sweepUnclaimed` is precise and deadline-gated.
+///
+///         A CVR-mStock is redeemed by simply registering another program whose `oldToken` is that
+///         CVR-mStock — the deferred settlement reuses this same machinery, no bespoke contract.
+///
+///         Upgradeable: deployed behind a TransparentUpgradeableProxy (like {TokenIssuer}); upgrade
+///         authority lives on the auto-created ProxyAdmin, separate from DEFAULT_ADMIN_ROLE.
 ///
 ///         Setup per program (operator):
-///           1. `setMintAllowed(false)` on the old token (freeze supply)
-///           2. grant this registry BURN_ROLE on that old token (least privilege — burn only)
-///           3. `createProgram(oldToken, legs, deadline)` → programId
-///           4. `fund(programId, token, amount)` each reward token up to the payable ceiling
-///
-///         Rates are per {RATE_SCALE} (1e18) of old-token raw; the operator bakes any
-///         UI-multiplier conversion into the rate (the old token's multiplier is frozen at
-///         delisting). Fractional remainders truncate (round down).
+///           1. `createProgram(oldToken, legs)` → programId (each leg = token + total)
+///           2. `setMintAllowed(false)` on the old token (freeze supply — off-registry, OPS)
+///           3. `configureProgram(programId, {startTime, deadline, …})` (snapshots supply → Active)
+///           4. `fund(programId, token, amount)` each reward token up to its `total`
 contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
 
-    /// @notice Fixed-point scale for a leg's rate. 1e18 == "1.0 reward raw per old raw unit".
-    uint256 public constant RATE_SCALE = 1e18;
+    enum State {
+        None, // 0 — program id never created
+        Created, // 1 — legs set; not yet configured (no snapshot / window)
+        Active, // 2 — supply snapshotted + window open; claimable
+        Closed // 3 — swept after deadline
+    }
 
     struct Leg {
         address token; // reward ERC-20
-        uint256 rate; // reward raw delivered per RATE_SCALE of old raw surrendered
+        uint256 total; // total amount of this reward token distributed across the whole old supply
     }
 
     struct Program {
         address oldToken;
+        uint64 startTime; // claims accepted from this timestamp (inclusive)
         uint64 deadline; // claims accepted up to and including this timestamp
-        bool exists;
+        uint256 oldSupplySnapshot; // denominator: oldToken.totalSupply() captured at configureProgram
+        uint8 state; // State
     }
 
     mapping(uint256 => Program) public programs;
@@ -71,7 +86,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     mapping(uint256 => mapping(address => uint256)) public reserved;
     uint256 public programCount;
 
-    event ProgramCreated(uint256 indexed programId, address indexed oldToken, uint64 deadline);
+    event ProgramCreated(uint256 indexed programId, address indexed oldToken);
+    event ProgramConfigured(uint256 indexed programId, uint64 startTime, uint64 deadline, uint256 oldSupplySnapshot);
     event Funded(uint256 indexed programId, address indexed token, address indexed from, uint256 amount);
     event Claimed(uint256 indexed programId, address indexed holder, uint256 oldAmount);
     event Swept(uint256 indexed programId, address indexed to);
@@ -80,6 +96,12 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error NoLegs();
     error BadLeg();
     error UnknownProgram();
+    error NotConfigurable();
+    error NotActive();
+    error SupplyNotFrozen();
+    error ZeroSupplySnapshot();
+    error BadWindow();
+    error ClaimNotStarted();
     error ClaimClosed();
     error ClaimStillOpen();
     error ZeroAmount();
@@ -104,9 +126,10 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
     // ── program lifecycle ─────────────────────────────────────────────────────
 
-    /// @notice Register a delisting program. Admin-only (sets economic parameters). Each leg
-    ///         must carry a token and non-zero rate; at least one leg is required.
-    function createProgram(address oldToken, Leg[] calldata legs, uint64 deadline)
+    /// @notice Register a delisting program. Admin-only (sets economic parameters). Each leg must
+    ///         carry a token and non-zero `total`; at least one leg is required. The program starts
+    ///         in `Created` — it becomes claimable only after {configureProgram}.
+    function createProgram(address oldToken, Leg[] calldata legs)
         external
         onlyRole(DEFAULT_ADMIN_ROLE)
         returns (uint256 programId)
@@ -115,19 +138,49 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         if (legs.length == 0) revert NoLegs();
 
         programId = programCount++;
-        programs[programId] = Program({oldToken: oldToken, deadline: deadline, exists: true});
+        programs[programId] =
+            Program({oldToken: oldToken, startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: uint8(State.Created)});
         for (uint256 i = 0; i < legs.length; ++i) {
-            if (legs[i].token == address(0) || legs[i].rate == 0) revert BadLeg();
+            if (legs[i].token == address(0) || legs[i].total == 0) revert BadLeg();
             _legs[programId].push(legs[i]);
         }
-        emit ProgramCreated(programId, oldToken, deadline);
+        emit ProgramCreated(programId, oldToken);
     }
 
-    /// @notice Fund + reserve `amount` of `token` for `programId`. OPS-only, accounted so a
-    ///         claim can never dip into another program's (or unrelated) balance. Caller must
-    ///         `approve` this registry for `amount` first.
+    /// @notice Snapshot the (frozen) old-token supply and open the claim window. Admin-only, once,
+    ///         while the program is `Created`. The full {Program} struct is accepted for
+    ///         convenience but the contract stays in control: `oldToken` is preserved from
+    ///         {createProgram}, `oldSupplySnapshot` is read on-chain from the frozen supply, and
+    ///         `state` is forced to `Active` — only `startTime` / `deadline` are taken from input.
+    ///
+    ///         Requires the old token's supply to be frozen first (`setMintAllowed(false)`), so the
+    ///         snapshot can never race a mint. The pro-rata denominator is fixed here for good.
+    function configureProgram(uint256 programId, Program calldata program) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        Program storage p = programs[programId];
+        if (p.state == uint8(State.None)) revert UnknownProgram();
+        if (p.state != uint8(State.Created)) revert NotConfigurable();
+        if (program.startTime >= program.deadline || program.deadline <= block.timestamp) revert BadWindow();
+
+        IFreezableSupply old = IFreezableSupply(p.oldToken);
+        if (old.mintAllowed()) revert SupplyNotFrozen();
+        uint256 snapshot = old.totalSupply();
+        if (snapshot == 0) revert ZeroSupplySnapshot();
+
+        p.startTime = program.startTime;
+        p.deadline = program.deadline;
+        p.oldSupplySnapshot = snapshot;
+        p.state = uint8(State.Active);
+
+        emit ProgramConfigured(programId, program.startTime, program.deadline, snapshot);
+    }
+
+    /// @notice Fund + reserve `amount` of `token` for `programId`. OPS-only, accounted so a claim
+    ///         can never dip into another program's (or unrelated) balance. Caller must `approve`
+    ///         this registry for `amount` first. Allowed while the program exists and is not closed.
     function fund(uint256 programId, address token, uint256 amount) external onlyRole(OPS_ROLE) nonReentrant {
-        if (!programs[programId].exists) revert UnknownProgram();
+        uint8 s = programs[programId].state;
+        if (s == uint8(State.None)) revert UnknownProgram();
+        if (s == uint8(State.Closed)) revert ClaimClosed();
         if (token == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
         reserved[programId][token] += amount;
@@ -145,35 +198,42 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         return _legs[programId][i];
     }
 
-    /// @notice Per-leg consideration for surrendering `oldAmount` (raw), in leg order.
+    /// @notice Per-leg consideration for surrendering `oldAmount` (raw), in leg order. Returns zeros
+    ///         until the program is configured (snapshot == 0).
     function previewClaim(uint256 programId, uint256 oldAmount) public view returns (uint256[] memory outs) {
         Leg[] storage legs = _legs[programId];
         outs = new uint256[](legs.length);
+        uint256 snapshot = programs[programId].oldSupplySnapshot;
+        if (snapshot == 0) return outs;
         for (uint256 i = 0; i < legs.length; ++i) {
-            outs[i] = Math.mulDiv(oldAmount, legs[i].rate, RATE_SCALE);
+            outs[i] = Math.mulDiv(oldAmount, legs[i].total, snapshot);
         }
     }
 
     // ── claim / sweep ───────────────────────────────────────────────────────────
 
-    /// @notice Surrender `amount` (raw) of the program's old token for the fixed-rate basket.
-    ///         Caller must `approve` this registry for `amount` first. The old tokens are pulled in
-    ///         and burned (registry holds BURN_ROLE on the old token); each leg is paid from that
-    ///         program's reserve. A compliance-blocked mStocks leg reverts the whole claim (old
-    ///         token stays with the holder) — retry once unblocked, so no escrow is needed.
+    /// @notice Surrender `amount` (raw) of the program's old token for the pro-rata basket. Caller
+    ///         must `approve` this registry for `amount` first. The old tokens are pulled in and
+    ///         burned (registry holds BURN_ROLE on the old token); each leg pays
+    ///         `amount * leg.total / oldSupplySnapshot` from that program's reserve. A
+    ///         compliance-blocked mStocks leg reverts the whole claim (old token stays with the
+    ///         holder) — retry once unblocked, so no escrow is needed.
     function claim(uint256 programId, uint256 amount) external nonReentrant {
         Program storage p = programs[programId];
-        if (!p.exists) revert UnknownProgram();
+        if (p.state == uint8(State.None)) revert UnknownProgram();
+        if (p.state != uint8(State.Active)) revert NotActive();
+        if (block.timestamp < p.startTime) revert ClaimNotStarted();
         if (block.timestamp > p.deadline) revert ClaimClosed();
         if (amount == 0) revert ZeroAmount();
 
+        uint256 snapshot = p.oldSupplySnapshot;
         IERC20(p.oldToken).safeTransferFrom(msg.sender, address(this), amount);
         if (!IMintAndBurnable(p.oldToken).burn(amount)) revert BurnFailed();
 
         Leg[] storage legs = _legs[programId];
         bool delivered;
         for (uint256 i = 0; i < legs.length; ++i) {
-            uint256 out = Math.mulDiv(amount, legs[i].rate, RATE_SCALE);
+            uint256 out = Math.mulDiv(amount, legs[i].total, snapshot);
             if (out == 0) continue; // dust leg for this amount
             address token = legs[i].token;
             uint256 r = reserved[programId][token];
@@ -188,14 +248,16 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     }
 
     /// @notice After the program deadline, sweep its remaining (unclaimed) reserve of every leg
-    ///         token to a custody address. Deadline-gated so committed funds cannot be pulled
-    ///         out from under holders who can still claim.
+    ///         token to a custody address and close it. Deadline-gated so committed funds cannot be
+    ///         pulled out from under holders who can still claim.
     function sweepUnclaimed(uint256 programId, address to) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
         Program storage p = programs[programId];
-        if (!p.exists) revert UnknownProgram();
+        if (p.state == uint8(State.None)) revert UnknownProgram();
+        if (p.state != uint8(State.Active)) revert NotActive();
         if (block.timestamp <= p.deadline) revert ClaimStillOpen();
         if (to == address(0)) revert ZeroAddress();
 
+        p.state = uint8(State.Closed);
         Leg[] storage legs = _legs[programId];
         for (uint256 i = 0; i < legs.length; ++i) {
             address token = legs[i].token;

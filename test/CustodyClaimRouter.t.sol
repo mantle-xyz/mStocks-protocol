@@ -67,28 +67,39 @@ contract CustodyClaimRouterTest is Test {
 
         BURN_ROLE = oldToken.BURN_ROLE();
 
-        // A privatization program paying USDC + new stock + CVR for surrendered OLD.
+        // A privatization program: each leg's `total` is distributed pro-rata across old supply.
         PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](3);
-        legs[0] = PrivatizationRegistry.Leg(address(usdc), 3e6); // 3 USDC / OLD
-        legs[1] = PrivatizationRegistry.Leg(address(newToken), 2e18); // 2 NEW / OLD
-        legs[2] = PrivatizationRegistry.Leg(address(cvr), 1e18); // 1 CVR / OLD
+        legs[0] = PrivatizationRegistry.Leg(address(usdc), 300e6); // 300 USDC total
+        legs[1] = PrivatizationRegistry.Leg(address(newToken), 200 ether); // 200 NEW total
+        legs[2] = PrivatizationRegistry.Leg(address(cvr), 100 ether); // 100 CVR total
 
-        // seed the hot wallet with OLD before freezing supply
+        // seed the hot wallet with the WHOLE old supply before freezing
         oldToken.mint(100 ether);
         oldToken.transfer(hotWallet, 100 ether);
 
         vm.prank(admin);
-        programId = registry.createProgram(address(oldToken), legs, uint64(block.timestamp + 7 days));
+        programId = registry.createProgram(address(oldToken), legs);
 
-        // registry burns surrendered OLD; freeze OLD supply
+        // registry burns surrendered OLD; freeze OLD supply (setMintAllowed is OPS-gated)
         vm.startPrank(admin);
         oldToken.grantRole(BURN_ROLE, address(registry));
-        oldToken.grantRole(oldToken.OPS_ROLE(), tokenOps); // setMintAllowed is OPS-gated (role-opt)
+        oldToken.grantRole(oldToken.OPS_ROLE(), tokenOps);
         vm.stopPrank();
         vm.prank(tokenOps);
         oldToken.setMintAllowed(false);
 
-        // fund the basket for a 100-OLD claim
+        // configure: snapshot the frozen 100e18 supply + open the window → Active
+        PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
+            oldToken: address(0),
+            startTime: uint64(block.timestamp),
+            deadline: uint64(block.timestamp + 7 days),
+            oldSupplySnapshot: 0,
+            state: 0
+        });
+        vm.prank(admin);
+        registry.configureProgram(programId, cfg);
+
+        // fund the basket (hotWallet holds 100% of supply → claiming 100 pays the full totals)
         _fundUsd(300e6);
         _fund(newToken, 200 ether);
         _fund(cvr, 100 ether);

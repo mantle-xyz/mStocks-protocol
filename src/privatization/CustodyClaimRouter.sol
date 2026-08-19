@@ -103,8 +103,8 @@ contract CustodyClaimRouter is AccessControlEnumerable, ReentrancyGuardTransient
         if (!isHotWallet[hotWallet]) revert NotRegisteredHotWallet();
         if (amount == 0) revert ZeroAmount();
 
-        (address oldToken,, bool exists) = registry.programs(programId);
-        if (!exists) revert UnknownProgram();
+        (address oldToken,,,, uint8 state) = registry.programs(programId);
+        if (state == 0) revert UnknownProgram(); // State.None — program id never created
 
         // Snapshot each DISTINCT reward-leg token's balance before the claim, so we can forward
         // exactly what arrives (self-correcting against dust legs / repeated tokens).
