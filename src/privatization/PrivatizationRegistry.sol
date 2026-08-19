@@ -126,12 +126,13 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
     // ── program lifecycle ─────────────────────────────────────────────────────
 
-    /// @notice Register a delisting program. Admin-only (sets economic parameters). Each leg must
-    ///         carry a token and non-zero `total`; at least one leg is required. The program starts
-    ///         in `Created` — it becomes claimable only after {configureProgram}.
+    /// @notice Register a delisting program. OPS-only — the whole program lifecycle (create /
+    ///         configure / fund / sweep) is an operational duty; admin only manages roles. Each leg
+    ///         must carry a token and non-zero `total`; at least one leg is required. The program
+    ///         starts in `Created` — it becomes claimable only after {configureProgram}.
     function createProgram(address oldToken, Leg[] calldata legs)
         external
-        onlyRole(DEFAULT_ADMIN_ROLE)
+        onlyRole(OPS_ROLE)
         returns (uint256 programId)
     {
         if (oldToken == address(0)) revert ZeroAddress();
@@ -147,7 +148,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         emit ProgramCreated(programId, oldToken);
     }
 
-    /// @notice Snapshot the (frozen) old-token supply and open the claim window. Admin-only, once,
+    /// @notice Snapshot the (frozen) old-token supply and open the claim window. OPS-only, once,
     ///         while the program is `Created`. The full {Program} struct is accepted for
     ///         convenience but the contract stays in control: `oldToken` is preserved from
     ///         {createProgram}, `oldSupplySnapshot` is read on-chain from the frozen supply, and
@@ -155,7 +156,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///
     ///         Requires the old token's supply to be frozen first (`setMintAllowed(false)`), so the
     ///         snapshot can never race a mint. The pro-rata denominator is fixed here for good.
-    function configureProgram(uint256 programId, Program calldata program) external onlyRole(DEFAULT_ADMIN_ROLE) {
+    function configureProgram(uint256 programId, Program calldata program) external onlyRole(OPS_ROLE) {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
         if (p.state != uint8(State.Created)) revert NotConfigurable();
@@ -248,9 +249,9 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     }
 
     /// @notice After the program deadline, sweep its remaining (unclaimed) reserve of every leg
-    ///         token to a custody address and close it. Deadline-gated so committed funds cannot be
-    ///         pulled out from under holders who can still claim.
-    function sweepUnclaimed(uint256 programId, address to) external onlyRole(DEFAULT_ADMIN_ROLE) nonReentrant {
+    ///         token to a custody address and close it. OPS-only. Deadline-gated so committed funds
+    ///         cannot be pulled out from under holders who can still claim.
+    function sweepUnclaimed(uint256 programId, address to) external onlyRole(OPS_ROLE) nonReentrant {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
         if (p.state != uint8(State.Active)) revert NotActive();

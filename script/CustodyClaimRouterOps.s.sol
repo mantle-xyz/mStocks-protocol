@@ -2,30 +2,37 @@
 pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 import {CustodyClaimRouter} from "../src/privatization/CustodyClaimRouter.sol";
 
 /// @notice Deploy + operate the CustodyClaimRouter (docs/corporate-actions-td.md §5.1) — the
 ///         bridge that lets CEX hot wallets (transfer-only) take part in a privatization claim.
-///         The router is NOT upgradeable (plain constructor, immutable registry ref). Each
-///         entrypoint is broadcast by the appropriate role — run them in order.
+///         Deployed behind a TransparentUpgradeableProxy, like PrivatizationRegistry / TokenIssuer.
+///         Each entrypoint is broadcast by the appropriate role — run them in order.
 ///
 ///         0) (prereq) whitelist the router on the ComplianceRegistry so it can receive/send the
 ///            old token and any reward mStock legs (compliance ops — separate script).
-///         1) deploy             — deployer (admin = DEFAULT_ADMIN_ROLE on the router)
+///         1) deploy             — deployer (proxyAdmin owns upgrades; admin = DEFAULT_ADMIN_ROLE)
 ///         2) grantOps           — router admin (delegate OPS_ROLE to the operator)
 ///         3) registerHotWallets — router admin (allowlist the CEX hot wallets)
 ///         4) claimFor           — OPS (after a hot wallet has transferred old tokens into router)
 ///         5) rescue             — router admin (recover stray / unclaimed assets)
 contract CustodyClaimRouterOps is Script {
-    /// @notice Step 1 — deploy the router bound to `registry`; `admin` gets DEFAULT_ADMIN_ROLE
-    ///         (maintains the hot-wallet allowlist and can rescue). OPS_ROLE is granted separately.
-    function deploy(address registry, address admin) external returns (address router) {
-        require(registry != address(0) && admin != address(0), "zero addr");
+    /// @notice Step 1 — deploy the router behind a TransparentUpgradeableProxy, bound to `registry`.
+    ///         `proxyAdmin` owns the auto-created ProxyAdmin (sole upgrade authority); `admin` gets
+    ///         DEFAULT_ADMIN_ROLE (maintains the hot-wallet allowlist and can rescue). OPS_ROLE is
+    ///         granted separately.
+    function deploy(address proxyAdmin, address registry, address admin) external returns (address router) {
+        require(proxyAdmin != address(0) && registry != address(0) && admin != address(0), "zero addr");
         vm.startBroadcast();
-        router = address(new CustodyClaimRouter(registry, admin));
+        CustodyClaimRouter impl = new CustodyClaimRouter();
+        bytes memory initData = abi.encodeWithSelector(CustodyClaimRouter.initialize.selector, registry, admin);
+        router = address(new TransparentUpgradeableProxy(address(impl), proxyAdmin, initData));
         vm.stopBroadcast();
-        console.log("CustodyClaimRouter:        ", router);
+        console.log("CustodyClaimRouter impl:   ", address(impl));
+        console.log("CustodyClaimRouter proxy:  ", router);
+        console.log("  proxyAdmin (upgrade auth):", proxyAdmin);
         console.log("  registry:                ", registry);
         console.log("  admin (DEFAULT_ADMIN):   ", admin);
         console.log("  NOTE: whitelist this router on the ComplianceRegistry before use.");

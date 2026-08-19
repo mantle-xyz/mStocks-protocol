@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 pragma solidity ^0.8.24;
 
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    AccessControlEnumerableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -37,14 +40,18 @@ import {PrivatizationRegistry} from "./PrivatizationRegistry.sol";
 ///
 ///         `rescue` lets the admin recover assets that were transferred in but not (yet) claimed,
 ///         or anything sent here by mistake.
-contract CustodyClaimRouter is AccessControlEnumerable, ReentrancyGuardTransient {
+///
+///         Upgradeable: deployed behind a TransparentUpgradeableProxy (like {PrivatizationRegistry}
+///         / {TokenIssuer}); upgrade authority lives on the auto-created ProxyAdmin, separate from
+///         DEFAULT_ADMIN_ROLE.
+contract CustodyClaimRouter is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
 
-    /// @notice The privatization registry this router claims against. Immutable — one router per
-    ///         registry deployment.
-    PrivatizationRegistry public immutable registry;
+    /// @notice The privatization registry this router claims against. Set once at {initialize};
+    ///         one router (deployment) per registry.
+    PrivatizationRegistry public registry;
 
     /// @notice Admin-maintained allowlist of legitimate CEX hot wallets. `claimFor` refuses to pay
     ///         anyone not on it.
@@ -63,8 +70,15 @@ contract CustodyClaimRouter is AccessControlEnumerable, ReentrancyGuardTransient
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
 
-    constructor(address registry_, address admin) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address registry_, address admin) external initializer {
         if (registry_ == address(0) || admin == address(0)) revert ZeroAddress();
+        __AccessControlEnumerable_init();
+        // ReentrancyGuardTransient (EIP-1153 TSTORE) uses transient storage — no initializer needed.
         registry = PrivatizationRegistry(registry_);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
@@ -159,7 +173,11 @@ contract CustodyClaimRouter is AccessControlEnumerable, ReentrancyGuardTransient
     // ── role guards (repo convention) ────────────────────────────────────────────
 
     /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
-    function grantRole(bytes32 role, address account) public virtual override(AccessControl, IAccessControl) {
+    function grantRole(bytes32 role, address account)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
     }
@@ -168,11 +186,14 @@ contract CustodyClaimRouter is AccessControlEnumerable, ReentrancyGuardTransient
     function renounceRole(bytes32 role, address callerConfirmation)
         public
         virtual
-        override(AccessControl, IAccessControl)
+        override(AccessControlUpgradeable, IAccessControl)
     {
         if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
             revert CannotRenounceLastAdmin();
         }
         super.renounceRole(role, callerConfirmation);
     }
+
+    /// @dev Storage gap for upgrade-safe additions. 2 vars (registry, isHotWallet) + 48 = 50 slots.
+    uint256[48] private __gap;
 }

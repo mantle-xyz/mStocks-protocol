@@ -13,12 +13,14 @@ import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 ///         TokenIssuer. Each entrypoint is broadcast by the appropriate role — run them in order.
 ///
 ///         1)  deploy           — deployer (proxyAdmin owns upgrades; admin = DEFAULT_ADMIN_ROLE)
-///         2)  createProgram    — registry admin (legs = token + total; program starts Created)
+///         2)  createProgram    — registry OPS (legs = token + total; program starts Created)
 ///         3a) wireBurnRole     — OLD token ADMIN (grant registry BURN_ROLE)
 ///         3b) freezeSupply     — OLD token OPS   (setMintAllowed=false; ≠ admin — self-grant blocked)
-///         4)  configureProgram — registry admin (snapshot frozen supply + open window → Active)
+///         4)  configureProgram — registry OPS (snapshot frozen supply + open window → Active)
 ///         5)  fund             — registry OPS (holds reward tokens)
-///         6)  sweep            — registry admin, after the program deadline
+///         6)  sweep            — registry OPS, after the program deadline
+///
+///         The whole program lifecycle (2/4/5/6) is OPS-driven; registry admin only grants OPS_ROLE.
 contract PrivatizationRegistryOps is Script {
     /// @notice Step 1 — deploy behind a TransparentUpgradeableProxy. `proxyAdmin` owns the
     ///         auto-created ProxyAdmin (sole upgrade authority); `admin` gets DEFAULT_ADMIN_ROLE.
@@ -60,7 +62,7 @@ contract PrivatizationRegistryOps is Script {
     /// @notice Step 2 — register a delisting program from parallel reward-leg arrays
     ///         (`tokens[i]` distributing `totals[i]` across the whole old supply). Program starts in
     ///         `Created`; the supply snapshot + claim window are set later by {configureProgram}.
-    ///         Broadcaster must hold DEFAULT_ADMIN_ROLE on the registry.
+    ///         Broadcaster must hold OPS_ROLE on the registry.
     function createProgram(address registry, address oldToken, address[] calldata tokens, uint256[] calldata totals)
         external
         returns (uint256 programId)
@@ -79,7 +81,7 @@ contract PrivatizationRegistryOps is Script {
     }
 
     /// @notice Step 4 — snapshot the (already frozen) old supply and open the claim window, moving
-    ///         the program to `Active`. Broadcaster must hold DEFAULT_ADMIN_ROLE. Run AFTER
+    ///         the program to `Active`. Broadcaster must hold OPS_ROLE. Run AFTER
     ///         freezeSupply (Step 3b). `oldToken` / `oldSupplySnapshot` in the struct are ignored —
     ///         the contract fills them from the frozen on-chain supply.
     function configureProgram(address registry, uint256 programId, uint64 startTime, uint64 deadline) external {
@@ -107,7 +109,7 @@ contract PrivatizationRegistryOps is Script {
     }
 
     /// @notice Step 6 — after the program deadline, sweep unclaimed reserve to custody.
-    ///         Broadcaster must hold DEFAULT_ADMIN_ROLE.
+    ///         Broadcaster must hold OPS_ROLE.
     function sweep(address registry, uint256 programId, address to) external {
         vm.startBroadcast();
         PrivatizationRegistry(registry).sweepUnclaimed(programId, to);

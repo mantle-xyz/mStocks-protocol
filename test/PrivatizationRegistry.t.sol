@@ -60,7 +60,7 @@ contract PrivatizationRegistryTest is Test {
         cvr = ScaledToken(factory.createToken("Deal CVR", "CVR", "US0000000003", admin, issuers, none));
 
         compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
-        registry.grantRole(registry.OPS_ROLE(), address(this)); // test funds programs
+        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives lifecycle (create/configure/fund/sweep)
         vm.stopPrank();
 
         BURN_ROLE = oldToken.BURN_ROLE();
@@ -98,12 +98,12 @@ contract PrivatizationRegistryTest is Test {
         t.setMintAllowed(false);
     }
 
-    /// @dev Admin configures the window; the contract snapshots the (frozen) old supply.
+    /// @dev OPS configures the window; the contract snapshots the (frozen) old supply. Called as
+    ///      address(this), which holds the registry OPS_ROLE (see setUp).
     function _configure(uint256 programId, uint64 startTime, uint64 deadline) internal {
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
             oldToken: address(0), startTime: startTime, deadline: deadline, oldSupplySnapshot: 0, state: 0
         });
-        vm.prank(admin);
         registry.configureProgram(programId, cfg);
     }
 
@@ -133,7 +133,6 @@ contract PrivatizationRegistryTest is Test {
     function test_createConfigureFundClaim_multiLegBasket() public {
         _seed(oldToken, alice, 100 ether); // alice holds the whole 100e18 supply
 
-        vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
         _activate(id, oldToken); // snapshot = 100e18
         _fundUsd(id, 300e6);
@@ -166,7 +165,6 @@ contract PrivatizationRegistryTest is Test {
         _seed(oldToken, alice, 60 ether);
         _seed(oldToken, bob, 40 ether); // total supply 100e18
 
-        vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
         _activate(id, oldToken); // snapshot = 100e18 (fixed)
         _fundUsd(id, 300e6);
@@ -202,10 +200,8 @@ contract PrivatizationRegistryTest is Test {
         PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](1);
         legs[0] = PrivatizationRegistry.Leg(address(usdc), 500e6);
 
-        vm.startPrank(admin);
         uint256 p0 = registry.createProgram(address(oldToken), legs);
         uint256 p1 = registry.createProgram(address(newToken), legs);
-        vm.stopPrank();
         _activate(p0, oldToken); // snapshot oldToken supply = 100e18
 
         _fundUsd(p0, 500e6);
@@ -225,7 +221,6 @@ contract PrivatizationRegistryTest is Test {
         _seed(oldToken, alice, 100 ether);
         PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](1);
         legs[0] = PrivatizationRegistry.Leg(address(usdc), 500e6);
-        vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), legs);
         _activate(id, oldToken);
         _fundUsd(id, 100e6); // underfunded: owes the full 500e6 to the sole holder
@@ -239,7 +234,6 @@ contract PrivatizationRegistryTest is Test {
 
     function test_claim_blockedHolderRevertsWhole() public {
         _seed(oldToken, bob, 100 ether);
-        vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
         _activate(id, oldToken);
         _fundUsd(id, 300e6);
@@ -259,13 +253,11 @@ contract PrivatizationRegistryTest is Test {
         _seed(oldToken, alice, 100 ether);
         PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](1);
         legs[0] = PrivatizationRegistry.Leg(address(usdc), 500e6);
-        vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), legs);
         _freeze(oldToken);
         _configure(id, uint64(block.timestamp), uint64(block.timestamp + 1 days));
         _fundUsd(id, 500e6);
 
-        vm.prank(admin);
         vm.expectRevert(PrivatizationRegistry.ClaimStillOpen.selector);
         registry.sweepUnclaimed(id, custody);
 
@@ -276,7 +268,6 @@ contract PrivatizationRegistryTest is Test {
         registry.claim(id, 100 ether);
         vm.stopPrank();
 
-        vm.prank(admin);
         registry.sweepUnclaimed(id, custody);
         assertEq(usdc.balanceOf(custody), 500e6);
         assertEq(registry.reserved(id, address(usdc)), 0);
@@ -291,7 +282,6 @@ contract PrivatizationRegistryTest is Test {
         legs[0] = PrivatizationRegistry.Leg(address(usdc), 400e6); // 400 USDC total
         legs[1] = PrivatizationRegistry.Leg(address(newToken), 100 ether); // 100 NEW total
 
-        vm.prank(admin);
         uint256 id = registry.createProgram(address(cvr), legs);
         _activate(id, cvr); // freeze the CVR + snapshot its supply
         _fundUsd(id, 400e6);
@@ -309,7 +299,6 @@ contract PrivatizationRegistryTest is Test {
 
     function test_createProgram_rejectsEmptyLegs() public {
         PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](0);
-        vm.prank(admin);
         vm.expectRevert(PrivatizationRegistry.NoLegs.selector);
         registry.createProgram(address(oldToken), legs);
     }
@@ -317,7 +306,6 @@ contract PrivatizationRegistryTest is Test {
     /// @dev configureProgram refuses to snapshot until the old supply is frozen.
     function test_configure_requiresFrozenSupply() public {
         _seed(oldToken, alice, 100 ether);
-        vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
 
         // grant BURN_ROLE but do NOT freeze → configure must revert
@@ -331,7 +319,6 @@ contract PrivatizationRegistryTest is Test {
             oldSupplySnapshot: 0,
             state: 0
         });
-        vm.prank(admin);
         vm.expectRevert(PrivatizationRegistry.SupplyNotFrozen.selector);
         registry.configureProgram(id, cfg);
     }
@@ -339,7 +326,6 @@ contract PrivatizationRegistryTest is Test {
     /// @dev A claim before the window opens reverts.
     function test_claim_beforeStartReverts() public {
         _seed(oldToken, alice, 100 ether);
-        vm.prank(admin);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
         _freeze(oldToken);
         _configure(id, uint64(block.timestamp + 1 days), uint64(block.timestamp + WEEK)); // starts in the future
@@ -352,5 +338,13 @@ contract PrivatizationRegistryTest is Test {
         vm.expectRevert(PrivatizationRegistry.ClaimNotStarted.selector);
         registry.claim(id, 100 ether);
         vm.stopPrank();
+    }
+
+    /// @dev The whole program lifecycle is OPS-only — the registry admin (role manager) cannot
+    ///      create a program (and, being unable to self-grant OPS, never gains that power directly).
+    function test_createProgram_isOpsOnly_notAdmin() public {
+        vm.prank(admin);
+        vm.expectRevert(); // AccessControlUnauthorizedAccount — admin lacks OPS_ROLE
+        registry.createProgram(address(oldToken), _legs3());
     }
 }

@@ -51,7 +51,14 @@ contract CustodyClaimRouterTest is Test {
                 )
             )
         );
-        router = new CustodyClaimRouter(address(registry), admin);
+        router = CustodyClaimRouter(
+            address(
+                new ERC1967Proxy(
+                    address(new CustodyClaimRouter()),
+                    abi.encodeCall(CustodyClaimRouter.initialize, (address(registry), admin))
+                )
+            )
+        );
 
         address[] memory issuers = new address[](1);
         issuers[0] = address(this);
@@ -60,7 +67,7 @@ contract CustodyClaimRouterTest is Test {
         newToken = ScaledToken(factory.createToken("New Co", "NEW", "US0000000002", admin, issuers, none));
         cvr = ScaledToken(factory.createToken("Deal CVR", "CVR", "US0000000003", admin, issuers, none));
 
-        registry.grantRole(registry.OPS_ROLE(), address(this)); // test funds programs
+        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives registry lifecycle
         router.grantRole(router.OPS_ROLE(), ops);
         router.registerHotWallet(hotWallet);
         vm.stopPrank();
@@ -77,8 +84,7 @@ contract CustodyClaimRouterTest is Test {
         oldToken.mint(100 ether);
         oldToken.transfer(hotWallet, 100 ether);
 
-        vm.prank(admin);
-        programId = registry.createProgram(address(oldToken), legs);
+        programId = registry.createProgram(address(oldToken), legs); // address(this) holds registry OPS
 
         // registry burns surrendered OLD; freeze OLD supply (setMintAllowed is OPS-gated)
         vm.startPrank(admin);
@@ -96,7 +102,6 @@ contract CustodyClaimRouterTest is Test {
             oldSupplySnapshot: 0,
             state: 0
         });
-        vm.prank(admin);
         registry.configureProgram(programId, cfg);
 
         // fund the basket (hotWallet holds 100% of supply → claiming 100 pays the full totals)
