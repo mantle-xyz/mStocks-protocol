@@ -84,9 +84,9 @@ contract PrivatizationRegistryOps is Script {
     ///         the program to `Active`. Broadcaster must hold OPS_ROLE. Run AFTER
     ///         freezeSupply (Step 3b). `oldToken` / `oldSupplySnapshot` in the struct are ignored —
     ///         the contract fills them from the frozen on-chain supply.
-    function configureProgram(address registry, uint256 programId, uint64 startTime, uint64 deadline) external {
+    function configureProgram(address registry, uint256 programId, uint64 startTime, uint64 deadline, uint256 oldSupplySnapshot, uint8 state) external {
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
-            oldToken: address(0), startTime: startTime, deadline: deadline, oldSupplySnapshot: 0, state: 0
+            oldToken: address(0), startTime: startTime, deadline: deadline, oldSupplySnapshot: oldSupplySnapshot, state: state
         });
         vm.startBroadcast();
         PrivatizationRegistry(registry).configureProgram(programId, cfg);

@@ -182,6 +182,12 @@ contract Deploy is Script {
         console.log("Factory:            ", address(factory));
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
+
+        // delete it when released officially, but for now the deploy admin (broadcaster) needs it to createToken / rename.
+        factory.grantRole(factory.OPS_ROLE(), _deployAdmin());
+        console.log("  granted Factory OPS_ROLE to deploy admin (createToken / rename)");
+
+
         // createToken / rename are OPS_ROLE-gated. Deliberately do NOT self-grant OPS to the deploy
         // admin here — that backdoor would linger until someone remembers to revoke it. Grant only
         // the configured operational addresses; deployToken must be run by a factory OPS signer.
