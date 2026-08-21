@@ -12,7 +12,7 @@ minMultiplierNotice = 300
 finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
 opsRole = ["0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]        # OPS_ROLE on ComplianceRegistry  — manage blocklist + sanctions
 
-[pauseManager]
+[pauseRegistry]
 finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
 pauseRole = ["0x0000000000000000000000000000000000000000"]      # PAUSE_ROLE on PauseRegistry     — pause tokens / global
 unpauseRole = ["0x0000000000000000000000000000000000000000"]    # UNPAUSE_ROLE on PauseRegistry   — unpause tokens / global

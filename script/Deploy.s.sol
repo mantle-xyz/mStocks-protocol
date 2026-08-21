@@ -17,10 +17,12 @@ import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 /// Entry points (use --sig to pick which one):
 ///   run()                                   — full stack + optional initial token
 ///   deployCompliance()                      — ComplianceRegistry
-///   deployPauseManager()                    — PauseRegistry
+///   deployPauseRegistry()                   — PauseRegistry
 ///   deployFactory(address,address)          — ScaledTokenFactory(compliance, pauseRegistry);
 ///                                              minMultiplierNotice read from [factory] config
-///   deployToken(address)                    — BeaconProxy address via factory
+///   deployToken(address)                    — BeaconProxy address via factory; must be broadcast
+///                                              by a factory OPS signer (createToken is OPS-gated);
+///                                              grants the token's OPS_ROLE to [token].opsRole
 ///   deployTokenIssuer(address[])            — TokenIssuer behind TransparentUpgradeableProxy
 ///                                              (upgrade authority = auto-created ProxyAdmin
 ///                                              owned by cfg.proxyAdmin); auto-grants ISSUER_ROLE
@@ -35,9 +37,11 @@ import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 /// `config.proxyAdmin` (beacon owner / proxy upgrade authority) IS set to its final value at
 /// deploy — the broadcaster never needs it, so it requires no handover.
 ///
-/// Role grants / initial token deploy are gated on the broadcaster actually holding
-/// DEFAULT_ADMIN_ROLE on the target (always true on the fresh full-stack path; checked on-chain
-/// so standalone re-runs against pre-existing contracts skip gracefully instead of reverting).
+/// Role grants are gated on the broadcaster actually holding DEFAULT_ADMIN_ROLE on the target
+/// (always true on the fresh full-stack path; checked on-chain so standalone re-runs against
+/// pre-existing contracts skip gracefully instead of reverting). The initial token deploy
+/// (deployToken) is instead gated on the broadcaster holding the factory's OPS_ROLE, since
+/// createToken is OPS-gated and no admin backdoor is granted at deploy.
 contract Deploy is Script {
     using stdToml for string;
 
@@ -71,7 +75,7 @@ contract Deploy is Script {
         external
         returns (
             ComplianceRegistry compliance,
-            PauseRegistry pauseManager,
+            PauseRegistry pauseRegistry,
             ScaledTokenFactory factory,
             address initialToken
         )
@@ -81,11 +85,8 @@ contract Deploy is Script {
 
         vm.startBroadcast();
         compliance = _deployCompliance(cfg);
-        pauseManager = _deployPauseManager(cfg);
-        factory = _deployFactory(cfg, address(compliance), address(pauseManager));
-        if (cfg.deployInitialToken) {
-            initialToken = _deployToken(cfg, factory);
-        }
+        pauseRegistry = _deployPauseRegistry(cfg);
+        factory = _deployFactory(cfg, address(compliance), address(pauseRegistry));
         vm.stopBroadcast();
     }
 
@@ -97,21 +98,21 @@ contract Deploy is Script {
         vm.stopBroadcast();
     }
 
-    function deployPauseManager() external returns (PauseRegistry pauseManager) {
+    function deployPauseRegistry() external returns (PauseRegistry pauseRegistry) {
         Config memory cfg = _loadConfig();
 
         vm.startBroadcast();
-        pauseManager = _deployPauseManager(cfg);
+        pauseRegistry = _deployPauseRegistry(cfg);
         vm.stopBroadcast();
     }
 
-    function deployFactory(address compliance, address pauseManager) external returns (ScaledTokenFactory factory) {
+    function deployFactory(address compliance, address pauseRegistry) external returns (ScaledTokenFactory factory) {
         require(compliance != address(0), "Deploy: compliance is zero");
-        require(pauseManager != address(0), "Deploy: pauseManager is zero");
+        require(pauseRegistry != address(0), "Deploy: pauseRegistry is zero");
         Config memory cfg = _loadConfig();
 
         vm.startBroadcast();
-        factory = _deployFactory(cfg, compliance, pauseManager);
+        factory = _deployFactory(cfg, compliance, pauseRegistry);
         vm.stopBroadcast();
     }
 
@@ -161,28 +162,31 @@ contract Deploy is Script {
         _grantRoles(address(compliance), compliance.OPS_ROLE(), "OPS_ROLE (ComplianceRegistry)", cfg.complianceOps);
     }
 
-    function _deployPauseManager(Config memory cfg) internal returns (PauseRegistry pauseManager) {
-        pauseManager = new PauseRegistry(_deployAdmin());
-        console.log("PauseRegistry:      ", address(pauseManager));
-        _grantRoles(address(pauseManager), pauseManager.PAUSE_ROLE(), "PAUSE_ROLE (PauseRegistry)", cfg.pauseRole);
-        _grantRoles(address(pauseManager), pauseManager.UNPAUSE_ROLE(), "UNPAUSE_ROLE (PauseRegistry)", cfg.unpauseRole);
+    function _deployPauseRegistry(Config memory cfg) internal returns (PauseRegistry pauseRegistry) {
+        pauseRegistry = new PauseRegistry(_deployAdmin());
+        console.log("PauseRegistry:      ", address(pauseRegistry));
+        _grantRoles(address(pauseRegistry), pauseRegistry.PAUSE_ROLE(), "PAUSE_ROLE (PauseRegistry)", cfg.pauseRole);
+        _grantRoles(
+            address(pauseRegistry), pauseRegistry.UNPAUSE_ROLE(), "UNPAUSE_ROLE (PauseRegistry)", cfg.unpauseRole
+        );
     }
 
-    function _deployFactory(Config memory cfg, address compliance, address pauseManager)
+    function _deployFactory(Config memory cfg, address compliance, address pauseRegistry)
         internal
         returns (ScaledTokenFactory factory)
     {
         // Owner (DEFAULT_ADMIN_ROLE) = deploy admin (broadcaster / Ledger), handed over later.
         // proxyAdmin (beacon owner) = final value from config; no handover needed.
         factory =
-            new ScaledTokenFactory(compliance, pauseManager, _deployAdmin(), cfg.proxyAdmin, cfg.minMultiplierNotice);
+            new ScaledTokenFactory(compliance, pauseRegistry, _deployAdmin(), cfg.proxyAdmin, cfg.minMultiplierNotice);
         console.log("Factory:            ", address(factory));
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
-        // createToken / rename are now OPS_ROLE-gated: give the deploy admin OPS so _deployToken
-        // can create the initial token, then grant any configured operational addresses.
-        factory.grantRole(factory.OPS_ROLE(), _deployAdmin());
-        console.log("  granted Factory OPS_ROLE to deploy admin (createToken / rename)");
+
+
+        // createToken / rename are OPS_ROLE-gated. Deliberately do NOT self-grant OPS to the deploy
+        // admin here — that backdoor would linger until someone remembers to revoke it. Grant only
+        // the configured operational addresses; deployToken must be run by a factory OPS signer.
         _grantRoles(address(factory), factory.OPS_ROLE(), "OPS_ROLE (Factory)", cfg.factoryOps);
     }
 
@@ -218,9 +222,11 @@ contract Deploy is Script {
     }
 
     function _deployToken(Config memory cfg, ScaledTokenFactory factory) internal returns (address proxy) {
-        if (!_broadcasterIsAdminOf(address(factory))) {
-            console.log("Skipping token deploy: broadcaster lacks DEFAULT_ADMIN_ROLE on factory.");
-            console.log("Run factory.createToken(...) from the admin instead.");
+        // createToken is OPS_ROLE-gated on the factory (no admin backdoor is granted at deploy), so
+        // deployToken must be broadcast by a factory OPS signer (an address in [factory].opsRole).
+        if (!IAccessControl(address(factory)).hasRole(factory.OPS_ROLE(), _broadcaster())) {
+            console.log("Skipping token deploy: broadcaster lacks factory OPS_ROLE (createToken is OPS-gated).");
+            console.log("Run deployToken from a factory OPS signer, or add it to [factory].opsRole.");
             return address(0);
         }
         // Create the token with the BROADCASTER as its temporary admin — uniform with every other
@@ -231,7 +237,6 @@ contract Deploy is Script {
             cfg.tokenName, cfg.tokenSymbol, cfg.tokenIdentifier, _deployAdmin(), cfg.issuers, cfg.multiplierSchedulers
         );
         console.log("Token (proxy):      ", proxy);
-        _grantRoles(proxy, ScaledToken(proxy).OPS_ROLE(), "OPS_ROLE (Token)", cfg.tokenOps);
     }
 
     /// @dev Grants `role` on `target` to every address in `grantees`. Skips with a hint when the
@@ -269,7 +274,7 @@ contract Deploy is Script {
         console.log("Proxy admin:        ", cfg.proxyAdmin);
         console.log("-- Final admin targets (0x0 = not set; required before handover) --");
         console.log("  compliance:   ", cfg.complianceAdmin);
-        console.log("  pauseManager: ", cfg.pauseAdmin);
+        console.log("  pauseRegistry: ", cfg.pauseAdmin);
         console.log("  factory:      ", cfg.factoryAdmin);
         console.log("  tokenIssuer:  ", cfg.tokenIssuerAdmin);
     }
@@ -285,7 +290,7 @@ contract Deploy is Script {
         // default, no fallback). 0 = not configured — informational only for the header;
         // TransferAdmin enforces non-zero at handover time.
         cfg.complianceAdmin = _sectionFinalAdmin(toml, ".compliance.finalAdmin");
-        cfg.pauseAdmin = _sectionFinalAdmin(toml, ".pauseManager.finalAdmin");
+        cfg.pauseAdmin = _sectionFinalAdmin(toml, ".pauseRegistry.finalAdmin");
         cfg.factoryAdmin = _sectionFinalAdmin(toml, ".factory.finalAdmin");
         cfg.tokenIssuerAdmin = _sectionFinalAdmin(toml, ".tokenIssuer.finalAdmin");
 
@@ -299,8 +304,8 @@ contract Deploy is Script {
             : 24 hours;
 
         cfg.complianceOps = _readAddressArrayOr(toml, ".compliance.opsRole");
-        cfg.pauseRole = _readAddressArrayOr(toml, ".pauseManager.pauseRole");
-        cfg.unpauseRole = _readAddressArrayOr(toml, ".pauseManager.unpauseRole");
+        cfg.pauseRole = _readAddressArrayOr(toml, ".pauseRegistry.pauseRole");
+        cfg.unpauseRole = _readAddressArrayOr(toml, ".pauseRegistry.unpauseRole");
         cfg.tokenIssuerOps = _readAddressArrayOr(toml, ".tokenIssuer.opsRole");
         cfg.tokenIssuerApprovedRecipients = _readAddressArrayOr(toml, ".tokenIssuer.approvedRecipients");
         cfg.factoryOps = _readAddressArrayOr(toml, ".factory.opsRole");
