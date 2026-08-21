@@ -20,7 +20,9 @@ import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 ///   deployPauseRegistry()                   — PauseRegistry
 ///   deployFactory(address,address)          — ScaledTokenFactory(compliance, pauseRegistry);
 ///                                              minMultiplierNotice read from [factory] config
-///   deployToken(address)                    — BeaconProxy address via factory
+///   deployToken(address)                    — BeaconProxy address via factory; must be broadcast
+///                                              by a factory OPS signer (createToken is OPS-gated);
+///                                              grants the token's OPS_ROLE to [token].opsRole
 ///   deployTokenIssuer(address[])            — TokenIssuer behind TransparentUpgradeableProxy
 ///                                              (upgrade authority = auto-created ProxyAdmin
 ///                                              owned by cfg.proxyAdmin); auto-grants ISSUER_ROLE
@@ -35,9 +37,11 @@ import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 /// `config.proxyAdmin` (beacon owner / proxy upgrade authority) IS set to its final value at
 /// deploy — the broadcaster never needs it, so it requires no handover.
 ///
-/// Role grants / initial token deploy are gated on the broadcaster actually holding
-/// DEFAULT_ADMIN_ROLE on the target (always true on the fresh full-stack path; checked on-chain
-/// so standalone re-runs against pre-existing contracts skip gracefully instead of reverting).
+/// Role grants are gated on the broadcaster actually holding DEFAULT_ADMIN_ROLE on the target
+/// (always true on the fresh full-stack path; checked on-chain so standalone re-runs against
+/// pre-existing contracts skip gracefully instead of reverting). The initial token deploy
+/// (deployToken) is instead gated on the broadcaster holding the factory's OPS_ROLE, since
+/// createToken is OPS-gated and no admin backdoor is granted at deploy.
 contract Deploy is Script {
     using stdToml for string;
 
@@ -162,7 +166,9 @@ contract Deploy is Script {
         pauseRegistry = new PauseRegistry(_deployAdmin());
         console.log("PauseRegistry:      ", address(pauseRegistry));
         _grantRoles(address(pauseRegistry), pauseRegistry.PAUSE_ROLE(), "PAUSE_ROLE (PauseRegistry)", cfg.pauseRole);
-        _grantRoles(address(pauseRegistry), pauseRegistry.UNPAUSE_ROLE(), "UNPAUSE_ROLE (PauseRegistry)", cfg.unpauseRole);
+        _grantRoles(
+            address(pauseRegistry), pauseRegistry.UNPAUSE_ROLE(), "UNPAUSE_ROLE (PauseRegistry)", cfg.unpauseRole
+        );
     }
 
     function _deployFactory(Config memory cfg, address compliance, address pauseRegistry)
@@ -176,10 +182,9 @@ contract Deploy is Script {
         console.log("Factory:            ", address(factory));
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
-        // createToken / rename are now OPS_ROLE-gated: give the deploy admin OPS so _deployToken
-        // can create the initial token, then grant any configured operational addresses.
-        factory.grantRole(factory.OPS_ROLE(), _deployAdmin());
-        console.log("  granted Factory OPS_ROLE to deploy admin (createToken / rename)");
+        // createToken / rename are OPS_ROLE-gated. Deliberately do NOT self-grant OPS to the deploy
+        // admin here — that backdoor would linger until someone remembers to revoke it. Grant only
+        // the configured operational addresses; deployToken must be run by a factory OPS signer.
         _grantRoles(address(factory), factory.OPS_ROLE(), "OPS_ROLE (Factory)", cfg.factoryOps);
     }
 
@@ -215,9 +220,11 @@ contract Deploy is Script {
     }
 
     function _deployToken(Config memory cfg, ScaledTokenFactory factory) internal returns (address proxy) {
-        if (!_broadcasterIsAdminOf(address(factory))) {
-            console.log("Skipping token deploy: broadcaster lacks DEFAULT_ADMIN_ROLE on factory.");
-            console.log("Run factory.createToken(...) from the admin instead.");
+        // createToken is OPS_ROLE-gated on the factory (no admin backdoor is granted at deploy), so
+        // deployToken must be broadcast by a factory OPS signer (an address in [factory].opsRole).
+        if (!IAccessControl(address(factory)).hasRole(factory.OPS_ROLE(), _broadcaster())) {
+            console.log("Skipping token deploy: broadcaster lacks factory OPS_ROLE (createToken is OPS-gated).");
+            console.log("Run deployToken from a factory OPS signer, or add it to [factory].opsRole.");
             return address(0);
         }
         // Create the token with the BROADCASTER as its temporary admin — uniform with every other
