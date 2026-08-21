@@ -16,7 +16,8 @@ import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 ///         2)  createProgram    — registry OPS (legs = token + total; program starts Created)
 ///         3a) wireBurnRole     — OLD token ADMIN (grant registry BURN_ROLE)
 ///         3b) freezeSupply     — OLD token OPS   (setMintAllowed=false; ≠ admin — self-grant blocked)
-///         4)  configureProgram — registry OPS (snapshot frozen supply + open window → Active)
+///         4)  configureProgram — registry OPS (supply frozen totalSupply as snapshot + window +
+///                                state=Active; any 0 field keeps the stored value)
 ///         5)  fund             — registry OPS (holds reward tokens)
 ///         6)  sweep            — registry OPS, after the program deadline
 ///
@@ -80,13 +81,24 @@ contract PrivatizationRegistryOps is Script {
         console.log("  legs:", tokens.length);
     }
 
-    /// @notice Step 4 — snapshot the (already frozen) old supply and open the claim window, moving
-    ///         the program to `Active`. Broadcaster must hold OPS_ROLE. Run AFTER
-    ///         freezeSupply (Step 3b). `oldToken` / `oldSupplySnapshot` in the struct are ignored —
-    ///         the contract fills them from the frozen on-chain supply.
-    function configureProgram(address registry, uint256 programId, uint64 startTime, uint64 deadline, uint256 oldSupplySnapshot, uint8 state) external {
+    /// @notice Step 4 — open the claim window by patching the program to `Active`. Broadcaster must
+    ///         hold OPS_ROLE. Run AFTER freezeSupply (Step 3b). Pass `oldSupplySnapshot` = the old
+    ///         token's frozen `totalSupply()` (the pro-rata denominator) and `state` = 2 (Active);
+    ///         any field left 0 keeps the program's stored value (`oldToken` stays as set at create).
+    function configureProgram(
+        address registry,
+        uint256 programId,
+        uint64 startTime,
+        uint64 deadline,
+        uint256 oldSupplySnapshot,
+        uint8 state
+    ) external {
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
-            oldToken: address(0), startTime: startTime, deadline: deadline, oldSupplySnapshot: oldSupplySnapshot, state: state
+            oldToken: address(0),
+            startTime: startTime,
+            deadline: deadline,
+            oldSupplySnapshot: oldSupplySnapshot,
+            state: state
         });
         vm.startBroadcast();
         PrivatizationRegistry(registry).configureProgram(programId, cfg);

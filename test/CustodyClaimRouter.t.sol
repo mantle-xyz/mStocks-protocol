@@ -94,13 +94,13 @@ contract CustodyClaimRouterTest is Test {
         vm.prank(tokenOps);
         oldToken.setMintAllowed(false);
 
-        // configure: snapshot the frozen 100e18 supply + open the window → Active
+        // configure: OPS supplies the frozen 100e18 snapshot + window + state=Active
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
             oldToken: address(0),
             startTime: uint64(block.timestamp),
             deadline: uint64(block.timestamp + 7 days),
-            oldSupplySnapshot: 0,
-            state: 0
+            oldSupplySnapshot: 100 ether,
+            state: uint8(PrivatizationRegistry.State.Active)
         });
         registry.configureProgram(programId, cfg);
 

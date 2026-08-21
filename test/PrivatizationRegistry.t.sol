@@ -98,11 +98,16 @@ contract PrivatizationRegistryTest is Test {
         t.setMintAllowed(false);
     }
 
-    /// @dev OPS configures the window; the contract snapshots the (frozen) old supply. Called as
-    ///      address(this), which holds the registry OPS_ROLE (see setUp).
+    /// @dev OPS configures the window. Under the patch model the caller supplies the snapshot (the
+    ///      frozen totalSupply, read here as an off-chain operator would) and sets state=Active.
     function _configure(uint256 programId, uint64 startTime, uint64 deadline) internal {
+        (address oldTok,,,,) = registry.programs(programId);
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
-            oldToken: address(0), startTime: startTime, deadline: deadline, oldSupplySnapshot: 0, state: 0
+            oldToken: address(0),
+            startTime: startTime,
+            deadline: deadline,
+            oldSupplySnapshot: ScaledToken(oldTok).totalSupply(),
+            state: uint8(PrivatizationRegistry.State.Active)
         });
         registry.configureProgram(programId, cfg);
     }
@@ -303,24 +308,36 @@ contract PrivatizationRegistryTest is Test {
         registry.createProgram(address(oldToken), legs);
     }
 
-    /// @dev configureProgram refuses to snapshot until the old supply is frozen.
-    function test_configure_requiresFrozenSupply() public {
+    /// @dev Patch semantics: a zero field keeps the stored value; only non-zero fields overwrite.
+    function test_configure_patchKeepsZeroFields() public {
         _seed(oldToken, alice, 100 ether);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _freeze(oldToken);
 
-        // grant BURN_ROLE but do NOT freeze → configure must revert
-        vm.prank(admin);
-        oldToken.grantRole(BURN_ROLE, address(registry));
-
+        // First configure: open the window with an explicit snapshot + Active.
+        uint64 start = uint64(block.timestamp);
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
             oldToken: address(0),
-            startTime: uint64(block.timestamp),
+            startTime: start,
             deadline: uint64(block.timestamp + WEEK),
-            oldSupplySnapshot: 0,
-            state: 0
+            oldSupplySnapshot: 100 ether,
+            state: uint8(PrivatizationRegistry.State.Active)
         });
-        vm.expectRevert(PrivatizationRegistry.SupplyNotFrozen.selector);
         registry.configureProgram(id, cfg);
+
+        // Patch: change ONLY the deadline; every other field passed as 0 must stay put.
+        uint64 newDeadline = uint64(block.timestamp + 2 * WEEK);
+        PrivatizationRegistry.Program memory patch = PrivatizationRegistry.Program({
+            oldToken: address(0), startTime: 0, deadline: newDeadline, oldSupplySnapshot: 0, state: 0
+        });
+        registry.configureProgram(id, patch);
+
+        (address oldTok, uint64 st, uint64 dl, uint256 snap, uint8 state) = registry.programs(id);
+        assertEq(oldTok, address(oldToken), "oldToken kept");
+        assertEq(st, start, "startTime kept");
+        assertEq(dl, newDeadline, "deadline overwritten");
+        assertEq(snap, 100 ether, "snapshot kept");
+        assertEq(state, uint8(PrivatizationRegistry.State.Active), "state kept");
     }
 
     /// @dev A claim before the window opens reverts.

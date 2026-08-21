@@ -183,10 +183,6 @@ contract Deploy is Script {
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
 
-        // delete it when released officially, but for now the deploy admin (broadcaster) needs it to createToken / rename.
-        factory.grantRole(factory.OPS_ROLE(), _deployAdmin());
-        console.log("  granted Factory OPS_ROLE to deploy admin (createToken / rename)");
-
 
         // createToken / rename are OPS_ROLE-gated. Deliberately do NOT self-grant OPS to the deploy
         // admin here — that backdoor would linger until someone remembers to revoke it. Grant only
@@ -241,10 +237,6 @@ contract Deploy is Script {
             cfg.tokenName, cfg.tokenSymbol, cfg.tokenIdentifier, _deployAdmin(), cfg.issuers, cfg.multiplierSchedulers
         );
         console.log("Token (proxy):      ", proxy);
-        // Metadata + mint/burn switches (updateName/Symbol/AssetCode, setMint/BurnAllowed) are
-        // OPS_ROLE-gated on the token (role-opt); grant the configured operational addresses so
-        // e.g. a privatization freezeSupply has a signer. The broadcaster is the token's temp admin.
-        _grantRoles(proxy, ScaledToken(proxy).OPS_ROLE(), "OPS_ROLE (ScaledToken)", cfg.tokenOps);
     }
 
     /// @dev Grants `role` on `target` to every address in `grantees`. Skips with a hint when the

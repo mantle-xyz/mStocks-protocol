@@ -14,12 +14,6 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 
 import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 
-/// @dev Minimal freeze view on the old token — used to assert supply is frozen before snapshotting.
-interface IFreezableSupply {
-    function mintAllowed() external view returns (bool);
-    function totalSupply() external view returns (uint256);
-}
-
 /// @notice Registry for privatization / take-private (delisting) events — see
 ///         docs/corporate-actions-td.md §4.
 ///
@@ -31,14 +25,16 @@ interface IFreezableSupply {
 ///
 ///             out_i = amount * leg.total / oldSupplySnapshot
 ///
-///         `oldSupplySnapshot` is the old token's `totalSupply()` captured **once**, at
-///         {configureProgram}, AFTER supply is frozen. It must be a fixed snapshot — never live
-///         supply — because {claim} burns the surrendered old tokens, so live `totalSupply` shrinks
-///         as people claim; dividing by a shrinking denominator would over-distribute.
+///         `oldSupplySnapshot` is a **fixed snapshot** of the old token's `totalSupply()`, supplied
+///         by OPS at {configureProgram} AFTER freezing the supply (`setMintAllowed(false)`). It must
+///         be a fixed value — never live supply — because {claim} burns the surrendered old tokens,
+///         so live `totalSupply` shrinks as people claim; dividing by a shrinking denominator would
+///         over-distribute.
 ///
 ///         Lifecycle (state machine): `Created` → (operator `setMintAllowed(false)` off-registry)
-///         → `Active` (configureProgram: snapshot supply + open the [startTime, deadline] window)
-///         → funded → claimed within the window → `Closed` (sweepUnclaimed after deadline).
+///         → `Active` (configureProgram: OPS supplies the frozen-supply snapshot + [startTime,
+///         deadline] window + sets state=Active) → funded → claimed within the window → `Closed`
+///         (sweepUnclaimed after deadline).
 ///
 ///         Reward funds are accounted **per program** (`reserved[programId][token]`): a claim only
 ///         ever draws from its own program's reserve, so programs never touch each other's money,
@@ -53,7 +49,8 @@ interface IFreezableSupply {
 ///         Setup per program (operator):
 ///           1. `createProgram(oldToken, legs)` → programId (each leg = token + total)
 ///           2. `setMintAllowed(false)` on the old token (freeze supply — off-registry, OPS)
-///           3. `configureProgram(programId, {startTime, deadline, …})` (snapshots supply → Active)
+///           3. `configureProgram(programId, {startTime, deadline, oldSupplySnapshot: frozen
+///              totalSupply, state: Active})` (any 0 field keeps its stored value)
 ///           4. `fund(programId, token, amount)` each reward token up to its `total`
 contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
@@ -96,11 +93,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error NoLegs();
     error BadLeg();
     error UnknownProgram();
-    error NotConfigurable();
     error NotActive();
-    error SupplyNotFrozen();
-    error ZeroSupplySnapshot();
-    error BadWindow();
     error ClaimNotStarted();
     error ClaimClosed();
     error ClaimStillOpen();
@@ -148,31 +141,29 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         emit ProgramCreated(programId, oldToken);
     }
 
-    /// @notice Snapshot the (frozen) old-token supply and open the claim window. OPS-only, once,
-    ///         while the program is `Created`. The full {Program} struct is accepted for
-    ///         convenience but the contract stays in control: `oldToken` is preserved from
-    ///         {createProgram}, `oldSupplySnapshot` is read on-chain from the frozen supply, and
-    ///         `state` is forced to `Active` — only `startTime` / `deadline` are taken from input.
+    /// @notice Patch a program's fields. `programId` selects the program; for every field of the
+    ///         {Program} struct a **zero value means "keep the stored value"** and a non-zero value
+    ///         overwrites it. So an operator can set or later adjust any subset — open the window by
+    ///         supplying `{startTime, deadline, oldSupplySnapshot, state: Active}`, or extend the
+    ///         deadline alone by supplying only `deadline` (everything else 0).
     ///
-    ///         Requires the old token's supply to be frozen first (`setMintAllowed(false)`), so the
-    ///         snapshot can never race a mint. The pro-rata denominator is fixed here for good.
+    ///         OPS-only and fully trusted: the contract does NOT read the snapshot on-chain or
+    ///         verify the old supply is frozen. OPS is responsible for supplying the correct
+    ///         `oldSupplySnapshot` — the old token's `totalSupply()` captured AFTER freezing it
+    ///         (`setMintAllowed(false)` off-registry) — as the pro-rata denominator, and for setting
+    ///         `state` to `Active` when the program is ready to claim. A wrong snapshot mis-scales
+    ///         every payout, so freeze first, then snapshot.
     function configureProgram(uint256 programId, Program calldata program) external onlyRole(OPS_ROLE) {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
-        if (p.state != uint8(State.Created)) revert NotConfigurable();
-        if (program.startTime >= program.deadline || program.deadline <= block.timestamp) revert BadWindow();
 
-        IFreezableSupply old = IFreezableSupply(p.oldToken);
-        if (old.mintAllowed()) revert SupplyNotFrozen();
-        uint256 snapshot = old.totalSupply();
-        if (snapshot == 0) revert ZeroSupplySnapshot();
+        if (program.oldToken != address(0)) p.oldToken = program.oldToken;
+        if (program.startTime != 0) p.startTime = program.startTime;
+        if (program.deadline != 0) p.deadline = program.deadline;
+        if (program.oldSupplySnapshot != 0) p.oldSupplySnapshot = program.oldSupplySnapshot;
+        if (program.state != 0) p.state = program.state;
 
-        p.startTime = program.startTime;
-        p.deadline = program.deadline;
-        p.oldSupplySnapshot = snapshot;
-        p.state = uint8(State.Active);
-
-        emit ProgramConfigured(programId, program.startTime, program.deadline, snapshot);
+        emit ProgramConfigured(programId, p.startTime, p.deadline, p.oldSupplySnapshot);
     }
 
     /// @notice Fund + reserve `amount` of `token` for `programId`. OPS-only, accounted so a claim
