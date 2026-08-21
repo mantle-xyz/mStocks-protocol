@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 
 contract QABlocklist is BaseQAScript {
     function run() external {
@@ -26,14 +26,14 @@ contract QABlocklist is BaseQAScript {
         address[] memory addrs = new address[](1);
         addrs[0] = user;
         vm.broadcast(complianceOpsPk);
-        compliance.addToBlocklist(address(token), addrs);
+        compliance.blockUsers(address(token), addrs);
     }
 
     function _unblockUser(address user) internal {
         address[] memory addrs = new address[](1);
         addrs[0] = user;
         vm.broadcast(complianceOpsPk);
-        compliance.removeFromBlocklist(address(token), addrs);
+        compliance.unblockUsers(address(token), addrs);
     }
 
     // ── QA-BLK-01: 发行方转给被拉黑地址阻断 ──
@@ -47,7 +47,7 @@ contract QABlocklist is BaseQAScript {
 
         _step("[Step 2] complianceOps blocks userA");
         _blockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked");
         _step("  userA is blocked");
 
         _step("[Step 3] hotWallet tries transfer to userA");
@@ -55,13 +55,13 @@ contract QABlocklist is BaseQAScript {
             hotWallet,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: reverted UserBlocked()");
 
         _step("[Step 4] cleanup: unblock userA");
         _unblockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), false, "userA unblocked");
+        _assertEq(compliance.isBlocked(address(token), userA), false, "userA unblocked");
         _step("  PASS: userA unblocked");
 
         _logPass();
@@ -75,20 +75,20 @@ contract QABlocklist is BaseQAScript {
         _requireNotPaused();
         _mintAndDistribute(userB, 200e18);
         _blockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked");
 
         _step("[Step 2] userB tries transfer to blocked userA");
         _expectRevertFrom(
             userB,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 100e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: reverted UserBlocked()");
 
         _step("[Step 3] cleanup: unblock userA");
         _unblockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), false, "userA unblocked");
+        _assertEq(compliance.isBlocked(address(token), userA), false, "userA unblocked");
         _step("  PASS: userA unblocked");
 
         _logPass();
@@ -103,20 +103,20 @@ contract QABlocklist is BaseQAScript {
         _mintAndDistribute(userA, 200e18);
         _requireBalance(userA, 10e18, "userA");
         _blockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked");
 
         _step("[Step 2] blocked userA tries transfer to userB");
         _expectRevertFrom(
             userA,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userB, 10e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: reverted UserBlocked()");
 
         _step("[Step 3] cleanup: unblock userA");
         _unblockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), false, "userA unblocked");
+        _assertEq(compliance.isBlocked(address(token), userA), false, "userA unblocked");
         _step("  PASS: userA unblocked");
 
         _logPass();
@@ -130,9 +130,9 @@ contract QABlocklist is BaseQAScript {
         _requireNotPaused();
         _mintAndDistribute(userB, 200e18);
         _blockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked");
         _unblockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), false, "userA unblocked");
+        _assertEq(compliance.isBlocked(address(token), userA), false, "userA unblocked");
 
         _step("[Step 2] userB transfers to userA (should succeed)");
         uint256 bBefore = token.balanceOf(userB);
@@ -154,22 +154,22 @@ contract QABlocklist is BaseQAScript {
         _requireNotPaused();
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("BK");
-        address tokenBAddr = factory.deployToken("Block Corp", sym, "BLK001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Block Corp", sym, "BLK001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB: ", vm.toString(tokenBAddr)));
 
         _step("[Step 2] grant ISSUER_ROLE to wallet on tokenB + mint + distribute to userB");
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 200e18);
+        vault.mint(tokenBAddr, hotWallet, 200e18);
         vm.broadcast(hotWalletPk);
         tokenB.transfer(userB, 100e18);
 
         _step("[Step 3] block userA on tokenA only");
         _blockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked on tokenA");
-        _assertEq(compliance.blockedAddresses(tokenBAddr, userA), false, "userA NOT blocked on tokenB");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked on tokenA");
+        _assertEq(compliance.isBlocked(tokenBAddr, userA), false, "userA NOT blocked on tokenB");
 
         _step("[Step 4] tokenA transfer to userA reverts");
         _mintToHotWallet(100e18);
@@ -177,7 +177,7 @@ contract QABlocklist is BaseQAScript {
             hotWallet,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: tokenA reverted UserBlocked()");
 
@@ -192,7 +192,7 @@ contract QABlocklist is BaseQAScript {
 
         _step("[Step 6] cleanup: unblock userA on tokenA");
         _unblockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), false, "userA unblocked");
+        _assertEq(compliance.isBlocked(address(token), userA), false, "userA unblocked");
         _step("  PASS: userA unblocked");
 
         _logPass();
@@ -211,20 +211,20 @@ contract QABlocklist is BaseQAScript {
 
         _step("[Step 2] block userB (the spender / msg.sender)");
         _blockUser(userB);
-        _assertEq(compliance.blockedAddresses(address(token), userB), true, "userB blocked");
+        _assertEq(compliance.isBlocked(address(token), userB), true, "userB blocked");
 
         _step("[Step 3] userB calls transferFrom(userA, hotWallet, 50e18)");
         _expectRevertFrom(
             userB,
             address(token),
             abi.encodeWithSelector(token.transferFrom.selector, userA, hotWallet, 50e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: reverted UserBlocked() on spender");
 
         _step("[Step 4] cleanup: unblock userB");
         _unblockUser(userB);
-        _assertEq(compliance.blockedAddresses(address(token), userB), false, "userB unblocked");
+        _assertEq(compliance.isBlocked(address(token), userB), false, "userB unblocked");
         _step("  PASS: userB unblocked");
 
         _logPass();
@@ -237,16 +237,16 @@ contract QABlocklist is BaseQAScript {
         _step("[Step 1] precondition: userA has no OPS_ROLE on compliance");
         _assertEq(compliance.hasRole(COMPLIANCE_OPS_ROLE, userA), false, "userA no OPS_ROLE");
 
-        _step("[Step 2] userA tries addToBlocklist");
+        _step("[Step 2] userA tries blockUsers");
         address[] memory addrs = new address[](1);
         addrs[0] = userB;
         _expectRevertFrom(
             userA,
             address(compliance),
-            abi.encodeWithSelector(compliance.addToBlocklist.selector, address(token), addrs),
-            Compliance.MissingBlocklistRole.selector
+            abi.encodeWithSelector(compliance.blockUsers.selector, address(token), addrs),
+            ComplianceRegistry.MissingOpsRole.selector
         );
-        _step("  PASS: reverted MissingBlocklistRole()");
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }
@@ -259,16 +259,16 @@ contract QABlocklist is BaseQAScript {
         _requireRole(address(compliance), DEFAULT_ADMIN_ROLE_HASH, admin, "admin");
         _assertEq(compliance.hasRole(COMPLIANCE_OPS_ROLE, admin), false, "admin no OPS_ROLE");
 
-        _step("[Step 2] admin tries addToBlocklist");
+        _step("[Step 2] admin tries blockUsers");
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         _expectRevertFrom(
             admin,
             address(compliance),
-            abi.encodeWithSelector(compliance.addToBlocklist.selector, address(token), addrs),
-            Compliance.MissingBlocklistRole.selector
+            abi.encodeWithSelector(compliance.blockUsers.selector, address(token), addrs),
+            ComplianceRegistry.MissingOpsRole.selector
         );
-        _step("  PASS: reverted MissingBlocklistRole()");
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }
@@ -282,13 +282,13 @@ contract QABlocklist is BaseQAScript {
 
         _step("[Step 2] complianceOps adds userA to blocklist");
         _blockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked");
-        _step("  PASS: addToBlocklist succeeded");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked");
+        _step("  PASS: blockUsers succeeded");
 
         _step("[Step 3] complianceOps removes userA from blocklist");
         _unblockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), false, "userA unblocked");
-        _step("  PASS: removeFromBlocklist succeeded");
+        _assertEq(compliance.isBlocked(address(token), userA), false, "userA unblocked");
+        _step("  PASS: unblockUsers succeeded");
 
         _logPass();
     }

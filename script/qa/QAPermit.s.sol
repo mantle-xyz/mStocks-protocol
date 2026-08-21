@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
-import {PauseManagerClientUpgradeable} from "../../src/pauseManager/PauseManagerClientUpgradeable.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
+import {PauseGuardUpgradeable} from "../../src/pauseRegistry/PauseGuardUpgradeable.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {ERC20PermitUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 
@@ -77,8 +77,8 @@ contract QAPermit is BaseQAScript {
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.broadcast(complianceOpsPk);
-        compliance.addToBlocklist(address(token), addrs);
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked");
+        compliance.blockUsers(address(token), addrs);
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked");
 
         _step("[Step 2] userA signs permit for userB");
         uint256 deadline = block.timestamp + 1 hours;
@@ -95,14 +95,14 @@ contract QAPermit is BaseQAScript {
             userB,
             address(token),
             abi.encodeWithSelector(token.transferFrom.selector, userA, userB, 100e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: reverted UserBlocked()");
 
         _step("[Step 5] cleanup: unblock userA");
         vm.broadcast(complianceOpsPk);
-        compliance.removeFromBlocklist(address(token), addrs);
-        _assertEq(compliance.blockedAddresses(address(token), userA), false, "userA unblocked");
+        compliance.unblockUsers(address(token), addrs);
+        _assertEq(compliance.isBlocked(address(token), userA), false, "userA unblocked");
         _step("  PASS: userA unblocked");
 
         _logPass();
@@ -118,8 +118,8 @@ contract QAPermit is BaseQAScript {
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.broadcast(complianceOpsPk);
-        compliance.addToSanctionsList(addrs);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
+        compliance.sanctionUsers(addrs);
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
 
         _step("[Step 2] userA signs permit for userB");
         uint256 deadline = block.timestamp + 1 hours;
@@ -136,14 +136,14 @@ contract QAPermit is BaseQAScript {
             userB,
             address(token),
             abi.encodeWithSelector(token.transferFrom.selector, userA, userB, 100e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: reverted UserSanctioned()");
 
         _step("[Step 5] cleanup: unsanction userA");
         vm.broadcast(complianceOpsPk);
-        compliance.removeFromSanctionsList(addrs);
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA unsanctioned");
+        compliance.unsanctionUsers(addrs);
+        _assertEq(compliance.isSanctioned(userA), false, "userA unsanctioned");
         _step("  PASS: userA unsanctioned");
 
         _logPass();
@@ -177,7 +177,7 @@ contract QAPermit is BaseQAScript {
             userB,
             address(token),
             abi.encodeWithSelector(token.transferFrom.selector, userA, userB, 100e18),
-            PauseManagerClientUpgradeable.TokenPaused.selector
+            PauseGuardUpgradeable.TokenPaused.selector
         );
         _step("  PASS: reverted TokenPaused()");
 

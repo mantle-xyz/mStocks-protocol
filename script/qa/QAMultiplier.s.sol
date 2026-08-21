@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 
 contract QAMultiplier is BaseQAScript {
     function run() external {
@@ -17,6 +17,8 @@ contract QAMultiplier is BaseQAScript {
         test_MUL07();
         test_MUL08();
         test_MUL09();
+        test_MUL10_schedule();
+        test_MUL10_verify();
         // MUL-10 需要分阶段执行，不在 run() 中:
         //   forge script ... --sig "test_MUL10_schedule()" --broadcast
         //   sleep 70
@@ -24,12 +26,12 @@ contract QAMultiplier is BaseQAScript {
     }
 
     function _operatorAddr() internal view returns (address) {
-        return token.getRoleMember(TOKEN_OPS_ROLE, 0);
+        return token.getRoleMember(TOKEN_MULTIPLIER_ROLE, 0);
     }
 
     function _resetPendingMultiplier() internal {
         vm.broadcast(walletOpsPk);
-        token.setUIMultiplier(1e18, block.timestamp + 300);
+        token.setUIMultiplier(1e18, block.timestamp + 600);
     }
 
     // ── QA-MUL-01: admin 不能调度乘数 ──
@@ -38,14 +40,14 @@ contract QAMultiplier is BaseQAScript {
 
         _step("[Step 1] precondition: admin has DEFAULT_ADMIN_ROLE but NOT OPS_ROLE");
         _requireRole(address(token), DEFAULT_ADMIN_ROLE_HASH, admin, "admin");
-        _assertEq(token.hasRole(TOKEN_OPS_ROLE, admin), false, "admin no OPS_ROLE");
+        _assertEq(token.hasRole(TOKEN_MULTIPLIER_ROLE, admin), false, "admin no OPS_ROLE");
 
         _step("[Step 2] admin tries setUIMultiplier");
         _expectRevertFrom(
             admin,
             address(token),
             abi.encodeWithSelector(token.setUIMultiplier.selector, 2e18, block.timestamp + 1 hours),
-            SecuritiesToken.UnauthorizedRole.selector
+            ScaledToken.UnauthorizedRole.selector
         );
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -58,7 +60,7 @@ contract QAMultiplier is BaseQAScript {
 
         _step("[Step 1] precondition: operator has OPS_ROLE");
         address operator = _operatorAddr();
-        _requireRole(address(token), TOKEN_OPS_ROLE, operator, "operator");
+        _requireRole(address(token), TOKEN_MULTIPLIER_ROLE, operator, "operator");
 
         _step("[Step 2] operator schedules 2e18 at t+1h");
         uint256 effectiveTime = block.timestamp + 1 hours;
@@ -87,14 +89,14 @@ contract QAMultiplier is BaseQAScript {
         _logCase("QA-MUL-03", unicode"issuer 不能调度");
 
         _step("[Step 1] precondition: wallet has ISSUER_ROLE but NOT OPS_ROLE");
-        _requireRole(address(token), ISSUER_ROLE, address(wallet), "wallet ISSUER");
-        _assertEq(token.hasRole(TOKEN_OPS_ROLE, address(wallet)), false, "wallet no OPS_ROLE");
+        _requireRole(address(token), ISSUER_ROLE, address(vault), "wallet ISSUER");
+        _assertEq(token.hasRole(TOKEN_MULTIPLIER_ROLE, address(vault)), false, "wallet no OPS_ROLE");
 
         _step("[Step 2] wallet (issuer) tries setUIMultiplier via low-level call");
         _expectRevert(
             address(token),
             abi.encodeWithSelector(token.setUIMultiplier.selector, 2e18, block.timestamp + 1 hours),
-            SecuritiesToken.UnauthorizedRole.selector
+            ScaledToken.UnauthorizedRole.selector
         );
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -106,14 +108,14 @@ contract QAMultiplier is BaseQAScript {
         _logCase("QA-MUL-04", unicode"普通用户不能调度");
 
         _step("[Step 1] precondition: userA has no OPS_ROLE");
-        _assertEq(token.hasRole(TOKEN_OPS_ROLE, userA), false, "userA no OPS_ROLE");
+        _assertEq(token.hasRole(TOKEN_MULTIPLIER_ROLE, userA), false, "userA no OPS_ROLE");
 
         _step("[Step 2] userA tries setUIMultiplier");
         _expectRevertFrom(
             userA,
             address(token),
             abi.encodeWithSelector(token.setUIMultiplier.selector, 2e18, block.timestamp + 1 hours),
-            SecuritiesToken.UnauthorizedRole.selector
+            ScaledToken.UnauthorizedRole.selector
         );
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -126,14 +128,14 @@ contract QAMultiplier is BaseQAScript {
 
         _step("[Step 1] precondition: operator has OPS_ROLE");
         address operator = _operatorAddr();
-        _requireRole(address(token), TOKEN_OPS_ROLE, operator, "operator");
+        _requireRole(address(token), TOKEN_MULTIPLIER_ROLE, operator, "operator");
 
         _step("[Step 2] operator tries setUIMultiplier(1e9 - 1)");
         _expectRevertFromWithMessage(
             operator,
             address(token),
             abi.encodeWithSelector(token.setUIMultiplier.selector, 1e9 - 1, block.timestamp + 1 hours),
-            "SecuritiesToken: multiplier below minimum (1e-9x)"
+            "ScaledToken: multiplier below minimum (1e-9x)"
         );
         _step("  PASS: reverted 'multiplier below minimum'");
 
@@ -146,14 +148,14 @@ contract QAMultiplier is BaseQAScript {
 
         _step("[Step 1] precondition: operator has OPS_ROLE");
         address operator = _operatorAddr();
-        _requireRole(address(token), TOKEN_OPS_ROLE, operator, "operator");
+        _requireRole(address(token), TOKEN_MULTIPLIER_ROLE, operator, "operator");
 
         _step("[Step 2] operator tries setUIMultiplier(1e27 + 1)");
         _expectRevertFromWithMessage(
             operator,
             address(token),
             abi.encodeWithSelector(token.setUIMultiplier.selector, 1e27 + 1, block.timestamp + 1 hours),
-            "SecuritiesToken: multiplier above maximum (1e9x)"
+            "ScaledToken: multiplier above maximum (1e9x)"
         );
         _step("  PASS: reverted 'multiplier above maximum'");
 
@@ -166,14 +168,14 @@ contract QAMultiplier is BaseQAScript {
 
         _step("[Step 1] precondition: operator has OPS_ROLE");
         address operator = _operatorAddr();
-        _requireRole(address(token), TOKEN_OPS_ROLE, operator, "operator");
+        _requireRole(address(token), TOKEN_MULTIPLIER_ROLE, operator, "operator");
 
         _step("[Step 2] operator tries setUIMultiplier with t + 366 days");
         _expectRevertFromWithMessage(
             operator,
             address(token),
             abi.encodeWithSelector(token.setUIMultiplier.selector, 2e18, block.timestamp + 366 days),
-            "SecuritiesToken: effective time too far in future"
+            "ScaledToken: effective time too far in future"
         );
         _step("  PASS: reverted 'effective time too far in future'");
 
@@ -246,14 +248,14 @@ contract QAMultiplier is BaseQAScript {
         _assertEq(token.uiMultiplier(), 1e18, "uiMultiplier == 1e18");
 
         _step("[Step 2] operator schedules 2e18 at t+300s");
-        uint256 effectiveTime = block.timestamp + 300;
+        uint256 effectiveTime = block.timestamp + 600;
         vm.broadcast(walletOpsPk);
         token.setUIMultiplier(2e18, effectiveTime);
 
         _assertEq(token.newUIMultiplier(), 2e18, "newUIMultiplier");
         _assertEq(token.hasPendingMultiplier(), true, "hasPendingMultiplier");
         _step(string.concat("  PASS: scheduled 2e18 at ", vm.toString(effectiveTime)));
-        _step("  >>> shell: sleep 70 then run test_MUL10_verify()");
+        _step("  >>> shell: sleep 300 then run test_MUL10_verify()");
 
         _logPass();
     }
@@ -287,7 +289,7 @@ contract QAMultiplier is BaseQAScript {
 
         _step("[Step 5] cleanup: schedule 1e18 to restore");
         vm.broadcast(walletOpsPk);
-        token.setUIMultiplier(1e18, block.timestamp + 300);
+        token.setUIMultiplier(1e18, block.timestamp + 600);
         _step("  PASS: scheduled 1e18 restore");
 
         _logPass();

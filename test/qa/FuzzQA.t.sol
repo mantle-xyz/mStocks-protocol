@@ -3,8 +3,8 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 contract FuzzQA is BaseQA {
@@ -74,7 +74,7 @@ contract FuzzQA is BaseQA {
         uint256 effectiveAt = block.timestamp + 1 hours;
 
         vm.prank(operator);
-        vm.expectRevert("SecuritiesToken: multiplier below minimum (1e-9x)");
+        vm.expectRevert("ScaledToken: multiplier below minimum (1e-9x)");
         token.setUIMultiplier(multiplier, effectiveAt);
         _logPass();
     }
@@ -85,13 +85,13 @@ contract FuzzQA is BaseQA {
         uint256 effectiveAt = block.timestamp + 1 hours;
 
         vm.prank(operator);
-        vm.expectRevert("SecuritiesToken: multiplier above maximum (1e9x)");
+        vm.expectRevert("ScaledToken: multiplier above maximum (1e9x)");
         token.setUIMultiplier(multiplier, effectiveAt);
         _logPass();
     }
 
     // ═══════════════════════════════════════════════
-    //      2. Compliance 批量操作 Fuzz
+    //      2. ComplianceRegistry 批量操作 Fuzz
     // ═══════════════════════════════════════════════
 
     function _generateAddresses(uint256 count, uint256 seed) internal pure returns (address[] memory) {
@@ -110,15 +110,15 @@ contract FuzzQA is BaseQA {
         address[] memory addrs = _generateAddresses(count, seed);
 
         vm.prank(complianceOps);
-        compliance.addToBlocklist(address(token), addrs);
+        compliance.blockUsers(address(token), addrs);
         for (uint256 i = 0; i < addrs.length; ++i) {
-            assertTrue(compliance.blockedAddresses(address(token), addrs[i]));
+            assertTrue(compliance.isBlocked(address(token), addrs[i]));
         }
 
         vm.prank(complianceOps);
-        compliance.removeFromBlocklist(address(token), addrs);
+        compliance.unblockUsers(address(token), addrs);
         for (uint256 i = 0; i < addrs.length; ++i) {
-            assertFalse(compliance.blockedAddresses(address(token), addrs[i]));
+            assertFalse(compliance.isBlocked(address(token), addrs[i]));
         }
         _logPass();
     }
@@ -129,27 +129,27 @@ contract FuzzQA is BaseQA {
         address[] memory addrs = _generateAddresses(count, seed);
 
         vm.prank(complianceOps);
-        compliance.addToBlocklist(address(token), addrs);
+        compliance.blockUsers(address(token), addrs);
         vm.prank(complianceOps);
-        compliance.addToSanctionsList(addrs);
+        compliance.sanctionUsers(addrs);
 
         // blocklist checked first → UserBlocked
         for (uint256 i = 0; i < addrs.length; ++i) {
-            vm.expectRevert(Compliance.UserBlocked.selector);
+            vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
             compliance.checkIsCompliant(address(token), addrs[i]);
         }
 
         // remove from blocklist → still sanctioned → UserSanctioned
         vm.prank(complianceOps);
-        compliance.removeFromBlocklist(address(token), addrs);
+        compliance.unblockUsers(address(token), addrs);
         for (uint256 i = 0; i < addrs.length; ++i) {
-            vm.expectRevert(Compliance.UserSanctioned.selector);
+            vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
             compliance.checkIsCompliant(address(token), addrs[i]);
         }
 
         // remove from sanctions → compliant
         vm.prank(complianceOps);
-        compliance.removeFromSanctionsList(addrs);
+        compliance.unsanctionUsers(addrs);
         for (uint256 i = 0; i < addrs.length; ++i) {
             compliance.checkIsCompliant(address(token), addrs[i]);
         }
@@ -162,15 +162,15 @@ contract FuzzQA is BaseQA {
         address[] memory addrs = _generateAddresses(count, seed);
 
         vm.prank(complianceOps);
-        compliance.addToSanctionsList(addrs);
+        compliance.sanctionUsers(addrs);
         for (uint256 i = 0; i < addrs.length; ++i) {
-            assertTrue(compliance.sanctionedAddresses(addrs[i]));
+            assertTrue(compliance.isSanctioned(addrs[i]));
         }
 
         vm.prank(complianceOps);
-        compliance.resetSanctionedAddresses();
+        compliance.clearSanctions();
         for (uint256 i = 0; i < addrs.length; ++i) {
-            assertFalse(compliance.sanctionedAddresses(addrs[i]));
+            assertFalse(compliance.isSanctioned(addrs[i]));
         }
         _logPass();
     }
@@ -183,18 +183,18 @@ contract FuzzQA is BaseQA {
         address[] memory listB = _generateAddresses(countB, uint256(keccak256(abi.encode(seed))));
 
         vm.prank(complianceOps);
-        compliance.setSanctionedAddresses(listA);
+        compliance.replaceSanctions(listA);
         for (uint256 i = 0; i < listA.length; ++i) {
-            assertTrue(compliance.sanctionedAddresses(listA[i]));
+            assertTrue(compliance.isSanctioned(listA[i]));
         }
 
         vm.prank(complianceOps);
-        compliance.setSanctionedAddresses(listB);
+        compliance.replaceSanctions(listB);
         for (uint256 i = 0; i < listA.length; ++i) {
-            assertFalse(compliance.sanctionedAddresses(listA[i]));
+            assertFalse(compliance.isSanctioned(listA[i]));
         }
         for (uint256 i = 0; i < listB.length; ++i) {
-            assertTrue(compliance.sanctionedAddresses(listB[i]));
+            assertTrue(compliance.isSanctioned(listB[i]));
         }
         _logPass();
     }
@@ -214,18 +214,18 @@ contract FuzzQA is BaseQA {
 
         // listB = shared (overlap portion only)
         vm.prank(complianceOps);
-        compliance.setSanctionedAddresses(listA);
+        compliance.replaceSanctions(listA);
 
         vm.prank(complianceOps);
-        compliance.setSanctionedAddresses(shared);
+        compliance.replaceSanctions(shared);
 
         // onlyA addresses should be cleared
         for (uint256 i = 0; i < onlyA.length; ++i) {
-            assertFalse(compliance.sanctionedAddresses(onlyA[i]));
+            assertFalse(compliance.isSanctioned(onlyA[i]));
         }
         // shared addresses should still be sanctioned
         for (uint256 i = 0; i < shared.length; ++i) {
-            assertTrue(compliance.sanctionedAddresses(shared[i]));
+            assertTrue(compliance.isSanctioned(shared[i]));
         }
         _logPass();
     }
@@ -287,11 +287,11 @@ contract FuzzQA is BaseQA {
 
     function testFuzz_UnauthorizedMintReverts(address caller) public {
         _logCase("FUZZ-PERM-01", unicode"未授权 mint 拒绝");
-        vm.assume(caller != issuer && caller != address(wallet));
+        vm.assume(caller != issuer && caller != address(vault));
         vm.assume(caller != address(0));
 
         vm.prank(caller);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.mint(1e18);
         _logPass();
     }
@@ -302,21 +302,22 @@ contract FuzzQA is BaseQA {
         vm.assume(caller != address(0));
 
         vm.prank(caller);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2e18, block.timestamp + 1 hours);
         _logPass();
     }
 
     function testFuzz_UnauthorizedAdminFunctionReverts(address caller) public {
-        _logCase("FUZZ-PERM-03", unicode"未授权 admin 函数拒绝");
+        _logCase("FUZZ-PERM-03", unicode"未授权 OPS 函数拒绝");
+        vm.assume(caller != tokenOps);
         vm.assume(caller != admin);
         vm.assume(caller != address(0));
 
         vm.prank(caller);
         vm.expectRevert(
-            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, caller, DEFAULT_ADMIN_ROLE_HASH)
+            abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, caller, TOKEN_OPS_ROLE)
         );
-        token.setName("Hacked");
+        token.updateName("Hacked");
         _logPass();
     }
 }

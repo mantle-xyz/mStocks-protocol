@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {OperatorWallet} from "../../src/OperatorWallet/OperatorWallet.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 contract QAMint is BaseQAScript {
@@ -36,38 +36,38 @@ contract QAMint is BaseQAScript {
         _expectRevertFrom(
             admin,
             address(token),
-            abi.encodeWithSelector(SecuritiesToken.mint.selector, 1000e18),
-            SecuritiesToken.UnauthorizedRole.selector
+            abi.encodeWithSelector(ScaledToken.mint.selector, 1000e18),
+            ScaledToken.UnauthorizedRole.selector
         );
         _step("  PASS: reverted UnauthorizedRole()");
 
         _logPass();
     }
 
-    // ── QA-MINT-02: 通过 OperatorWallet 铸造到热钱包 ──
+    // ── QA-MINT-02: 通过 TokenIssuer 铸造到热钱包 ──
     function test_MINT02() public {
-        _logCase("QA-MINT-02", unicode"通过 OperatorWallet 铸造到热钱包");
+        _logCase("QA-MINT-02", unicode"通过 TokenIssuer 铸造到热钱包");
 
         _step("[Step 1] preconditions");
         _requireNotPaused();
-        _requireRole(address(wallet), WALLET_OPS_ROLE, walletOps, "walletOps");
-        _requireRole(address(token), ISSUER_ROLE, address(wallet), "wallet ISSUER");
-        _assertEq(token.mintEnabled(), true, "mintEnabled");
+        _requireRole(address(vault), WALLET_OPS_ROLE, walletOps, "walletOps");
+        _requireRole(address(token), ISSUER_ROLE, address(vault), "wallet ISSUER");
+        _assertEq(token.mintAllowed(), true, "mintEnabled");
 
         _step("[Step 2] record before balances");
         uint256 hotBefore = token.balanceOf(hotWallet);
-        uint256 walletBefore = token.balanceOf(address(wallet));
+        uint256 walletBefore = token.balanceOf(address(vault));
         uint256 supplyBefore = token.totalSupply();
 
         _step("[Step 3] walletOps mints 500e18 to hotWallet");
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), hotWallet, 500e18);
+        vault.mint(address(token), hotWallet, 500e18);
 
         _step("[Step 4] verify diffs");
         _assertDiff(hotBefore, token.balanceOf(hotWallet), 500e18, "hotWallet balance diff");
         _step("  PASS: hotWallet +500e18");
 
-        _assertEq(token.balanceOf(address(wallet)), walletBefore, "wallet balance unchanged");
+        _assertEq(token.balanceOf(address(vault)), walletBefore, "wallet balance unchanged");
         _step("  PASS: wallet balance unchanged");
 
         _assertDiff(supplyBefore, token.totalSupply(), 500e18, "totalSupply diff");
@@ -87,8 +87,8 @@ contract QAMint is BaseQAScript {
         _expectRevertFrom(
             userA,
             address(token),
-            abi.encodeWithSelector(SecuritiesToken.mint.selector, 1e18),
-            SecuritiesToken.UnauthorizedRole.selector
+            abi.encodeWithSelector(ScaledToken.mint.selector, 1e18),
+            ScaledToken.UnauthorizedRole.selector
         );
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -100,16 +100,16 @@ contract QAMint is BaseQAScript {
         _logCase("QA-MINT-04", unicode"operator (OPS_ROLE) 不能铸造");
 
         _step("[Step 1] precondition: find an OPS_ROLE member");
-        address opsHolder = token.getRoleMember(TOKEN_OPS_ROLE, 0);
-        _assertEq(token.hasRole(TOKEN_OPS_ROLE, opsHolder), true, "opsHolder has OPS_ROLE");
+        address opsHolder = token.getRoleMember(TOKEN_MULTIPLIER_ROLE, 0);
+        _assertEq(token.hasRole(TOKEN_MULTIPLIER_ROLE, opsHolder), true, "opsHolder has OPS_ROLE");
         _assertEq(token.hasRole(ISSUER_ROLE, opsHolder), false, "opsHolder no ISSUER_ROLE");
 
         _step("[Step 2] opsHolder calls token.mint(1e18)");
         _expectRevertFrom(
             opsHolder,
             address(token),
-            abi.encodeWithSelector(SecuritiesToken.mint.selector, 1e18),
-            SecuritiesToken.UnauthorizedRole.selector
+            abi.encodeWithSelector(ScaledToken.mint.selector, 1e18),
+            ScaledToken.UnauthorizedRole.selector
         );
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -121,26 +121,26 @@ contract QAMint is BaseQAScript {
         _logCase("QA-MINT-05", unicode"mint 开关关闭后铸造失败");
 
         _step("[Step 1] precondition: mintEnabled == true");
-        _assertEq(token.mintEnabled(), true, "mintEnabled before");
+        _assertEq(token.mintAllowed(), true, "mintEnabled before");
 
         _step("[Step 2] admin disables mint");
         vm.broadcast(adminPk);
-        token.setMintEnabled(false);
-        _assertEq(token.mintEnabled(), false, "mintEnabled after disable");
+        token.setMintAllowed(false);
+        _assertEq(token.mintAllowed(), false, "mintEnabled after disable");
 
         _step("[Step 3] walletOps tries to mint via wallet (from walletOps addr)");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.mint.selector, address(token), hotWallet, 1e18),
-            SecuritiesToken.MintDisabled.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.mint.selector, address(token), hotWallet, 1e18),
+            ScaledToken.MintNotAllowed.selector
         );
-        _step("  PASS: reverted MintDisabled()");
+        _step("  PASS: reverted MintNotAllowed()");
 
         _step("[Step 4] cleanup: re-enable mint");
         vm.broadcast(adminPk);
-        token.setMintEnabled(true);
-        _assertEq(token.mintEnabled(), true, "mintEnabled restored");
+        token.setMintAllowed(true);
+        _assertEq(token.mintAllowed(), true, "mintEnabled restored");
         _step("  PASS: mintEnabled restored");
 
         _logPass();
@@ -152,17 +152,17 @@ contract QAMint is BaseQAScript {
 
         _step("[Step 1] admin disables then re-enables mint");
         vm.broadcast(adminPk);
-        token.setMintEnabled(false);
-        _assertEq(token.mintEnabled(), false, "disabled");
+        token.setMintAllowed(false);
+        _assertEq(token.mintAllowed(), false, "disabled");
 
         vm.broadcast(adminPk);
-        token.setMintEnabled(true);
-        _assertEq(token.mintEnabled(), true, "re-enabled");
+        token.setMintAllowed(true);
+        _assertEq(token.mintAllowed(), true, "re-enabled");
 
         _step("[Step 2] walletOps mints to hotWallet");
         uint256 hotBefore = token.balanceOf(hotWallet);
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), hotWallet, 100e18);
+        vault.mint(address(token), hotWallet, 100e18);
 
         _assertDiff(hotBefore, token.balanceOf(hotWallet), 100e18, "hotWallet balance diff");
         _step("  PASS: mint succeeded after re-enable");
@@ -182,9 +182,9 @@ contract QAMint is BaseQAScript {
             admin,
             address(token),
             abi.encodeWithSelector(IAccessControl.grantRole.selector, ISSUER_ROLE, userA),
-            SecuritiesToken.IssuerMustBeContract.selector
+            ScaledToken.IssuerNotContract.selector
         );
-        _step("  PASS: reverted IssuerMustBeContract()");
+        _step("  PASS: reverted IssuerNotContract()");
 
         _logPass();
     }
@@ -194,17 +194,17 @@ contract QAMint is BaseQAScript {
         _logCase("QA-MINT-08", unicode"铸造到非热钱包回滚");
 
         _step("[Step 1] precondition: walletOps has OPS_ROLE, userA is not hotWallet");
-        _requireRole(address(wallet), WALLET_OPS_ROLE, walletOps, "walletOps");
-        _assertEq(wallet.isHotWallet(userA), false, "userA is not hotWallet");
+        _requireRole(address(vault), WALLET_OPS_ROLE, walletOps, "walletOps");
+        _assertEq(vault.isApprovedRecipient(userA), false, "userA is not hotWallet");
 
         _step("[Step 2] walletOps mints to userA (not a hotWallet)");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.mint.selector, address(token), userA, 1e18),
-            OperatorWallet.RecipientNotHotWallet.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.mint.selector, address(token), userA, 1e18),
+            TokenIssuer.RecipientNotApproved.selector
         );
-        _step("  PASS: reverted RecipientNotHotWallet()");
+        _step("  PASS: reverted RecipientNotApproved()");
 
         _logPass();
     }
@@ -220,37 +220,37 @@ contract QAMint is BaseQAScript {
         _expectRevertFrom(
             admin,
             address(token),
-            abi.encodeWithSelector(SecuritiesToken.burn.selector, 1e18),
-            SecuritiesToken.UnauthorizedRole.selector
+            abi.encodeWithSelector(ScaledToken.burn.selector, 1e18),
+            ScaledToken.UnauthorizedRole.selector
         );
         _step("  PASS: reverted UnauthorizedRole()");
 
         _logPass();
     }
 
-    // ── QA-BURN-02: 通过 OperatorWallet 销毁 ──
+    // ── QA-BURN-02: 通过 TokenIssuer 销毁 ──
     function test_BURN02() public {
-        _logCase("QA-BURN-02", unicode"通过 OperatorWallet 销毁");
+        _logCase("QA-BURN-02", unicode"通过 TokenIssuer 销毁");
 
         _step("[Step 1] preconditions");
         _requireNotPaused();
-        _requireRole(address(wallet), WALLET_OPS_ROLE, walletOps, "walletOps");
-        _requireRole(address(token), ISSUER_ROLE, address(wallet), "wallet ISSUER");
+        _requireRole(address(vault), WALLET_OPS_ROLE, walletOps, "walletOps");
+        _requireRole(address(token), ISSUER_ROLE, address(vault), "wallet ISSUER");
 
         _step("[Step 2] mint 1000e18 to hotWallet for burn test");
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), hotWallet, 1000e18);
+        vault.mint(address(token), hotWallet, 1000e18);
 
         _step("[Step 3] hotWallet approves wallet for burn");
         vm.broadcast(hotWalletPk);
-        token.approve(address(wallet), type(uint256).max);
+        token.approve(address(vault), type(uint256).max);
 
         _step("[Step 4] record before, walletOps burns 400e18");
         uint256 hotBefore = token.balanceOf(hotWallet);
         uint256 supplyBefore = token.totalSupply();
 
         vm.broadcast(walletOpsPk);
-        wallet.burn(address(token), hotWallet, 400e18);
+        vault.burn(address(token), hotWallet, 400e18);
 
         _step("[Step 5] verify diffs");
         _assertDiff(hotBefore, token.balanceOf(hotWallet), -400e18, "hotWallet balance diff");
@@ -266,27 +266,30 @@ contract QAMint is BaseQAScript {
     function test_BURN03() public {
         _logCase("QA-BURN-03", unicode"burn 开关关闭后销毁失败");
 
-        _step("[Step 1] precondition: burnEnabled == true");
-        _assertEq(token.burnEnabled(), true, "burnEnabled before");
+        _step("[Step 1] precondition: burnEnabled == true, mint + approve");
+        _assertEq(token.burnAllowed(), true, "burnEnabled before");
+        _mintToHotWallet(10e18);
+        vm.broadcast(hotWalletPk);
+        token.approve(address(vault), type(uint256).max);
 
         _step("[Step 2] admin disables burn");
         vm.broadcast(adminPk);
-        token.setBurnEnabled(false);
-        _assertEq(token.burnEnabled(), false, "burnEnabled after disable");
+        token.setBurnAllowed(false);
+        _assertEq(token.burnAllowed(), false, "burnEnabled after disable");
 
         _step("[Step 3] walletOps tries to burn (from walletOps addr)");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.burn.selector, address(token), hotWallet, 1e18),
-            SecuritiesToken.BurnDisabled.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.burn.selector, address(token), hotWallet, 1e18),
+            ScaledToken.BurnNotAllowed.selector
         );
-        _step("  PASS: reverted BurnDisabled()");
+        _step("  PASS: reverted BurnNotAllowed()");
 
         _step("[Step 4] cleanup: re-enable burn");
         vm.broadcast(adminPk);
-        token.setBurnEnabled(true);
-        _assertEq(token.burnEnabled(), true, "burnEnabled restored");
+        token.setBurnAllowed(true);
+        _assertEq(token.burnAllowed(), true, "burnEnabled restored");
         _step("  PASS: burnEnabled restored");
 
         _logPass();
@@ -299,11 +302,11 @@ contract QAMint is BaseQAScript {
         _step("[Step 1] precondition: userA has no DEFAULT_ADMIN_ROLE");
         _assertEq(token.hasRole(DEFAULT_ADMIN_ROLE_HASH, userA), false, "userA no admin");
 
-        _step("[Step 2] userA calls setMintEnabled(false)");
+        _step("[Step 2] userA calls setMintAllowed(false)");
         _expectRevertFrom(
             userA,
             address(token),
-            abi.encodeWithSelector(token.setMintEnabled.selector, false),
+            abi.encodeWithSelector(token.setMintAllowed.selector, false),
             IAccessControl.AccessControlUnauthorizedAccount.selector
         );
         _step("  PASS: reverted AccessControlUnauthorizedAccount");

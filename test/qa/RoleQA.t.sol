@@ -3,11 +3,11 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
-import {PauseManager} from "../../src/pauseManager/PauseManager.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
+import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {OperatorWallet} from "../../src/OperatorWallet/OperatorWallet.sol";
+import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
 
 contract RoleQA is BaseQA {
     string constant MODULE = unicode"角色管理";
@@ -20,8 +20,8 @@ contract RoleQA is BaseQA {
     function test_ACROLE01_GrantIssuerThenMint() public {
         _logCase("AC-ROLE-01", unicode"grant ISSUER → mint");
 
-        _step("[Step 1] deploy OperatorWallet, grant ISSUER_ROLE");
-        address newIssuer = address(new OperatorWallet());
+        _step("[Step 1] deploy TokenIssuer, grant ISSUER_ROLE");
+        address newIssuer = address(new TokenIssuer());
         vm.prank(admin);
         token.grantRole(ISSUER_ROLE, newIssuer);
         assertTrue(token.hasRole(ISSUER_ROLE, newIssuer));
@@ -38,15 +38,15 @@ contract RoleQA is BaseQA {
 
     // ── AC-ROLE-02 ──
     function test_ACROLE02_GrantOpsThenMultiplier() public {
-        _logCase("AC-ROLE-02", unicode"grant OPS → setUIMultiplier");
+        _logCase("AC-ROLE-02", unicode"grant MULTIPLIER_SCHEDULER_ROLE → setUIMultiplier");
 
-        _step("[Step 1] grant OPS_ROLE to userA, then call setUIMultiplier");
+        _step("[Step 1] grant MULTIPLIER_SCHEDULER_ROLE to userA, then call setUIMultiplier");
         vm.prank(admin);
-        token.grantRole(OPS_ROLE, userA);
+        token.grantRole(MULTIPLIER_SCHEDULER_ROLE, userA);
 
         vm.prank(userA);
         token.setUIMultiplier(2e18, block.timestamp + 1 hours);
-        _step("  PASS: setUIMultiplier succeeded with new OPS_ROLE holder");
+        _step("  PASS: setUIMultiplier succeeded with new MULTIPLIER_SCHEDULER_ROLE holder");
 
         _logPass();
     }
@@ -55,8 +55,8 @@ contract RoleQA is BaseQA {
     function test_ACROLE03_RevokeRoleBlocksMint() public {
         _logCase("AC-ROLE-03", unicode"revokeRole 后失效");
 
-        _step("[Step 1] deploy OperatorWallet, grant then revoke ISSUER_ROLE");
-        address newIssuer = address(new OperatorWallet());
+        _step("[Step 1] deploy TokenIssuer, grant then revoke ISSUER_ROLE");
+        address newIssuer = address(new TokenIssuer());
         vm.startPrank(admin);
         token.grantRole(ISSUER_ROLE, newIssuer);
         token.revokeRole(ISSUER_ROLE, newIssuer);
@@ -64,7 +64,7 @@ contract RoleQA is BaseQA {
 
         _step("[Step 2] newIssuer tries to mint");
         vm.prank(newIssuer);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.mint(1e18);
         _step("  PASS: reverted UnauthorizedRole() after revoke");
 
@@ -78,7 +78,7 @@ contract RoleQA is BaseQA {
         _step("[Step 1] stranger tries grantRole");
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, DEFAULT_ADMIN_ROLE_HASH));
-        token.grantRole(OPS_ROLE, userA);
+        token.grantRole(MULTIPLIER_SCHEDULER_ROLE, userA);
         _step("  PASS: reverted (AccessControl)");
 
         _logPass();
@@ -91,7 +91,7 @@ contract RoleQA is BaseQA {
         _step("[Step 1] issuer tries grantRole");
         vm.prank(issuer);
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, issuer, DEFAULT_ADMIN_ROLE_HASH));
-        token.grantRole(OPS_ROLE, userA);
+        token.grantRole(MULTIPLIER_SCHEDULER_ROLE, userA);
         _step("  PASS: reverted (AccessControl)");
 
         _logPass();
@@ -101,11 +101,11 @@ contract RoleQA is BaseQA {
     function test_ACROLE06_GetRoleAdminCorrect() public {
         _logCase("AC-ROLE-06", unicode"getRoleAdmin 正确");
 
-        _step("[Step 1] query getRoleAdmin for ISSUER_ROLE and OPS_ROLE");
+        _step("[Step 1] query getRoleAdmin for ISSUER_ROLE and MULTIPLIER_SCHEDULER_ROLE");
         assertEq(token.getRoleAdmin(ISSUER_ROLE), DEFAULT_ADMIN_ROLE_HASH);
         _step("  PASS: ISSUER_ROLE admin == DEFAULT_ADMIN_ROLE");
-        assertEq(token.getRoleAdmin(OPS_ROLE), DEFAULT_ADMIN_ROLE_HASH);
-        _step("  PASS: OPS_ROLE admin == DEFAULT_ADMIN_ROLE");
+        assertEq(token.getRoleAdmin(MULTIPLIER_SCHEDULER_ROLE), DEFAULT_ADMIN_ROLE_HASH);
+        _step("  PASS: MULTIPLIER_SCHEDULER_ROLE admin == DEFAULT_ADMIN_ROLE");
 
         _logPass();
     }
@@ -132,7 +132,7 @@ contract RoleQA is BaseQA {
         _logCase("AC-ENUM-02", unicode"授予后增加");
 
         _step("[Step 1] grant ISSUER_ROLE to new contract");
-        address newIssuer = address(new OperatorWallet());
+        address newIssuer = address(new TokenIssuer());
         vm.prank(admin);
         token.grantRole(ISSUER_ROLE, newIssuer);
 
@@ -148,7 +148,7 @@ contract RoleQA is BaseQA {
         _logCase("AC-ENUM-03", unicode"撤销后减少");
 
         _step("[Step 1] grant then revoke");
-        address newIssuer = address(new OperatorWallet());
+        address newIssuer = address(new TokenIssuer());
         vm.startPrank(admin);
         token.grantRole(ISSUER_ROLE, newIssuer);
         token.revokeRole(ISSUER_ROLE, newIssuer);
@@ -167,7 +167,7 @@ contract RoleQA is BaseQA {
 
         _step("[Step 1] getRoleMember(ISSUER_ROLE, 0)");
         address member0 = token.getRoleMember(ISSUER_ROLE, 0);
-        assertEq(member0, address(wallet));
+        assertEq(member0, address(vault));
         _step("  PASS: wallet is the sole ISSUER_ROLE member");
 
         _logPass();
@@ -183,7 +183,7 @@ contract RoleQA is BaseQA {
 
         _step("[Step 1] admin tries grantRole(ISSUER_ROLE, admin)");
         vm.prank(admin);
-        vm.expectRevert(SecuritiesToken.SelfGrantNotAllowed.selector);
+        vm.expectRevert(ScaledToken.SelfGrantNotAllowed.selector);
         token.grantRole(ISSUER_ROLE, admin);
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
@@ -192,12 +192,12 @@ contract RoleQA is BaseQA {
 
     // ── AC-SELF-02 ──
     function test_ACSELF02_TokenAdminCannotSelfGrantOps() public {
-        _logCase("AC-SELF-02", unicode"token: admin→自己 OPS");
+        _logCase("AC-SELF-02", unicode"token: admin→自己 MULTIPLIER_SCHEDULER");
 
-        _step("[Step 1] admin tries grantRole(OPS_ROLE, admin)");
+        _step("[Step 1] admin tries grantRole(MULTIPLIER_SCHEDULER_ROLE, admin)");
         vm.prank(admin);
-        vm.expectRevert(SecuritiesToken.SelfGrantNotAllowed.selector);
-        token.grantRole(OPS_ROLE, admin);
+        vm.expectRevert(ScaledToken.SelfGrantNotAllowed.selector);
+        token.grantRole(MULTIPLIER_SCHEDULER_ROLE, admin);
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
         _logPass();
@@ -209,7 +209,7 @@ contract RoleQA is BaseQA {
 
         _step("[Step 1] admin tries compliance.grantRole(OPS, admin)");
         vm.prank(admin);
-        vm.expectRevert(Compliance.SelfGrantNotAllowed.selector);
+        vm.expectRevert(ComplianceRegistry.SelfGrantNotAllowed.selector);
         compliance.grantRole(COMPLIANCE_OPS_ROLE, admin);
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
@@ -220,10 +220,10 @@ contract RoleQA is BaseQA {
     function test_ACSELF04_PauseManagerAdminCannotSelfGrant() public {
         _logCase("AC-SELF-04", unicode"pauseManager: admin→自己 OPS");
 
-        _step("[Step 1] admin tries pauseManager.grantRole(OPS, admin)");
+        _step("[Step 1] admin tries pauseManager.grantRole(PAUSE_ROLE, admin)");
         vm.prank(admin);
-        vm.expectRevert(PauseManager.SelfGrantNotAllowed.selector);
-        pauseManager.grantRole(PAUSE_MANAGER_OPS_ROLE, admin);
+        vm.expectRevert(PauseRegistry.SelfGrantNotAllowed.selector);
+        pauseManager.grantRole(PAUSE_MANAGER_PAUSE_ROLE, admin);
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
         _logPass();
@@ -242,13 +242,17 @@ contract RoleQA is BaseQA {
 
     // ── AC-SELF-06 ──
     function test_ACSELF06_RenounceNotRestricted() public {
-        _logCase("AC-SELF-06", unicode"renounce 不受限");
+        _logCase("AC-SELF-06", unicode"renounce 不受限（需 2 admin）");
 
-        _step("[Step 1] admin renounces DEFAULT_ADMIN_ROLE");
+        _step("[Step 1] grant DEFAULT_ADMIN_ROLE to userA first (need 2 admins)");
+        vm.prank(admin);
+        token.grantRole(DEFAULT_ADMIN_ROLE_HASH, userA);
+
+        _step("[Step 2] admin renounces DEFAULT_ADMIN_ROLE");
         vm.prank(admin);
         token.renounceRole(DEFAULT_ADMIN_ROLE_HASH, admin);
         assertFalse(token.hasRole(DEFAULT_ADMIN_ROLE_HASH, admin));
-        _step("  PASS: renounceRole succeeded");
+        _step("  PASS: renounceRole succeeded (not last admin)");
 
         _logPass();
     }
@@ -257,10 +261,10 @@ contract RoleQA is BaseQA {
     function test_ACSELF07_WalletAdminCannotSelfGrant() public {
         _logCase("AC-SELF-07", unicode"operatorWallet: admin→自己 OPS");
 
-        _step("[Step 1] admin tries wallet.grantRole(OPS_ROLE, admin)");
+        _step("[Step 1] admin tries vault.grantRole(OPS_ROLE, admin)");
         vm.prank(admin);
-        vm.expectRevert(OperatorWallet.SelfGrantNotAllowed.selector);
-        wallet.grantRole(WALLET_OPS_ROLE, admin);
+        vm.expectRevert(TokenIssuer.SelfGrantNotAllowed.selector);
+        vault.grantRole(WALLET_OPS_ROLE, admin);
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
         _logPass();
@@ -273,8 +277,8 @@ contract RoleQA is BaseQA {
         _step("[Step 1] admin grants OPS_ROLE to userA on wallet");
         address newOps = makeAddr("newOps");
         vm.prank(admin);
-        wallet.grantRole(WALLET_OPS_ROLE, newOps);
-        assertTrue(wallet.hasRole(WALLET_OPS_ROLE, newOps));
+        vault.grantRole(WALLET_OPS_ROLE, newOps);
+        assertTrue(vault.hasRole(WALLET_OPS_ROLE, newOps));
         _step("  PASS: newOps has OPS_ROLE on wallet");
 
         _logPass();

@@ -4,14 +4,15 @@ pragma solidity ^0.8.20;
 import {Test, console2} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
-import {PauseManager} from "../../src/pauseManager/PauseManager.sol";
-import {SecuritiesTokenFactory} from "../../src/securitiesToken/SecuritiesTokenFactory.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {OperatorWallet} from "../../src/OperatorWallet/OperatorWallet.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
+import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
+import {ScaledTokenFactory} from "../../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
 
 contract DeployQA is Test {
     string constant MODULE = unicode"部署";
+    uint256 constant MIN_NOTICE = 1 hours;
 
     // ── logging ──
     string internal _caseId;
@@ -45,26 +46,27 @@ contract DeployQA is Test {
 
         _step("[Step 1] deployCompliance");
         vm.startPrank(deployer);
-        Compliance c = new Compliance(deployer);
+        ComplianceRegistry c = new ComplianceRegistry(deployer);
         assertTrue(address(c) != address(0));
-        _step("  Compliance deployed");
+        _step("  ComplianceRegistry deployed");
 
         _step("[Step 2] deployPauseManager");
-        PauseManager pm = new PauseManager(deployer);
+        PauseRegistry pm = new PauseRegistry(deployer);
         assertTrue(address(pm) != address(0));
-        _step("  PauseManager deployed");
+        _step("  PauseRegistry deployed");
 
         _step("[Step 3] deployFactory");
-        SecuritiesTokenFactory f = new SecuritiesTokenFactory(address(c), address(pm), deployer, proxyAdmin);
+        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
         assertTrue(address(f) != address(0));
         _step("  Factory deployed");
 
-        _step("[Step 4] deployToken");
-        address issuerContract = address(new OperatorWallet());
+        _step("[Step 4] createToken");
+        f.grantRole(f.OPS_ROLE(), deployer);
+        address issuerContract = address(new TokenIssuer());
         address[] memory issuers = new address[](1);
         issuers[0] = issuerContract;
-        address[] memory operators = new address[](0);
-        address proxy = f.deployToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, operators);
+        address[] memory mSchedulers = new address[](0);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
         assertTrue(proxy != address(0));
         vm.stopPrank();
         _step("  PASS: 4 contracts deployed, all non-zero");
@@ -78,14 +80,15 @@ contract DeployQA is Test {
 
         _step("[Step 1] deploy full stack in sequence (equivalent to run())");
         vm.startPrank(deployer);
-        Compliance c = new Compliance(deployer);
-        PauseManager pm = new PauseManager(deployer);
-        SecuritiesTokenFactory f = new SecuritiesTokenFactory(address(c), address(pm), deployer, proxyAdmin);
-        address issuerContract = address(new OperatorWallet());
+        ComplianceRegistry c = new ComplianceRegistry(deployer);
+        PauseRegistry pm = new PauseRegistry(deployer);
+        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        f.grantRole(f.OPS_ROLE(), deployer);
+        address issuerContract = address(new TokenIssuer());
         address[] memory issuers = new address[](1);
         issuers[0] = issuerContract;
-        address[] memory operators = new address[](0);
-        address proxy = f.deployToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, operators);
+        address[] memory mSchedulers = new address[](0);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
         vm.stopPrank();
 
         assertTrue(address(c) != address(0));
@@ -103,20 +106,21 @@ contract DeployQA is Test {
 
         _step("[Step 1] deploy token with specific name/symbol/identifier, verify");
         vm.startPrank(deployer);
-        Compliance c = new Compliance(deployer);
-        PauseManager pm = new PauseManager(deployer);
-        SecuritiesTokenFactory f = new SecuritiesTokenFactory(address(c), address(pm), deployer, proxyAdmin);
-        address issuerContract = address(new OperatorWallet());
+        ComplianceRegistry c = new ComplianceRegistry(deployer);
+        PauseRegistry pm = new PauseRegistry(deployer);
+        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        f.grantRole(f.OPS_ROLE(), deployer);
+        address issuerContract = address(new TokenIssuer());
         address[] memory issuers = new address[](1);
         issuers[0] = issuerContract;
-        address[] memory operators = new address[](0);
-        address proxy = f.deployToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, operators);
+        address[] memory mSchedulers = new address[](0);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
         vm.stopPrank();
 
-        SecuritiesToken t = SecuritiesToken(proxy);
+        ScaledToken t = ScaledToken(proxy);
         assertEq(t.name(), "Apple Inc.");
         assertEq(t.symbol(), "AAPL");
-        assertEq(t.identifier(), "US0378331005");
+        assertEq(t.assetCode(), "US0378331005");
         _step("  PASS: name/symbol/identifier match config values");
 
         _logPass();
@@ -128,7 +132,7 @@ contract DeployQA is Test {
 
         _step("[Step 1] deploy with deployer as admin");
         vm.startPrank(deployer);
-        Compliance c = new Compliance(deployer);
+        ComplianceRegistry c = new ComplianceRegistry(deployer);
         assertTrue(c.hasRole(c.DEFAULT_ADMIN_ROLE(), deployer));
         vm.stopPrank();
         _step("  PASS: deployer holds DEFAULT_ADMIN_ROLE");
@@ -143,77 +147,81 @@ contract DeployQA is Test {
         _step("[Step 1] deploy full stack with specific role grants");
         address cOps = makeAddr("complianceOps");
         address pmOps = makeAddr("pauseOps");
-        address issuerContract = address(new OperatorWallet());
+        address issuerContract = address(new TokenIssuer());
         address oper = makeAddr("tokenOperator");
 
         vm.startPrank(deployer);
-        Compliance c = new Compliance(deployer);
+        ComplianceRegistry c = new ComplianceRegistry(deployer);
         c.grantRole(c.OPS_ROLE(), cOps);
-        PauseManager pm = new PauseManager(deployer);
-        pm.grantRole(pm.OPS_ROLE(), pmOps);
-        SecuritiesTokenFactory f = new SecuritiesTokenFactory(address(c), address(pm), deployer, proxyAdmin);
+        PauseRegistry pm = new PauseRegistry(deployer);
+        pm.grantRole(pm.PAUSE_ROLE(), pmOps);
+        pm.grantRole(pm.UNPAUSE_ROLE(), pmOps);
+        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        f.grantRole(f.OPS_ROLE(), deployer);
         address[] memory issuers = new address[](1);
         issuers[0] = issuerContract;
-        address[] memory operators = new address[](1);
-        operators[0] = oper;
-        address proxy = f.deployToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, operators);
+        address[] memory mSchedulers = new address[](1);
+        mSchedulers[0] = oper;
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
         vm.stopPrank();
 
-        SecuritiesToken t = SecuritiesToken(proxy);
+        ScaledToken t = ScaledToken(proxy);
         assertTrue(c.hasRole(c.OPS_ROLE(), cOps));
-        assertTrue(pm.hasRole(pm.OPS_ROLE(), pmOps));
+        assertTrue(pm.hasRole(pm.PAUSE_ROLE(), pmOps));
+        assertTrue(pm.hasRole(pm.UNPAUSE_ROLE(), pmOps));
         assertTrue(t.hasRole(t.ISSUER_ROLE(), issuerContract));
-        assertTrue(t.hasRole(t.OPS_ROLE(), oper));
+        assertTrue(t.hasRole(t.MULTIPLIER_SCHEDULER_ROLE(), oper));
         _step("  PASS: all roles assigned correctly");
 
         _logPass();
     }
 
     // ── DPL-06 ──
-    function test_DPL06_OperatorWalletDeploy() public {
-        _logCase("DPL-06", unicode"OperatorWallet 部署");
+    function test_DPL06_TokenIssuerDeploy() public {
+        _logCase("DPL-06", unicode"TokenIssuer 部署");
 
-        _step("[Step 1] deploy OperatorWallet proxy, grant OPS, add hot wallets");
+        _step("[Step 1] deploy TokenIssuer proxy, grant OPS, add hot wallets");
         address owOps = makeAddr("walletOps");
         address hw1 = makeAddr("hw1");
         address hw2 = makeAddr("hw2");
 
         vm.startPrank(deployer);
-        OperatorWallet impl = new OperatorWallet();
-        bytes memory initData = abi.encodeWithSelector(OperatorWallet.initialize.selector, deployer);
-        OperatorWallet w = OperatorWallet(payable(address(new ERC1967Proxy(address(impl), initData))));
+        TokenIssuer impl = new TokenIssuer();
+        bytes memory initData = abi.encodeWithSelector(TokenIssuer.initialize.selector, deployer);
+        TokenIssuer w = TokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
         w.grantRole(w.OPS_ROLE(), owOps);
-        w.addHotWallet(hw1);
-        w.addHotWallet(hw2);
+        w.addApprovedRecipient(hw1);
+        w.addApprovedRecipient(hw2);
         vm.stopPrank();
 
         assertTrue(w.hasRole(w.DEFAULT_ADMIN_ROLE(), deployer));
         assertTrue(w.hasRole(w.OPS_ROLE(), owOps));
-        assertTrue(w.isHotWallet(hw1));
-        assertTrue(w.isHotWallet(hw2));
-        assertEq(w.numOfHotWallets(), 2);
+        assertTrue(w.isApprovedRecipient(hw1));
+        assertTrue(w.isApprovedRecipient(hw2));
+        assertEq(w.numApprovedRecipients(), 2);
         _step("  PASS: admin has DEFAULT_ADMIN_ROLE, OPS granted, hot wallets added");
 
         _logPass();
     }
 
     // ── DPL-07 ──
-    function test_DPL07_OperatorWalletGrantedIssuerRole() public {
-        _logCase("DPL-07", unicode"OperatorWallet 获得 ISSUER_ROLE");
+    function test_DPL07_TokenIssuerGrantedIssuerRole() public {
+        _logCase("DPL-07", unicode"TokenIssuer 获得 ISSUER_ROLE");
 
-        _step("[Step 1] deploy full stack + OperatorWallet, grant ISSUER_ROLE on token");
+        _step("[Step 1] deploy full stack + TokenIssuer, grant ISSUER_ROLE on token");
         vm.startPrank(deployer);
-        Compliance c = new Compliance(deployer);
-        PauseManager pm = new PauseManager(deployer);
-        SecuritiesTokenFactory f = new SecuritiesTokenFactory(address(c), address(pm), deployer, proxyAdmin);
+        ComplianceRegistry c = new ComplianceRegistry(deployer);
+        PauseRegistry pm = new PauseRegistry(deployer);
+        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        f.grantRole(f.OPS_ROLE(), deployer);
         address[] memory issuers = new address[](0);
-        address[] memory operators = new address[](0);
-        address proxy = f.deployToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, operators);
-        SecuritiesToken t = SecuritiesToken(proxy);
+        address[] memory mSchedulers = new address[](0);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
+        ScaledToken t = ScaledToken(proxy);
 
-        OperatorWallet impl2 = new OperatorWallet();
-        bytes memory initData2 = abi.encodeWithSelector(OperatorWallet.initialize.selector, deployer);
-        OperatorWallet w = OperatorWallet(payable(address(new ERC1967Proxy(address(impl2), initData2))));
+        TokenIssuer impl2 = new TokenIssuer();
+        bytes memory initData2 = abi.encodeWithSelector(TokenIssuer.initialize.selector, deployer);
+        TokenIssuer w = TokenIssuer(payable(address(new ERC1967Proxy(address(impl2), initData2))));
 
         t.grantRole(t.ISSUER_ROLE(), address(w));
         vm.stopPrank();

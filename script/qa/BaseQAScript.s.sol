@@ -2,19 +2,19 @@
 pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {SecuritiesTokenFactory} from "../../src/securitiesToken/SecuritiesTokenFactory.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
-import {PauseManager} from "../../src/pauseManager/PauseManager.sol";
-import {OperatorWallet} from "../../src/OperatorWallet/OperatorWallet.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {ScaledTokenFactory} from "../../src/scaledToken/ScaledTokenFactory.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
+import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
+import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
 
 abstract contract BaseQAScript is Script {
     // ── protocol stack (from .env) ──
-    SecuritiesToken internal token;
-    SecuritiesTokenFactory internal factory;
-    Compliance internal compliance;
-    PauseManager internal pauseManager;
-    OperatorWallet internal wallet;
+    ScaledToken internal token;
+    ScaledTokenFactory internal factory;
+    ComplianceRegistry internal compliance;
+    PauseRegistry internal pauseManager;
+    TokenIssuer internal vault;
 
     // ── accounts ──
     address internal admin;
@@ -40,10 +40,11 @@ abstract contract BaseQAScript is Script {
 
     // ── role hashes ──
     bytes32 internal ISSUER_ROLE;
-    bytes32 internal TOKEN_OPS_ROLE;
+    bytes32 internal TOKEN_MULTIPLIER_ROLE;
     bytes32 internal DEFAULT_ADMIN_ROLE_HASH;
     bytes32 internal COMPLIANCE_OPS_ROLE;
-    bytes32 internal PAUSE_MANAGER_OPS_ROLE;
+    bytes32 internal PAUSE_MANAGER_PAUSE_ROLE;
+    bytes32 internal PAUSE_MANAGER_UNPAUSE_ROLE;
     bytes32 internal WALLET_OPS_ROLE;
 
     // ── state ──
@@ -55,11 +56,11 @@ abstract contract BaseQAScript is Script {
         if (_envLoaded) return;
         _envLoaded = true;
         // contracts
-        token = SecuritiesToken(vm.envAddress("TOKEN_ADDR"));
-        factory = SecuritiesTokenFactory(vm.envAddress("FACTORY_ADDR"));
-        compliance = Compliance(vm.envAddress("COMPLIANCE_ADDR"));
-        pauseManager = PauseManager(vm.envAddress("PAUSE_MANAGER_ADDR"));
-        wallet = OperatorWallet(payable(vm.envAddress("OPERATOR_WALLET_ADDR")));
+        token = ScaledToken(vm.envAddress("TOKEN_ADDR"));
+        factory = ScaledTokenFactory(vm.envAddress("FACTORY_ADDR"));
+        compliance = ComplianceRegistry(vm.envAddress("COMPLIANCE_ADDR"));
+        pauseManager = PauseRegistry(vm.envAddress("PAUSE_MANAGER_ADDR"));
+        vault = TokenIssuer(payable(vm.envAddress("ISSUER_VAULT_ADDR")));
 
         // admin
         adminPk = vm.envUint("ADMIN_PK");
@@ -72,7 +73,7 @@ abstract contract BaseQAScript is Script {
         pauseOpsPk = vm.envUint("PAUSE_OPS_PK");
         pauseOps = vm.addr(pauseOpsPk);
 
-        walletOpsPk = vm.envUint("OPERATOR_WALLET_OPS_PK");
+        walletOpsPk = vm.envUint("ISSUER_VAULT_OPS_PK");
         walletOps = vm.addr(walletOpsPk);
 
         // hot wallet
@@ -88,11 +89,12 @@ abstract contract BaseQAScript is Script {
 
         // role hashes
         ISSUER_ROLE = token.ISSUER_ROLE();
-        TOKEN_OPS_ROLE = token.OPS_ROLE();
+        TOKEN_MULTIPLIER_ROLE = token.MULTIPLIER_SCHEDULER_ROLE();
         DEFAULT_ADMIN_ROLE_HASH = 0x00;
         COMPLIANCE_OPS_ROLE = compliance.OPS_ROLE();
-        PAUSE_MANAGER_OPS_ROLE = pauseManager.OPS_ROLE();
-        WALLET_OPS_ROLE = wallet.OPS_ROLE();
+        PAUSE_MANAGER_PAUSE_ROLE = pauseManager.PAUSE_ROLE();
+        PAUSE_MANAGER_UNPAUSE_ROLE = pauseManager.UNPAUSE_ROLE();
+        WALLET_OPS_ROLE = vault.OPS_ROLE();
     }
 
     // ═══════════════════════════════════════════════
@@ -274,9 +276,9 @@ abstract contract BaseQAScript is Script {
 
     function _mintToHotWallet(uint256 amount) internal {
         _requireNotPaused();
-        _requireRole(address(wallet), WALLET_OPS_ROLE, walletOps, "walletOps");
+        _requireRole(address(vault), WALLET_OPS_ROLE, walletOps, "walletOps");
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), hotWallet, amount);
+        vault.mint(address(token), hotWallet, amount);
     }
 
     function _transferFromHotWallet(address to, uint256 amount) internal {

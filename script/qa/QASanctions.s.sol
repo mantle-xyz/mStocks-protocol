@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 
 contract QASanctions is BaseQAScript {
     function run() external {
@@ -26,14 +26,14 @@ contract QASanctions is BaseQAScript {
         address[] memory addrs = new address[](1);
         addrs[0] = user;
         vm.broadcast(complianceOpsPk);
-        compliance.addToSanctionsList(addrs);
+        compliance.sanctionUsers(addrs);
     }
 
     function _unsanctionUser(address user) internal {
         address[] memory addrs = new address[](1);
         addrs[0] = user;
         vm.broadcast(complianceOpsPk);
-        compliance.removeFromSanctionsList(addrs);
+        compliance.unsanctionUsers(addrs);
     }
 
     // ── QA-SAN-01: 制裁后发行方转入阻断 ──
@@ -42,13 +42,13 @@ contract QASanctions is BaseQAScript {
 
         _step("[Step 1] preconditions: mint to hotWallet, ensure userA not sanctioned");
         _requireNotPaused();
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA not sanctioned");
+        _assertEq(compliance.isSanctioned(userA), false, "userA not sanctioned");
         _mintToHotWallet(100e18);
         _requireBalance(hotWallet, 100e18, "hotWallet");
 
         _step("[Step 2] complianceOps sanctions userA");
         _sanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
         _step("  userA is sanctioned");
 
         _step("[Step 3] hotWallet tries transfer to userA");
@@ -56,13 +56,13 @@ contract QASanctions is BaseQAScript {
             hotWallet,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: reverted UserSanctioned()");
 
         _step("[Step 4] cleanup: unsanction userA");
         _unsanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA unsanctioned");
+        _assertEq(compliance.isSanctioned(userA), false, "userA unsanctioned");
         _step("  PASS: userA unsanctioned");
 
         _logPass();
@@ -76,20 +76,20 @@ contract QASanctions is BaseQAScript {
         _requireNotPaused();
         _mintAndDistribute(userB, 200e18);
         _sanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
 
         _step("[Step 2] userB tries transfer to sanctioned userA");
         _expectRevertFrom(
             userB,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 100e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: reverted UserSanctioned()");
 
         _step("[Step 3] cleanup: unsanction userA");
         _unsanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA unsanctioned");
+        _assertEq(compliance.isSanctioned(userA), false, "userA unsanctioned");
         _step("  PASS: userA unsanctioned");
 
         _logPass();
@@ -106,20 +106,20 @@ contract QASanctions is BaseQAScript {
 
         _step("[Step 2] sanction userA");
         _sanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
 
         _step("[Step 3] sanctioned userA tries transfer to userB");
         _expectRevertFrom(
             userA,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userB, 10e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: reverted UserSanctioned()");
 
         _step("[Step 4] cleanup: unsanction userA");
         _unsanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA unsanctioned");
+        _assertEq(compliance.isSanctioned(userA), false, "userA unsanctioned");
         _step("  PASS: userA unsanctioned");
 
         _logPass();
@@ -133,9 +133,9 @@ contract QASanctions is BaseQAScript {
         _requireNotPaused();
         _mintAndDistribute(userB, 200e18);
         _sanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
         _unsanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA unsanctioned");
+        _assertEq(compliance.isSanctioned(userA), false, "userA unsanctioned");
 
         _step("[Step 2] userB transfers to userA (should succeed)");
         uint256 bBefore = token.balanceOf(userB);
@@ -157,14 +157,14 @@ contract QASanctions is BaseQAScript {
         _requireNotPaused();
         _sanctionUser(userA);
         _sanctionUser(userB);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
-        _assertEq(compliance.sanctionedAddresses(userB), true, "userB sanctioned");
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
+        _assertEq(compliance.isSanctioned(userB), true, "userB sanctioned");
 
-        _step("[Step 2] complianceOps calls resetSanctionedAddresses");
+        _step("[Step 2] complianceOps calls clearSanctions");
         vm.broadcast(complianceOpsPk);
-        compliance.resetSanctionedAddresses();
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA cleared");
-        _assertEq(compliance.sanctionedAddresses(userB), false, "userB cleared");
+        compliance.clearSanctions();
+        _assertEq(compliance.isSanctioned(userA), false, "userA cleared");
+        _assertEq(compliance.isSanctioned(userB), false, "userB cleared");
         _step("  PASS: both users cleared by epoch reset");
 
         _step("[Step 3] verify transfer works after reset");
@@ -187,15 +187,15 @@ contract QASanctions is BaseQAScript {
         _step("[Step 1] preconditions: sanction userA");
         _requireNotPaused();
         _sanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
 
-        _step("[Step 2] complianceOps calls setSanctionedAddresses([userB]) - replaces list");
+        _step("[Step 2] complianceOps calls replaceSanctions([userB]) - replaces list");
         address[] memory newList = new address[](1);
         newList[0] = userB;
         vm.broadcast(complianceOpsPk);
-        compliance.setSanctionedAddresses(newList);
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA no longer sanctioned");
-        _assertEq(compliance.sanctionedAddresses(userB), true, "userB now sanctioned");
+        compliance.replaceSanctions(newList);
+        _assertEq(compliance.isSanctioned(userA), false, "userA no longer sanctioned");
+        _assertEq(compliance.isSanctioned(userB), true, "userB now sanctioned");
         _step("  PASS: list replaced - userA cleared, userB sanctioned");
 
         _step("[Step 3] verify userA can receive, userB cannot send");
@@ -206,14 +206,14 @@ contract QASanctions is BaseQAScript {
             userB,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: userB reverted UserSanctioned()");
 
         _step("[Step 4] cleanup: reset sanctions");
         vm.broadcast(complianceOpsPk);
-        compliance.resetSanctionedAddresses();
-        _assertEq(compliance.sanctionedAddresses(userB), false, "userB cleared");
+        compliance.clearSanctions();
+        _assertEq(compliance.isSanctioned(userB), false, "userB cleared");
         _step("  PASS: sanctions reset");
 
         _logPass();
@@ -226,19 +226,19 @@ contract QASanctions is BaseQAScript {
         _step("[Step 1] deploy tokenB via Factory");
         _requireNotPaused();
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Sanction Corp", "SANB", "SAN001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Sanction Corp", "SANB", "SAN001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB: ", vm.toString(tokenBAddr)));
 
         _step("[Step 2] setup tokenB: grant ISSUER_ROLE + mint + distribute to hotWallet");
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 200e18);
+        vault.mint(tokenBAddr, hotWallet, 200e18);
 
         _step("[Step 3] sanction userA (global)");
         _sanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
 
         _step("[Step 4] tokenA transfer to userA reverts");
         _mintToHotWallet(100e18);
@@ -246,7 +246,7 @@ contract QASanctions is BaseQAScript {
             hotWallet,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: tokenA reverted UserSanctioned()");
 
@@ -255,13 +255,13 @@ contract QASanctions is BaseQAScript {
             hotWallet,
             tokenBAddr,
             abi.encodeWithSelector(tokenB.transfer.selector, userA, 10e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: tokenB reverted UserSanctioned()");
 
         _step("[Step 6] cleanup: unsanction userA");
         _unsanctionUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), false, "userA unsanctioned");
+        _assertEq(compliance.isSanctioned(userA), false, "userA unsanctioned");
         _step("  PASS: userA unsanctioned");
 
         _logPass();
@@ -275,16 +275,16 @@ contract QASanctions is BaseQAScript {
         _requireRole(address(compliance), DEFAULT_ADMIN_ROLE_HASH, admin, "admin");
         _assertEq(compliance.hasRole(COMPLIANCE_OPS_ROLE, admin), false, "admin no OPS_ROLE");
 
-        _step("[Step 2] admin tries addToSanctionsList");
+        _step("[Step 2] admin tries sanctionUsers");
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         _expectRevertFrom(
             admin,
             address(compliance),
-            abi.encodeWithSelector(compliance.addToSanctionsList.selector, addrs),
-            Compliance.MissingBlocklistRole.selector
+            abi.encodeWithSelector(compliance.sanctionUsers.selector, addrs),
+            ComplianceRegistry.MissingOpsRole.selector
         );
-        _step("  PASS: reverted MissingBlocklistRole()");
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }
@@ -296,16 +296,16 @@ contract QASanctions is BaseQAScript {
         _step("[Step 1] precondition: userA has no OPS_ROLE on compliance");
         _assertEq(compliance.hasRole(COMPLIANCE_OPS_ROLE, userA), false, "userA no OPS_ROLE");
 
-        _step("[Step 2] userA tries addToSanctionsList");
+        _step("[Step 2] userA tries sanctionUsers");
         address[] memory addrs = new address[](1);
         addrs[0] = userB;
         _expectRevertFrom(
             userA,
             address(compliance),
-            abi.encodeWithSelector(compliance.addToSanctionsList.selector, addrs),
-            Compliance.MissingBlocklistRole.selector
+            abi.encodeWithSelector(compliance.sanctionUsers.selector, addrs),
+            ComplianceRegistry.MissingOpsRole.selector
         );
-        _step("  PASS: reverted MissingBlocklistRole()");
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }

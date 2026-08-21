@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 
 contract MultiplierQA is BaseQA {
     string constant MODULE = "UI Multiplier";
@@ -21,7 +21,7 @@ contract MultiplierQA is BaseQA {
 
         _step("[Step 1] admin tries setUIMultiplier");
         vm.prank(admin);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2e18, block.timestamp + 1 hours);
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -47,7 +47,7 @@ contract MultiplierQA is BaseQA {
 
         _step("[Step 1] issuer tries setUIMultiplier");
         vm.prank(issuer);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2e18, block.timestamp + 1 hours);
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -60,7 +60,7 @@ contract MultiplierQA is BaseQA {
 
         _step("[Step 1] userA tries setUIMultiplier");
         vm.prank(userA);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2e18, block.timestamp + 1 hours);
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -143,7 +143,7 @@ contract MultiplierQA is BaseQA {
 
         _step("[Step 1] setUIMultiplier(1e9 - 1)");
         vm.prank(operator);
-        vm.expectRevert("SecuritiesToken: multiplier below minimum (1e-9x)");
+        vm.expectRevert("ScaledToken: multiplier below minimum (1e-9x)");
         token.setUIMultiplier(1e9 - 1, block.timestamp + 1 hours);
         _step("  PASS: reverted below minimum");
 
@@ -182,7 +182,7 @@ contract MultiplierQA is BaseQA {
 
         _step("[Step 1] setUIMultiplier(1e27 + 1)");
         vm.prank(operator);
-        vm.expectRevert("SecuritiesToken: multiplier above maximum (1e9x)");
+        vm.expectRevert("ScaledToken: multiplier above maximum (1e9x)");
         token.setUIMultiplier(1e27 + 1, block.timestamp + 1 hours);
         _step("  PASS: reverted above maximum");
 
@@ -191,14 +191,14 @@ contract MultiplierQA is BaseQA {
 
     // ── UI-VAL-05 ──
     function test_UIVAL05_EffectiveAtNotFuture() public {
-        _logCase("UI-VAL-05", unicode"effectiveAt 非未来");
+        _logCase("UI-VAL-05", unicode"effectiveAt 未满足最低通知期");
 
         _step("[Step 1] warp to 1_000_000, set effectiveAt = block.timestamp");
         vm.warp(1_000_000);
         vm.prank(operator);
-        vm.expectRevert("ERC8056: effective time must be in future");
+        vm.expectRevert("ScaledToken: minimum notice period not met");
         token.setUIMultiplier(2e18, block.timestamp);
-        _step("  PASS: reverted (must be in future)");
+        _step("  PASS: reverted (minimum notice period not met)");
 
         _logPass();
     }
@@ -209,7 +209,7 @@ contract MultiplierQA is BaseQA {
 
         _step("[Step 1] setUIMultiplier with effectiveAt = t + 366 days");
         vm.prank(operator);
-        vm.expectRevert("SecuritiesToken: effective time too far in future");
+        vm.expectRevert("ScaledToken: effective time too far in future");
         token.setUIMultiplier(2e18, block.timestamp + 366 days);
         _step("  PASS: reverted too far in future");
 
@@ -235,7 +235,7 @@ contract MultiplierQA is BaseQA {
 
         _step("[Step 1] setUIMultiplier with effectiveAt = type(uint256).max");
         vm.prank(operator);
-        vm.expectRevert("SecuritiesToken: effective time too far in future");
+        vm.expectRevert("ScaledToken: effective time too far in future");
         token.setUIMultiplier(2e18, type(uint256).max);
         _step("  PASS: reverted (overflow)");
 

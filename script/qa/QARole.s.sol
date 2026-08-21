@@ -2,11 +2,11 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {SecuritiesTokenFactory} from "../../src/securitiesToken/SecuritiesTokenFactory.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
-import {PauseManager} from "../../src/pauseManager/PauseManager.sol";
-import {OperatorWallet} from "../../src/OperatorWallet/OperatorWallet.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {ScaledTokenFactory} from "../../src/scaledToken/ScaledTokenFactory.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
+import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
+import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 contract QARole is BaseQAScript {
@@ -34,16 +34,16 @@ contract QARole is BaseQAScript {
     function test_ROLE01() public {
         _logCase("QA-ROLE-01", unicode"grant ISSUER_ROLE to contract");
 
-        _step("[Step 1] deploy a new OperatorWallet as issuer candidate");
+        _step("[Step 1] deploy a new TokenIssuer as issuer candidate");
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("RL");
-        address tokenBAddr = factory.deployToken("Role Corp", sym, "ROLE001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Role Corp", sym, "ROLE001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
 
         _step("[Step 2] admin grants ISSUER_ROLE to wallet on tokenB");
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
-        _assertEq(tokenB.hasRole(ISSUER_ROLE, address(wallet)), true, "wallet has ISSUER_ROLE");
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
+        _assertEq(tokenB.hasRole(ISSUER_ROLE, address(vault)), true, "wallet has ISSUER_ROLE");
         _step("  PASS: grantRole succeeded (contract address)");
 
         _logPass();
@@ -56,11 +56,11 @@ contract QARole is BaseQAScript {
         _step("[Step 1] deploy tokenB, grant OPS_ROLE to userA");
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("OP");
-        address tokenBAddr = factory.deployToken("Ops Corp", sym, "OPS001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Ops Corp", sym, "OPS001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
-        tokenB.grantRole(TOKEN_OPS_ROLE, userA);
-        _assertEq(tokenB.hasRole(TOKEN_OPS_ROLE, userA), true, "userA has OPS_ROLE");
+        tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, userA);
+        _assertEq(tokenB.hasRole(TOKEN_MULTIPLIER_ROLE, userA), true, "userA has OPS_ROLE");
 
         _step("[Step 2] userA calls setUIMultiplier on tokenB");
         vm.broadcast(userAPk);
@@ -70,8 +70,8 @@ contract QARole is BaseQAScript {
 
         _step("[Step 3] cleanup: revoke OPS_ROLE from userA");
         vm.broadcast(adminPk);
-        tokenB.revokeRole(TOKEN_OPS_ROLE, userA);
-        _assertEq(tokenB.hasRole(TOKEN_OPS_ROLE, userA), false, "userA OPS_ROLE revoked");
+        tokenB.revokeRole(TOKEN_MULTIPLIER_ROLE, userA);
+        _assertEq(tokenB.hasRole(TOKEN_MULTIPLIER_ROLE, userA), false, "userA OPS_ROLE revoked");
         _step("  PASS: OPS_ROLE revoked");
 
         _logPass();
@@ -84,24 +84,24 @@ contract QARole is BaseQAScript {
         _step("[Step 1] deploy tokenB, grant ISSUER_ROLE to wallet, then revoke");
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("RV");
-        address tokenBAddr = factory.deployToken("Rev Corp", sym, "REV001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Rev Corp", sym, "REV001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
-        _assertEq(tokenB.hasRole(ISSUER_ROLE, address(wallet)), true, "wallet has ISSUER_ROLE");
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
+        _assertEq(tokenB.hasRole(ISSUER_ROLE, address(vault)), true, "wallet has ISSUER_ROLE");
 
         vm.broadcast(adminPk);
-        tokenB.revokeRole(ISSUER_ROLE, address(wallet));
-        _assertEq(tokenB.hasRole(ISSUER_ROLE, address(wallet)), false, "wallet ISSUER_ROLE revoked");
+        tokenB.revokeRole(ISSUER_ROLE, address(vault));
+        _assertEq(tokenB.hasRole(ISSUER_ROLE, address(vault)), false, "wallet ISSUER_ROLE revoked");
 
-        _step("[Step 2] walletOps tries to mint on tokenB via wallet (ISSUER revoked -> MissingIssuerRole)");
+        _step("[Step 2] walletOps tries to mint on tokenB via wallet (ISSUER revoked -> UnauthorizedRole)");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.mint.selector, tokenBAddr, hotWallet, 1e18),
-            OperatorWallet.MissingIssuerRole.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.mint.selector, tokenBAddr, hotWallet, 1e18),
+            ScaledToken.UnauthorizedRole.selector
         );
-        _step("  PASS: reverted MissingIssuerRole() after revoke");
+        _step("  PASS: reverted UnauthorizedRole() after revoke");
 
         _logPass();
     }
@@ -117,7 +117,7 @@ contract QARole is BaseQAScript {
         _expectRevertFrom(
             userA,
             address(token),
-            abi.encodeWithSelector(IAccessControl.grantRole.selector, TOKEN_OPS_ROLE, userB),
+            abi.encodeWithSelector(IAccessControl.grantRole.selector, TOKEN_MULTIPLIER_ROLE, userB),
             IAccessControl.AccessControlUnauthorizedAccount.selector
         );
         _step("  PASS: reverted AccessControlUnauthorizedAccount()");
@@ -137,7 +137,7 @@ contract QARole is BaseQAScript {
             admin,
             address(token),
             abi.encodeWithSelector(IAccessControl.grantRole.selector, ISSUER_ROLE, admin),
-            SecuritiesToken.SelfGrantNotAllowed.selector
+            ScaledToken.SelfGrantNotAllowed.selector
         );
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
@@ -152,8 +152,8 @@ contract QARole is BaseQAScript {
         _expectRevertFrom(
             admin,
             address(token),
-            abi.encodeWithSelector(IAccessControl.grantRole.selector, TOKEN_OPS_ROLE, admin),
-            SecuritiesToken.SelfGrantNotAllowed.selector
+            abi.encodeWithSelector(IAccessControl.grantRole.selector, TOKEN_MULTIPLIER_ROLE, admin),
+            ScaledToken.SelfGrantNotAllowed.selector
         );
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
@@ -169,23 +169,23 @@ contract QARole is BaseQAScript {
             admin,
             address(compliance),
             abi.encodeWithSelector(IAccessControl.grantRole.selector, COMPLIANCE_OPS_ROLE, admin),
-            Compliance.SelfGrantNotAllowed.selector
+            ComplianceRegistry.SelfGrantNotAllowed.selector
         );
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
         _logPass();
     }
 
-    // ── QA-ROLE-08: pauseManager: admin 给自己授 OPS_ROLE ──
+    // ── QA-ROLE-08: pauseManager: admin 给自己授 PAUSE_ROLE ──
     function test_ROLE08() public {
-        _logCase("QA-ROLE-08", unicode"pauseManager: admin 给自己授 OPS_ROLE");
+        _logCase("QA-ROLE-08", unicode"pauseManager: admin 给自己授 PAUSE_ROLE");
 
-        _step("[Step 1] admin tries grantRole(OPS_ROLE, admin) on pauseManager");
+        _step("[Step 1] admin tries grantRole(PAUSE_ROLE, admin) on pauseManager");
         _expectRevertFrom(
             admin,
             address(pauseManager),
-            abi.encodeWithSelector(IAccessControl.grantRole.selector, PAUSE_MANAGER_OPS_ROLE, admin),
-            PauseManager.SelfGrantNotAllowed.selector
+            abi.encodeWithSelector(IAccessControl.grantRole.selector, PAUSE_MANAGER_PAUSE_ROLE, admin),
+            PauseRegistry.SelfGrantNotAllowed.selector
         );
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
@@ -196,17 +196,20 @@ contract QARole is BaseQAScript {
     function test_ROLE09() public {
         _logCase("QA-ROLE-09", unicode"renounce 自己角色(备用 token)");
 
-        _step("[Step 1] deploy tokenB with admin as DEFAULT_ADMIN_ROLE");
+        _step("[Step 1] deploy tokenB, grant userA as second admin");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Ren Corp", "RENB", "REN001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Ren Corp", _uniqueSymbol("REN"), _uniqueSymbol("REN"), admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _requireRole(tokenBAddr, DEFAULT_ADMIN_ROLE_HASH, admin, "admin on tokenB");
+        vm.broadcast(adminPk);
+        tokenB.grantRole(DEFAULT_ADMIN_ROLE_HASH, userA);
 
-        _step("[Step 2] admin renounces DEFAULT_ADMIN_ROLE on tokenB");
+        _step("[Step 2] admin renounces DEFAULT_ADMIN_ROLE on tokenB (userA remains)");
         vm.broadcast(adminPk);
         tokenB.renounceRole(DEFAULT_ADMIN_ROLE_HASH, admin);
         _assertEq(tokenB.hasRole(DEFAULT_ADMIN_ROLE_HASH, admin), false, "admin renounced");
-        _step("  PASS: admin no longer has DEFAULT_ADMIN_ROLE");
+        _assertEq(tokenB.hasRole(DEFAULT_ADMIN_ROLE_HASH, userA), true, "userA still admin");
+        _step("  PASS: admin renounced, userA remains admin");
 
         _logPass();
     }
@@ -215,10 +218,12 @@ contract QARole is BaseQAScript {
     function test_ROLE10() public {
         _logCase("QA-ROLE-10", unicode"renounce 后不可治理");
 
-        _step("[Step 1] deploy tokenB, admin renounces");
+        _step("[Step 1] deploy tokenB, grant userA as second admin, then admin renounces");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("NoGov Corp", "NOGV", "NOG001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("NoGov Corp", _uniqueSymbol("NOG"), _uniqueSymbol("NOG"), admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
+        vm.broadcast(adminPk);
+        tokenB.grantRole(DEFAULT_ADMIN_ROLE_HASH, userA);
         vm.broadcast(adminPk);
         tokenB.renounceRole(DEFAULT_ADMIN_ROLE_HASH, admin);
         _assertEq(tokenB.hasRole(DEFAULT_ADMIN_ROLE_HASH, admin), false, "admin renounced");
@@ -227,7 +232,7 @@ contract QARole is BaseQAScript {
         _expectRevertFrom(
             admin,
             tokenBAddr,
-            abi.encodeWithSelector(IAccessControl.grantRole.selector, ISSUER_ROLE, address(wallet)),
+            abi.encodeWithSelector(IAccessControl.grantRole.selector, ISSUER_ROLE, address(vault)),
             IAccessControl.AccessControlUnauthorizedAccount.selector
         );
         _step("  PASS: reverted AccessControlUnauthorizedAccount()");
@@ -244,9 +249,9 @@ contract QARole is BaseQAScript {
             admin,
             address(token),
             abi.encodeWithSelector(IAccessControl.grantRole.selector, ISSUER_ROLE, userA),
-            SecuritiesToken.IssuerMustBeContract.selector
+            ScaledToken.IssuerNotContract.selector
         );
-        _step("  PASS: reverted IssuerMustBeContract()");
+        _step("  PASS: reverted IssuerNotContract()");
 
         _logPass();
     }
@@ -262,12 +267,12 @@ contract QARole is BaseQAScript {
             admin,
             address(factory),
             abi.encodeWithSelector(
-                factory.deployToken.selector,
+                factory.createToken.selector,
                 "Bad Corp", "BAD", "BAD001", admin, issuers, new address[](0)
             ),
-            SecuritiesToken.IssuerMustBeContract.selector
+            ScaledToken.IssuerNotContract.selector
         );
-        _step("  PASS: reverted IssuerMustBeContract()");
+        _step("  PASS: reverted IssuerNotContract()");
 
         _logPass();
     }
@@ -278,51 +283,51 @@ contract QARole is BaseQAScript {
 
         _step("[Step 1] deploy tokenB, admin grants OPS_ROLE to userA (EOA)");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("EOA Corp", "EOAB", "EOA001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("EOA Corp", "EOAB", "EOA001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
-        tokenB.grantRole(TOKEN_OPS_ROLE, userA);
-        _assertEq(tokenB.hasRole(TOKEN_OPS_ROLE, userA), true, "userA has OPS_ROLE");
+        tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, userA);
+        _assertEq(tokenB.hasRole(TOKEN_MULTIPLIER_ROLE, userA), true, "userA has OPS_ROLE");
         _step("  PASS: OPS_ROLE granted to EOA");
 
         _step("[Step 2] cleanup: revoke OPS_ROLE from userA");
         vm.broadcast(adminPk);
-        tokenB.revokeRole(TOKEN_OPS_ROLE, userA);
+        tokenB.revokeRole(TOKEN_MULTIPLIER_ROLE, userA);
         _step("  PASS: revoked");
 
         _logPass();
     }
 
-    // ── QA-ROLE-14: OperatorWallet: admin 给自己授角色 ──
+    // ── QA-ROLE-14: TokenIssuer: admin 给自己授角色 ──
     function test_ROLE14() public {
-        _logCase("QA-ROLE-14", unicode"OperatorWallet: admin 给自己授角色");
+        _logCase("QA-ROLE-14", unicode"TokenIssuer: admin 给自己授角色");
 
         _step("[Step 1] admin tries grantRole(OPS_ROLE, admin) on wallet");
         _expectRevertFrom(
             admin,
-            address(wallet),
+            address(vault),
             abi.encodeWithSelector(IAccessControl.grantRole.selector, WALLET_OPS_ROLE, admin),
-            OperatorWallet.SelfGrantNotAllowed.selector
+            TokenIssuer.SelfGrantNotAllowed.selector
         );
         _step("  PASS: reverted SelfGrantNotAllowed()");
 
         _logPass();
     }
 
-    // ── QA-ROLE-15: OperatorWallet: admin 可授角色给他人 ──
+    // ── QA-ROLE-15: TokenIssuer: admin 可授角色给他人 ──
     function test_ROLE15() public {
-        _logCase("QA-ROLE-15", unicode"OperatorWallet: admin 可授角色给他人");
+        _logCase("QA-ROLE-15", unicode"TokenIssuer: admin 可授角色给他人");
 
         _step("[Step 1] admin grants OPS_ROLE to userA on wallet");
         vm.broadcast(adminPk);
-        wallet.grantRole(WALLET_OPS_ROLE, userA);
-        _assertEq(wallet.hasRole(WALLET_OPS_ROLE, userA), true, "userA has OPS_ROLE");
+        vault.grantRole(WALLET_OPS_ROLE, userA);
+        _assertEq(vault.hasRole(WALLET_OPS_ROLE, userA), true, "userA has OPS_ROLE");
         _step("  PASS: grantRole succeeded");
 
         _step("[Step 2] cleanup: revoke OPS_ROLE from userA");
         vm.broadcast(adminPk);
-        wallet.revokeRole(WALLET_OPS_ROLE, userA);
-        _assertEq(wallet.hasRole(WALLET_OPS_ROLE, userA), false, "userA OPS_ROLE revoked");
+        vault.revokeRole(WALLET_OPS_ROLE, userA);
+        _assertEq(vault.hasRole(WALLET_OPS_ROLE, userA), false, "userA OPS_ROLE revoked");
         _step("  PASS: revoked");
 
         _logPass();

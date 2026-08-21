@@ -3,25 +3,25 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
 
 contract ComplianceQA2 is BaseQA {
-    string constant MODULE = unicode"Compliance 补充";
+    string constant MODULE = unicode"ComplianceRegistry 补充";
 
     // ═══════════════════════════════════════════════
-    //      removeFromSanctionsList 边界
+    //      unsanctionUsers 边界
     // ═══════════════════════════════════════════════
 
     // ── CL-SAN-11 ──
     function test_CLSAN11_RemoveSanctionsEmptyArrayReverts() public {
         _logCase("CL-SAN-11", unicode"移除制裁空数组回滚");
 
-        _step("[Step 1] removeFromSanctionsList([])");
+        _step("[Step 1] unsanctionUsers([])");
         address[] memory empty = new address[](0);
         vm.prank(complianceOps);
-        vm.expectRevert(Compliance.EmptyAddressesArray.selector);
-        compliance.removeFromSanctionsList(empty);
-        _step("  PASS: reverted EmptyAddressesArray()");
+        vm.expectRevert(ComplianceRegistry.EmptyAddressList.selector);
+        compliance.unsanctionUsers(empty);
+        _step("  PASS: reverted EmptyAddressList()");
 
         _logPass();
     }
@@ -30,12 +30,12 @@ contract ComplianceQA2 is BaseQA {
     function test_CLSAN12_RemoveSanctionsZeroAddressReverts() public {
         _logCase("CL-SAN-12", unicode"移除制裁零地址回滚");
 
-        _step("[Step 1] removeFromSanctionsList([address(0)])");
+        _step("[Step 1] unsanctionUsers([address(0)])");
         address[] memory addrs = new address[](1);
         addrs[0] = address(0);
         vm.prank(complianceOps);
-        vm.expectRevert(Compliance.ZeroAddress.selector);
-        compliance.removeFromSanctionsList(addrs);
+        vm.expectRevert(ComplianceRegistry.ZeroAddress.selector);
+        compliance.unsanctionUsers(addrs);
         _step("  PASS: reverted ZeroAddress()");
 
         _logPass();
@@ -49,16 +49,16 @@ contract ComplianceQA2 is BaseQA {
     function test_CLBLK11_AdminCannotRemoveBlocklist() public {
         _logCase("CL-BLK-11", unicode"admin 不能移除黑名单");
 
-        _step("[Step 1] block userA, then admin tries removeFromBlocklist");
+        _step("[Step 1] block userA, then admin tries unblockUsers");
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.prank(complianceOps);
-        compliance.addToBlocklist(address(token), addrs);
+        compliance.blockUsers(address(token), addrs);
 
         vm.prank(admin);
-        vm.expectRevert(Compliance.MissingBlocklistRole.selector);
-        compliance.removeFromBlocklist(address(token), addrs);
-        _step("  PASS: reverted MissingBlocklistRole()");
+        vm.expectRevert(ComplianceRegistry.MissingOpsRole.selector);
+        compliance.unblockUsers(address(token), addrs);
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }
@@ -67,16 +67,16 @@ contract ComplianceQA2 is BaseQA {
     function test_CLSAN13_AdminCannotRemoveSanctions() public {
         _logCase("CL-SAN-13", unicode"admin 不能移除制裁");
 
-        _step("[Step 1] sanction userA, then admin tries removeFromSanctionsList");
+        _step("[Step 1] sanction userA, then admin tries unsanctionUsers");
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.prank(complianceOps);
-        compliance.addToSanctionsList(addrs);
+        compliance.sanctionUsers(addrs);
 
         vm.prank(admin);
-        vm.expectRevert(Compliance.MissingBlocklistRole.selector);
-        compliance.removeFromSanctionsList(addrs);
-        _step("  PASS: reverted MissingBlocklistRole()");
+        vm.expectRevert(ComplianceRegistry.MissingOpsRole.selector);
+        compliance.unsanctionUsers(addrs);
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }
@@ -85,11 +85,11 @@ contract ComplianceQA2 is BaseQA {
     function test_CLSAN14_AdminCannotReset() public {
         _logCase("CL-SAN-14", unicode"admin 不能重置制裁");
 
-        _step("[Step 1] admin tries resetSanctionedAddresses");
+        _step("[Step 1] admin tries clearSanctions");
         vm.prank(admin);
-        vm.expectRevert(Compliance.MissingBlocklistRole.selector);
-        compliance.resetSanctionedAddresses();
-        _step("  PASS: reverted MissingBlocklistRole()");
+        vm.expectRevert(ComplianceRegistry.MissingOpsRole.selector);
+        compliance.clearSanctions();
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }
@@ -98,13 +98,13 @@ contract ComplianceQA2 is BaseQA {
     function test_CLSAN15_AdminCannotSetSanctions() public {
         _logCase("CL-SAN-15", unicode"admin 不能整体替换制裁");
 
-        _step("[Step 1] admin tries setSanctionedAddresses");
+        _step("[Step 1] admin tries replaceSanctions");
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.prank(admin);
-        vm.expectRevert(Compliance.MissingBlocklistRole.selector);
-        compliance.setSanctionedAddresses(addrs);
-        _step("  PASS: reverted MissingBlocklistRole()");
+        vm.expectRevert(ComplianceRegistry.MissingOpsRole.selector);
+        compliance.replaceSanctions(addrs);
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }
@@ -132,8 +132,8 @@ contract ComplianceQA2 is BaseQA {
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.startPrank(complianceOps);
-        compliance.addToBlocklist(address(token), addrs);
-        compliance.removeFromBlocklist(address(token), addrs);
+        compliance.blockUsers(address(token), addrs);
+        compliance.unblockUsers(address(token), addrs);
         vm.stopPrank();
 
         _step("[Step 2] checkIsCompliant should pass");
@@ -151,13 +151,71 @@ contract ComplianceQA2 is BaseQA {
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.startPrank(complianceOps);
-        compliance.addToSanctionsList(addrs);
-        compliance.removeFromSanctionsList(addrs);
+        compliance.sanctionUsers(addrs);
+        compliance.unsanctionUsers(addrs);
         vm.stopPrank();
 
         _step("[Step 2] checkIsCompliant should pass");
         compliance.checkIsCompliant(address(token), userA);
         _step("  PASS: no revert after removal");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════
+    //      unsanctionUsers 精确解除
+    // ═══════════════════════════════════════════════
+
+    // ── CL-UNSAN-01 ──
+    function test_CLUNSAN01_PartialUnsanction() public {
+        _logCase("CL-UNSAN-01", unicode"精确解除部分制裁");
+
+        _step("[Step 1] sanction A and B");
+        address[] memory both = new address[](2);
+        both[0] = userA;
+        both[1] = userB;
+        vm.prank(complianceOps);
+        compliance.sanctionUsers(both);
+        assertTrue(compliance.isSanctioned(userA));
+        assertTrue(compliance.isSanctioned(userB));
+
+        _step("[Step 2] unsanctionUsers([A]) - only A");
+        address[] memory onlyA = new address[](1);
+        onlyA[0] = userA;
+        vm.prank(complianceOps);
+        compliance.unsanctionUsers(onlyA);
+
+        assertFalse(compliance.isSanctioned(userA));
+        assertTrue(compliance.isSanctioned(userB));
+        _step("  PASS: A unsanctioned, B still sanctioned");
+
+        _logPass();
+    }
+
+    // ── CL-UNSAN-02 ──
+    function test_CLUNSAN02_EmptyUnsanctionReverts() public {
+        _logCase("CL-UNSAN-02", unicode"空数组 unsanctionUsers 回滚");
+
+        _step("[Step 1] unsanctionUsers([])");
+        address[] memory empty = new address[](0);
+        vm.prank(complianceOps);
+        vm.expectRevert(ComplianceRegistry.EmptyAddressList.selector);
+        compliance.unsanctionUsers(empty);
+        _step("  PASS: reverted EmptyAddressList()");
+
+        _logPass();
+    }
+
+    // ── CL-UNSAN-03 ──
+    function test_CLUNSAN03_EmptyReplaceSanctionsReverts() public {
+        _logCase("CL-UNSAN-03", unicode"空数组 replaceSanctions 回滚");
+
+        _step("[Step 1] replaceSanctions([])");
+        address[] memory empty = new address[](0);
+        vm.prank(complianceOps);
+        vm.expectRevert(ComplianceRegistry.EmptyAddressList.selector);
+        compliance.replaceSanctions(empty);
+        _step("  PASS: reverted EmptyAddressList()");
 
         _logPass();
     }

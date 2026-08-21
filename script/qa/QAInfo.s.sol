@@ -22,7 +22,7 @@ contract QAInfo is BaseQAScript {
         _assertEq(token.symbol(), "AAPL", "symbol");
         _step("  PASS: symbol == 'AAPL'");
 
-        _assertEq(token.identifier(), "US0378331005", "identifier");
+        _assertEq(token.assetCode(), "US0378331005", "identifier");
         _step("  PASS: identifier == 'US0378331005'");
 
         _assertEq(token.decimals(), 18, "decimals");
@@ -32,10 +32,10 @@ contract QAInfo is BaseQAScript {
         _assertEq(token.uiMultiplier(), 1e18, "uiMultiplier");
         _step("  PASS: uiMultiplier == 1e18");
 
-        _assertEq(token.mintEnabled(), true, "mintEnabled");
+        _assertEq(token.mintAllowed(), true, "mintEnabled");
         _step("  PASS: mintEnabled == true");
 
-        _assertEq(token.burnEnabled(), true, "burnEnabled");
+        _assertEq(token.burnAllowed(), true, "burnEnabled");
         _step("  PASS: burnEnabled == true");
 
         _step("[Step 3] query compliance / pauseManager addresses");
@@ -61,17 +61,17 @@ contract QAInfo is BaseQAScript {
         _assertEq(adminMember, admin, "admin member[0]");
         _step(string.concat("  PASS: admin member[0] = ", vm.toString(admin)));
 
-        _step("[Step 2] ISSUER_ROLE member - should be OperatorWallet");
+        _step("[Step 2] ISSUER_ROLE member - should be TokenIssuer");
         uint256 issuerCount = token.getRoleMemberCount(ISSUER_ROLE);
         require(issuerCount >= 1, "issuer count must >= 1");
         _step(string.concat("  PASS: ISSUER_ROLE count = ", vm.toString(issuerCount)));
 
         address issuerMember = token.getRoleMember(ISSUER_ROLE, 0);
-        _assertEq(issuerMember, address(wallet), "issuer member[0]");
-        _step(string.concat("  PASS: issuer member[0] = OperatorWallet"));
+        _assertEq(issuerMember, address(vault), "issuer member[0]");
+        _step(string.concat("  PASS: issuer member[0] = TokenIssuer"));
 
         _step("[Step 3] OPS_ROLE member");
-        uint256 opsCount = token.getRoleMemberCount(TOKEN_OPS_ROLE);
+        uint256 opsCount = token.getRoleMemberCount(TOKEN_MULTIPLIER_ROLE);
         require(opsCount >= 1, "ops count must >= 1");
         _step(string.concat("  PASS: OPS_ROLE count = ", vm.toString(opsCount)));
 

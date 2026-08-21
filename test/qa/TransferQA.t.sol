@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
 contract TransferQA is BaseQA {

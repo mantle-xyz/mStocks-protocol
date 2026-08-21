@@ -3,20 +3,20 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract BlocklistQA is BaseQA {
     string constant MODULE = unicode"黑名单";
 
-    SecuritiesToken internal tokenB;
+    ScaledToken internal tokenB;
 
     function setUp() public override {
         super.setUp();
         vm.startPrank(admin);
         address[] memory empty = new address[](0);
-        tokenB = SecuritiesToken(factory.deployToken("Google", "GOOG", "US02079K3059", admin, empty, empty));
+        tokenB = ScaledToken(factory.createToken("Google", "GOOG", "US02079K3059", admin, empty, empty));
         vm.stopPrank();
     }
 
@@ -24,14 +24,14 @@ contract BlocklistQA is BaseQA {
         address[] memory addrs = new address[](1);
         addrs[0] = user;
         vm.prank(complianceOps);
-        compliance.addToBlocklist(tkn, addrs);
+        compliance.blockUsers(tkn, addrs);
     }
 
     function _unblockUser(address tkn, address user) internal {
         address[] memory addrs = new address[](1);
         addrs[0] = user;
         vm.prank(complianceOps);
-        compliance.removeFromBlocklist(tkn, addrs);
+        compliance.unblockUsers(tkn, addrs);
     }
 
     // ── ST-BLK-01 ──
@@ -44,7 +44,7 @@ contract BlocklistQA is BaseQA {
         _step("[Step 2] issuer tries to transfer to userA");
         _issuerMint(100e18);
         vm.prank(issuer);
-        vm.expectRevert(Compliance.UserBlocked.selector);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
         token.transfer(userA, 50e18);
         _step("  PASS: reverted UserBlocked()");
 
@@ -61,7 +61,7 @@ contract BlocklistQA is BaseQA {
 
         _step("[Step 2] userA tries to transfer to userB");
         vm.prank(userA);
-        vm.expectRevert(Compliance.UserBlocked.selector);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
         token.transfer(userB, 50e18);
         _step("  PASS: reverted UserBlocked()");
 
@@ -93,9 +93,9 @@ contract BlocklistQA is BaseQA {
         _step("[Step 1] block userA on token, setup tokenB with balance for userA");
         _blockUser(address(token), userA);
         vm.startPrank(admin);
-        tokenB.grantRole(tokenB.ISSUER_ROLE(), address(wallet));
+        tokenB.grantRole(tokenB.ISSUER_ROLE(), address(vault));
         vm.stopPrank();
-        vm.startPrank(address(wallet));
+        vm.startPrank(address(vault));
         tokenB.mint(100e18);
         tokenB.transfer(userA, 100e18);
         vm.stopPrank();
@@ -103,7 +103,7 @@ contract BlocklistQA is BaseQA {
         _step("[Step 2] token transfer to userA reverts");
         _issuerMint(100e18);
         vm.prank(issuer);
-        vm.expectRevert(Compliance.UserBlocked.selector);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
         token.transfer(userA, 50e18);
         _step("  token: reverted UserBlocked()");
 
@@ -128,7 +128,7 @@ contract BlocklistQA is BaseQA {
 
         _step("[Step 2] userB calls transferFrom(userA, stranger, 50e18)");
         vm.prank(userB);
-        vm.expectRevert(Compliance.UserBlocked.selector);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
         token.transferFrom(userA, stranger, 50e18);
         _step("  PASS: reverted UserBlocked() for blocked msg.sender");
 
@@ -188,13 +188,13 @@ contract BlocklistQA is BaseQA {
     function test_STBLK09_AdminCannotManageBlocklist() public {
         _logCase("ST-BLK-09", unicode"admin 不能管理黑名单");
 
-        _step("[Step 1] admin tries addToBlocklist");
+        _step("[Step 1] admin tries blockUsers");
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.prank(admin);
-        vm.expectRevert(Compliance.MissingBlocklistRole.selector);
-        compliance.addToBlocklist(address(token), addrs);
-        _step("  PASS: reverted MissingBlocklistRole()");
+        vm.expectRevert(ComplianceRegistry.MissingOpsRole.selector);
+        compliance.blockUsers(address(token), addrs);
+        _step("  PASS: reverted MissingOpsRole()");
 
         _logPass();
     }

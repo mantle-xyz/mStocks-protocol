@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
@@ -16,7 +16,7 @@ contract MintBurnQA is BaseQA {
 
         _step("[Step 1] admin calls token.mint(1000e18)");
         vm.prank(admin);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.mint(1000e18);
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -43,7 +43,7 @@ contract MintBurnQA is BaseQA {
 
         _step("[Step 1] operator calls token.mint(1e18)");
         vm.prank(operator);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.mint(1e18);
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -56,7 +56,7 @@ contract MintBurnQA is BaseQA {
 
         _step("[Step 1] userA calls token.mint(1e18)");
         vm.prank(userA);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.mint(1e18);
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -64,18 +64,18 @@ contract MintBurnQA is BaseQA {
     }
 
     // ── ST-MINT-05 ──
-    function test_STMINT05_MintDisabledReverts() public {
+    function test_STMINT05_MintNotAllowedReverts() public {
         _logCase("ST-MINT-05", unicode"铸造关闭后阻止");
 
-        _step("[Step 1] admin disables minting");
-        vm.prank(admin);
-        token.setMintEnabled(false);
+        _step("[Step 1] tokenOps disables minting");
+        vm.prank(tokenOps);
+        token.setMintAllowed(false);
 
         _step("[Step 2] issuer tries to mint");
         vm.prank(issuer);
-        vm.expectRevert(SecuritiesToken.MintDisabled.selector);
+        vm.expectRevert(ScaledToken.MintNotAllowed.selector);
         token.mint(1e18);
-        _step("  PASS: reverted MintDisabled()");
+        _step("  PASS: reverted MintNotAllowed()");
 
         _logPass();
     }
@@ -84,10 +84,10 @@ contract MintBurnQA is BaseQA {
     function test_STMINT06_MintReenabledWorks() public {
         _logCase("ST-MINT-06", unicode"重新开启后可铸造");
 
-        _step("[Step 1] admin disables then re-enables minting");
-        vm.startPrank(admin);
-        token.setMintEnabled(false);
-        token.setMintEnabled(true);
+        _step("[Step 1] tokenOps disables then re-enables minting");
+        vm.startPrank(tokenOps);
+        token.setMintAllowed(false);
+        token.setMintAllowed(true);
         vm.stopPrank();
 
         _step("[Step 2] issuer mints 1e18");
@@ -107,7 +107,7 @@ contract MintBurnQA is BaseQA {
 
         _step("[Step 2] admin tries to burn");
         vm.prank(admin);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.burn(1e18);
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -129,19 +129,19 @@ contract MintBurnQA is BaseQA {
     }
 
     // ── ST-MINT-09 ──
-    function test_STMINT09_BurnDisabledReverts() public {
+    function test_STMINT09_BurnNotAllowedReverts() public {
         _logCase("ST-MINT-09", unicode"销毁关闭后阻止");
 
-        _step("[Step 1] issuer mints, admin disables burning");
+        _step("[Step 1] issuer mints, tokenOps disables burning");
         _issuerMint(100e18);
-        vm.prank(admin);
-        token.setBurnEnabled(false);
+        vm.prank(tokenOps);
+        token.setBurnAllowed(false);
 
         _step("[Step 2] issuer tries to burn");
         vm.prank(issuer);
-        vm.expectRevert(SecuritiesToken.BurnDisabled.selector);
+        vm.expectRevert(ScaledToken.BurnNotAllowed.selector);
         token.burn(1e18);
-        _step("  PASS: reverted BurnDisabled()");
+        _step("  PASS: reverted BurnNotAllowed()");
 
         _logPass();
     }
@@ -191,10 +191,10 @@ contract MintBurnQA is BaseQA {
     function test_STMINT13_NonAdminCannotToggleMint() public {
         _logCase("ST-MINT-13", unicode"非管理员不能切换 mintEnabled");
 
-        _step("[Step 1] userA tries to setMintEnabled(false)");
+        _step("[Step 1] userA tries to setMintAllowed(false)");
         vm.prank(userA);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, userA, DEFAULT_ADMIN_ROLE_HASH));
-        token.setMintEnabled(false);
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, userA, TOKEN_OPS_ROLE));
+        token.setMintAllowed(false);
         _step("  PASS: reverted (AccessControl)");
 
         _logPass();
@@ -204,10 +204,10 @@ contract MintBurnQA is BaseQA {
     function test_STMINT14_NonAdminCannotToggleBurn() public {
         _logCase("ST-MINT-14", unicode"非管理员不能切换 burnEnabled");
 
-        _step("[Step 1] userA tries to setBurnEnabled(false)");
+        _step("[Step 1] userA tries to setBurnAllowed(false)");
         vm.prank(userA);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, userA, DEFAULT_ADMIN_ROLE_HASH));
-        token.setBurnEnabled(false);
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, userA, TOKEN_OPS_ROLE));
+        token.setBurnAllowed(false);
         _step("  PASS: reverted (AccessControl)");
 
         _logPass();

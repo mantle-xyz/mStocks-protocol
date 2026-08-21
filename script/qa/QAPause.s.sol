@@ -2,10 +2,10 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {PauseManager} from "../../src/pauseManager/PauseManager.sol";
-import {PauseManagerClientUpgradeable} from "../../src/pauseManager/PauseManagerClientUpgradeable.sol";
-import {OperatorWallet} from "../../src/OperatorWallet/OperatorWallet.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
+import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
+import {PauseGuardUpgradeable} from "../../src/pauseRegistry/PauseGuardUpgradeable.sol";
+import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 contract QAPause is BaseQAScript {
@@ -46,7 +46,7 @@ contract QAPause is BaseQAScript {
             hotWallet,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            PauseManagerClientUpgradeable.TokenPaused.selector
+            PauseGuardUpgradeable.TokenPaused.selector
         );
         _step("  PASS: reverted TokenPaused()");
 
@@ -72,9 +72,9 @@ contract QAPause is BaseQAScript {
         _step("[Step 2] walletOps tries to mint (token paused -> TokenPaused)");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.mint.selector, address(token), hotWallet, 1e18),
-            PauseManagerClientUpgradeable.TokenPaused.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.mint.selector, address(token), hotWallet, 1e18),
+            PauseGuardUpgradeable.TokenPaused.selector
         );
         _step("  PASS: reverted TokenPaused()");
 
@@ -95,7 +95,7 @@ contract QAPause is BaseQAScript {
         _requireNotPaused();
         _mintToHotWallet(100e18);
         vm.broadcast(hotWalletPk);
-        token.approve(address(wallet), type(uint256).max);
+        token.approve(address(vault), type(uint256).max);
 
         _step("[Step 2] pause token");
         vm.broadcast(pauseOpsPk);
@@ -105,9 +105,9 @@ contract QAPause is BaseQAScript {
         _step("[Step 3] walletOps tries to burn (token paused -> TokenPaused)");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.burn.selector, address(token), hotWallet, 10e18),
-            PauseManagerClientUpgradeable.TokenPaused.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.burn.selector, address(token), hotWallet, 10e18),
+            PauseGuardUpgradeable.TokenPaused.selector
         );
         _step("  PASS: reverted TokenPaused()");
 
@@ -155,9 +155,9 @@ contract QAPause is BaseQAScript {
         _mintToHotWallet(100e18);
         _requireBalance(hotWallet, 10e18, "hotWallet");
 
-        _step("[Step 2] pauseOps calls pauseAllTokens");
+        _step("[Step 2] pauseOps calls pauseGlobally");
         vm.broadcast(pauseOpsPk);
-        pauseManager.pauseAllTokens();
+        pauseManager.pauseGlobally();
         _requirePaused();
 
         _step("[Step 3] hotWallet tries transfer");
@@ -165,15 +165,15 @@ contract QAPause is BaseQAScript {
             hotWallet,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            PauseManagerClientUpgradeable.TokenPaused.selector
+            PauseGuardUpgradeable.TokenPaused.selector
         );
         _step("  PASS: reverted TokenPaused()");
 
         _step("[Step 4] cleanup: unpauseAll");
         vm.broadcast(pauseOpsPk);
-        pauseManager.unpauseAllTokens();
+        pauseManager.unpauseGlobally();
         _requireNotPaused();
-        _step("  PASS: unpauseAllTokens done");
+        _step("  PASS: unpauseGlobally done");
 
         _logPass();
     }
@@ -185,9 +185,9 @@ contract QAPause is BaseQAScript {
         _step("[Step 1] pauseAll then unpauseAll");
         _requireNotPaused();
         vm.broadcast(pauseOpsPk);
-        pauseManager.pauseAllTokens();
+        pauseManager.pauseGlobally();
         vm.broadcast(pauseOpsPk);
-        pauseManager.unpauseAllTokens();
+        pauseManager.unpauseGlobally();
         _requireNotPaused();
 
         _step("[Step 2] mint + transfer succeeds");
@@ -210,9 +210,11 @@ contract QAPause is BaseQAScript {
         _mintToHotWallet(100e18);
         _requireBalance(hotWallet, 10e18, "hotWallet");
 
-        _step("[Step 2] pauseAll, then unpause single token");
+        _step("[Step 2] pauseToken + pauseAll, then unpause single token");
         vm.broadcast(pauseOpsPk);
-        pauseManager.pauseAllTokens();
+        pauseManager.pauseToken(address(token));
+        vm.broadcast(pauseOpsPk);
+        pauseManager.pauseGlobally();
         vm.broadcast(pauseOpsPk);
         pauseManager.unpauseToken(address(token));
 
@@ -225,15 +227,15 @@ contract QAPause is BaseQAScript {
             hotWallet,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            PauseManagerClientUpgradeable.TokenPaused.selector
+            PauseGuardUpgradeable.TokenPaused.selector
         );
         _step("  PASS: reverted TokenPaused()");
 
         _step("[Step 5] cleanup: unpauseAll");
         vm.broadcast(pauseOpsPk);
-        pauseManager.unpauseAllTokens();
+        pauseManager.unpauseGlobally();
         _requireNotPaused();
-        _step("  PASS: unpauseAllTokens done");
+        _step("  PASS: unpauseGlobally done");
 
         _logPass();
     }
@@ -245,15 +247,15 @@ contract QAPause is BaseQAScript {
         _step("[Step 1] deploy tokenB via Factory");
         _requireNotPaused();
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Test Corp", "TSTB", "TEST001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Test Corp", "TSTB", "TEST001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB: ", vm.toString(tokenBAddr)));
 
         _step("[Step 2] grant ISSUER_ROLE to wallet on tokenB + mint");
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 100e18);
+        vault.mint(tokenBAddr, hotWallet, 100e18);
 
         _step("[Step 3] pause only tokenA");
         vm.broadcast(pauseOpsPk);
@@ -282,7 +284,7 @@ contract QAPause is BaseQAScript {
         _logCase("QA-PSE-09", unicode"普通用户不能暂停");
 
         _step("[Step 1] precondition: userA has no pause role");
-        _assertEq(pauseManager.hasRole(PAUSE_MANAGER_OPS_ROLE, userA), false, "userA no OPS_ROLE");
+        _assertEq(pauseManager.hasRole(PAUSE_MANAGER_PAUSE_ROLE, userA), false, "userA no PAUSE_ROLE");
         _assertEq(pauseManager.hasRole(DEFAULT_ADMIN_ROLE_HASH, userA), false, "userA no ADMIN");
 
         _step("[Step 2] userA tries pauseToken");
@@ -290,7 +292,7 @@ contract QAPause is BaseQAScript {
             userA,
             address(pauseManager),
             abi.encodeWithSelector(pauseManager.pauseToken.selector, address(token)),
-            PauseManager.MissingPauseRole.selector
+            PauseRegistry.MissingPauseRole.selector
         );
         _step("  PASS: reverted MissingPauseRole()");
 
@@ -301,16 +303,16 @@ contract QAPause is BaseQAScript {
     function test_PSE10() public {
         _logCase("QA-PSE-10", unicode"admin 不能暂停");
 
-        _step("[Step 1] precondition: admin has DEFAULT_ADMIN_ROLE but NOT OPS_ROLE on PauseManager");
+        _step("[Step 1] precondition: admin has DEFAULT_ADMIN_ROLE but NOT PAUSE_ROLE on PauseRegistry");
         _requireRole(address(pauseManager), DEFAULT_ADMIN_ROLE_HASH, admin, "admin");
-        _assertEq(pauseManager.hasRole(PAUSE_MANAGER_OPS_ROLE, admin), false, "admin no OPS_ROLE");
+        _assertEq(pauseManager.hasRole(PAUSE_MANAGER_PAUSE_ROLE, admin), false, "admin no PAUSE_ROLE");
 
         _step("[Step 2] admin tries pauseToken");
         _expectRevertFrom(
             admin,
             address(pauseManager),
             abi.encodeWithSelector(pauseManager.pauseToken.selector, address(token)),
-            PauseManager.MissingPauseRole.selector
+            PauseRegistry.MissingPauseRole.selector
         );
         _step("  PASS: reverted MissingPauseRole()");
 
@@ -323,7 +325,7 @@ contract QAPause is BaseQAScript {
 
         _step("[Step 1] precondition");
         _requireNotPaused();
-        _requireRole(address(pauseManager), PAUSE_MANAGER_OPS_ROLE, pauseOps, "pauseOps");
+        _requireRole(address(pauseManager), PAUSE_MANAGER_PAUSE_ROLE, pauseOps, "pauseOps");
 
         _step("[Step 2] pauseOps pauses token");
         vm.broadcast(pauseOpsPk);
@@ -347,11 +349,11 @@ contract QAPause is BaseQAScript {
         _step("[Step 1] precondition + pauseAll");
         _requireNotPaused();
         vm.broadcast(pauseOpsPk);
-        pauseManager.pauseAllTokens();
+        pauseManager.pauseGlobally();
 
         _step("[Step 2] deploy tokenB (during global pause)");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("New Corp", "NEWB", "NEW001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("New Corp", "NEWB", "NEW001", admin, new address[](0), new address[](0));
 
         _step("[Step 3] tokenB should be paused (inherits global)");
         _assertEq(pauseManager.isTokenPaused(tokenBAddr), true, "tokenB paused");
@@ -359,14 +361,14 @@ contract QAPause is BaseQAScript {
 
         _step("[Step 4] unpauseAll, then tokenB transfer succeeds");
         vm.broadcast(pauseOpsPk);
-        pauseManager.unpauseAllTokens();
+        pauseManager.unpauseGlobally();
         _assertEq(pauseManager.isTokenPaused(tokenBAddr), false, "tokenB unpaused");
 
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 50e18);
+        vault.mint(tokenBAddr, hotWallet, 50e18);
         vm.broadcast(hotWalletPk);
         tokenB.transfer(userA, 10e18);
         _step("  PASS: transfer succeeded after unpauseAll");

@@ -3,19 +3,19 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
 
 contract SanctionsQA is BaseQA {
     string constant MODULE = unicode"制裁名单";
 
-    SecuritiesToken internal tokenB;
+    ScaledToken internal tokenB;
 
     function setUp() public override {
         super.setUp();
         vm.startPrank(admin);
         address[] memory empty = new address[](0);
-        tokenB = SecuritiesToken(factory.deployToken("Google", "GOOG", "US02079K3059", admin, empty, empty));
+        tokenB = ScaledToken(factory.createToken("Google", "GOOG", "US02079K3059", admin, empty, empty));
         vm.stopPrank();
     }
 
@@ -23,14 +23,14 @@ contract SanctionsQA is BaseQA {
         address[] memory addrs = new address[](1);
         addrs[0] = user;
         vm.prank(complianceOps);
-        compliance.addToSanctionsList(addrs);
+        compliance.sanctionUsers(addrs);
     }
 
     function _unsanction(address user) internal {
         address[] memory addrs = new address[](1);
         addrs[0] = user;
         vm.prank(complianceOps);
-        compliance.removeFromSanctionsList(addrs);
+        compliance.unsanctionUsers(addrs);
     }
 
     // ── ST-SAN-01 ──
@@ -43,7 +43,7 @@ contract SanctionsQA is BaseQA {
         _step("[Step 2] issuer tries to transfer to userA");
         _issuerMint(100e18);
         vm.prank(issuer);
-        vm.expectRevert(Compliance.UserSanctioned.selector);
+        vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
         token.transfer(userA, 50e18);
         _step("  PASS: reverted UserSanctioned()");
 
@@ -76,13 +76,13 @@ contract SanctionsQA is BaseQA {
         _sanction(userA);
         _sanction(userB);
 
-        _step("[Step 2] resetSanctionedAddresses");
+        _step("[Step 2] clearSanctions");
         vm.prank(complianceOps);
-        compliance.resetSanctionedAddresses();
+        compliance.clearSanctions();
 
-        assertFalse(compliance.sanctionedAddresses(userA));
+        assertFalse(compliance.isSanctioned(userA));
         _step("  PASS: userA no longer sanctioned");
-        assertFalse(compliance.sanctionedAddresses(userB));
+        assertFalse(compliance.isSanctioned(userB));
         _step("  PASS: userB no longer sanctioned");
 
         _logPass();
@@ -95,18 +95,18 @@ contract SanctionsQA is BaseQA {
         _step("[Step 1] sanction userA");
         _sanction(userA);
 
-        _step("[Step 2] setSanctionedAddresses([userB, stranger])");
+        _step("[Step 2] replaceSanctions([userB, stranger])");
         address[] memory newList = new address[](2);
         newList[0] = userB;
         newList[1] = stranger;
         vm.prank(complianceOps);
-        compliance.setSanctionedAddresses(newList);
+        compliance.replaceSanctions(newList);
 
-        assertFalse(compliance.sanctionedAddresses(userA));
+        assertFalse(compliance.isSanctioned(userA));
         _step("  PASS: userA restored");
-        assertTrue(compliance.sanctionedAddresses(userB));
+        assertTrue(compliance.isSanctioned(userB));
         _step("  PASS: userB now sanctioned");
-        assertTrue(compliance.sanctionedAddresses(stranger));
+        assertTrue(compliance.isSanctioned(stranger));
         _step("  PASS: stranger now sanctioned");
 
         _logPass();
@@ -120,11 +120,11 @@ contract SanctionsQA is BaseQA {
         _sanction(userA);
 
         _step("[Step 2] checkIsCompliant on both token and tokenB");
-        vm.expectRevert(Compliance.UserSanctioned.selector);
+        vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
         compliance.checkIsCompliant(address(token), userA);
         _step(unicode"  PASS: token — reverted UserSanctioned()");
 
-        vm.expectRevert(Compliance.UserSanctioned.selector);
+        vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
         compliance.checkIsCompliant(address(tokenB), userA);
         _step(unicode"  PASS: tokenB — reverted UserSanctioned()");
 
@@ -139,11 +139,11 @@ contract SanctionsQA is BaseQA {
         address[] memory addrs = new address[](1);
         addrs[0] = userA;
         vm.prank(complianceOps);
-        compliance.addToBlocklist(address(token), addrs);
+        compliance.blockUsers(address(token), addrs);
         _sanction(userA);
 
         _step("[Step 2] checkIsCompliant should revert UserBlocked (checked first)");
-        vm.expectRevert(Compliance.UserBlocked.selector);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
         compliance.checkIsCompliant(address(token), userA);
         _step("  PASS: reverted UserBlocked() (blocklist checked before sanctions)");
 
@@ -158,14 +158,14 @@ contract SanctionsQA is BaseQA {
         _sanction(userA);
         _sanction(userB);
         vm.prank(complianceOps);
-        compliance.resetSanctionedAddresses();
+        compliance.clearSanctions();
 
         _step("[Step 2] sanction only userA");
         _sanction(userA);
 
-        assertTrue(compliance.sanctionedAddresses(userA));
+        assertTrue(compliance.isSanctioned(userA));
         _step("  PASS: userA sanctioned");
-        assertFalse(compliance.sanctionedAddresses(userB));
+        assertFalse(compliance.isSanctioned(userB));
         _step("  PASS: userB not sanctioned");
 
         _logPass();

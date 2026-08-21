@@ -2,8 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {SecuritiesTokenFactory} from "../../src/securitiesToken/SecuritiesTokenFactory.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {ScaledTokenFactory} from "../../src/scaledToken/ScaledTokenFactory.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 contract QAFactory is BaseQAScript {
@@ -24,20 +24,20 @@ contract QAFactory is BaseQAScript {
     function test_FT01() public {
         _logCase("QA-FT-01", unicode"部署新 token");
 
-        _step("[Step 1] record deployedTokenCount before");
-        uint256 countBefore = factory.deployedTokenCount();
+        _step("[Step 1] record tokenCount before");
+        uint256 countBefore = factory.tokenCount();
         _step(string.concat("  count before: ", vm.toString(countBefore)));
 
         _step("[Step 2] admin deploys new token");
         string memory sym = _uniqueSymbol("FT");
         vm.broadcast(adminPk);
-        address newToken = factory.deployToken("Test Corp", sym, "FT001", admin, new address[](0), new address[](0));
+        address newToken = factory.createToken("Test Corp", sym, "FT001", admin, new address[](0), new address[](0));
         _assertGt(uint160(newToken), 0, "newToken != address(0)");
         _step(string.concat("  newToken: ", vm.toString(newToken)));
 
         _step("[Step 3] verify count increased");
-        _assertEq(factory.deployedTokenCount(), countBefore + 1, "count increased");
-        _step("  PASS: deployedTokenCount +1");
+        _assertEq(factory.tokenCount(), countBefore + 1, "count increased");
+        _step("  PASS: tokenCount +1");
 
         _logPass();
     }
@@ -50,15 +50,15 @@ contract QAFactory is BaseQAScript {
         address existing = factory.tokenBySymbol("AAPL");
         _assertGt(uint160(existing), 0, "AAPL exists");
 
-        _step("[Step 2] admin tries deployToken with same symbol AAPL");
+        _step("[Step 2] admin tries createToken with same symbol AAPL");
         _expectRevertFrom(
             admin,
             address(factory),
             abi.encodeWithSelector(
-                factory.deployToken.selector,
+                factory.createToken.selector,
                 "Dup Corp", "AAPL", "DUP001", admin, new address[](0), new address[](0)
             ),
-            SecuritiesTokenFactory.TokenSymbolAlreadyExists.selector
+            ScaledTokenFactory.TokenSymbolAlreadyExists.selector
         );
         _step("  PASS: reverted TokenSymbolAlreadyExists()");
 
@@ -69,15 +69,15 @@ contract QAFactory is BaseQAScript {
     function test_FT03() public {
         _logCase("QA-FT-03", unicode"无效 symbol 回滚");
 
-        _step("[Step 1] admin tries deployToken with invalid symbol 'AAPL!'");
+        _step("[Step 1] admin tries createToken with invalid symbol 'AAPL!'");
         _expectRevertFrom(
             admin,
             address(factory),
             abi.encodeWithSelector(
-                factory.deployToken.selector,
+                factory.createToken.selector,
                 "Bad Corp", "AAPL!", "BAD001", admin, new address[](0), new address[](0)
             ),
-            SecuritiesTokenFactory.InvalidSymbol.selector
+            ScaledTokenFactory.InvalidSymbol.selector
         );
         _step("  PASS: reverted InvalidSymbol()");
 
@@ -101,22 +101,22 @@ contract QAFactory is BaseQAScript {
         _logCase("QA-FT-05", unicode"多 token 部署");
 
         _step("[Step 1] record count before");
-        uint256 countBefore = factory.deployedTokenCount();
+        uint256 countBefore = factory.tokenCount();
 
         _step("[Step 2] deploy 3 tokens");
         string memory s1 = _uniqueSymbol("T1");
         string memory s2 = _uniqueSymbol("T2");
         string memory s3 = _uniqueSymbol("T3");
         vm.broadcast(adminPk);
-        address t1 = factory.deployToken("Corp One", s1, "T001", admin, new address[](0), new address[](0));
+        address t1 = factory.createToken("Corp One", s1, "T001", admin, new address[](0), new address[](0));
         vm.broadcast(adminPk);
-        address t2 = factory.deployToken("Corp Two", s2, "T002", admin, new address[](0), new address[](0));
+        address t2 = factory.createToken("Corp Two", s2, "T002", admin, new address[](0), new address[](0));
         vm.broadcast(adminPk);
-        address t3 = factory.deployToken("Corp Three", s3, "T003", admin, new address[](0), new address[](0));
+        address t3 = factory.createToken("Corp Three", s3, "T003", admin, new address[](0), new address[](0));
 
         _step("[Step 3] verify count");
-        _assertEq(factory.deployedTokenCount(), countBefore + 3, "count +3");
-        _step("  PASS: deployedTokenCount +3");
+        _assertEq(factory.tokenCount(), countBefore + 3, "count +3");
+        _step("  PASS: tokenCount +3");
 
         _step("[Step 4] verify tokenBySymbol mappings");
         _assertEq(factory.tokenBySymbol(s1), t1, "s1 mapping");
@@ -135,18 +135,18 @@ contract QAFactory is BaseQAScript {
         string memory oldSym = _uniqueSymbol("SA");
         string memory newSym = _uniqueSymbol("SB");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Sym Corp", oldSym, "SYM001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Sym Corp", oldSym, "SYM001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _assertEq(factory.tokenBySymbol(oldSym), tokenBAddr, "oldSym mapped");
 
         _step(string.concat("[Step 2] admin sets token symbol to '", newSym, "'"));
         vm.broadcast(adminPk);
-        tokenB.setSymbol(newSym);
+        tokenB.updateSymbol(newSym);
         _assertEq(tokenB.symbol(), newSym, "token symbol updated");
 
-        _step("[Step 3] admin calls factory.updateSymbol");
+        _step("[Step 3] admin calls factory.renameSymbol");
         vm.broadcast(adminPk);
-        factory.updateSymbol(tokenBAddr, oldSym, newSym);
+        factory.renameSymbol(tokenBAddr, oldSym, newSym);
         _assertEq(factory.tokenBySymbol(oldSym), address(0), "oldSym cleared");
         _assertEq(factory.tokenBySymbol(newSym), tokenBAddr, "newSym mapped");
         _step("  PASS: updateSymbol complete");
@@ -164,12 +164,12 @@ contract QAFactory is BaseQAScript {
 
         _step(string.concat("[Step 1] deploy tokenB with symbol '", oldSym, "'"));
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Old Corp", oldSym, "OLD001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Old Corp", oldSym, "OLD001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
 
-        _step(string.concat("[Step 2] only set token symbol to '", newSym, "', don't call factory.updateSymbol"));
+        _step(string.concat("[Step 2] only set token symbol to '", newSym, "', don't call factory.renameSymbol"));
         vm.broadcast(adminPk);
-        tokenB.setSymbol(newSym);
+        tokenB.updateSymbol(newSym);
         _assertEq(tokenB.symbol(), newSym, "token symbol changed");
 
         _step("[Step 3] factory still maps old symbol");
@@ -187,12 +187,12 @@ contract QAFactory is BaseQAScript {
         _step("[Step 1] precondition: userA has no role on factory");
         _assertEq(factory.hasRole(DEFAULT_ADMIN_ROLE_HASH, userA), false, "userA no admin");
 
-        _step("[Step 2] userA tries deployToken");
+        _step("[Step 2] userA tries createToken");
         _expectRevertFrom(
             userA,
             address(factory),
             abi.encodeWithSelector(
-                factory.deployToken.selector,
+                factory.createToken.selector,
                 "User Corp", "USRA", "USR001", userA, new address[](0), new address[](0)
             ),
             IAccessControl.AccessControlUnauthorizedAccount.selector

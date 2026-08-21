@@ -2,11 +2,11 @@
 pragma solidity ^0.8.20;
 
 import {BaseQAScript} from "./BaseQAScript.s.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
-import {PauseManager} from "../../src/pauseManager/PauseManager.sol";
-import {PauseManagerClientUpgradeable} from "../../src/pauseManager/PauseManagerClientUpgradeable.sol";
-import {OperatorWallet} from "../../src/OperatorWallet/OperatorWallet.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
+import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
+import {PauseGuardUpgradeable} from "../../src/pauseRegistry/PauseGuardUpgradeable.sol";
+import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
 
 contract QAE2E is BaseQAScript {
     function run() external {
@@ -43,28 +43,28 @@ contract QAE2E is BaseQAScript {
         address[] memory a = new address[](1);
         a[0] = user;
         vm.broadcast(complianceOpsPk);
-        compliance.addToBlocklist(address(token), a);
+        compliance.blockUsers(address(token), a);
     }
 
     function _unblockUser(address user) internal {
         address[] memory a = new address[](1);
         a[0] = user;
         vm.broadcast(complianceOpsPk);
-        compliance.removeFromBlocklist(address(token), a);
+        compliance.unblockUsers(address(token), a);
     }
 
     function _sanctionUser(address user) internal {
         address[] memory a = new address[](1);
         a[0] = user;
         vm.broadcast(complianceOpsPk);
-        compliance.addToSanctionsList(a);
+        compliance.sanctionUsers(a);
     }
 
     function _unsanctionUser(address user) internal {
         address[] memory a = new address[](1);
         a[0] = user;
         vm.broadcast(complianceOpsPk);
-        compliance.removeFromSanctionsList(a);
+        compliance.unsanctionUsers(a);
     }
 
     // ── QA-E2E-01: 代币发行->分发->二级流通完整链路 ──
@@ -78,7 +78,7 @@ contract QAE2E is BaseQAScript {
         uint256 supplyBefore = token.totalSupply();
         uint256 hotBefore = token.balanceOf(hotWallet);
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), hotWallet, 10000e18);
+        vault.mint(address(token), hotWallet, 10000e18);
         _assertDiff(hotBefore, token.balanceOf(hotWallet), 10000e18, "hotWallet +10000");
         _step("  PASS: hotWallet +10000e18");
 
@@ -114,24 +114,24 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB for isolated multiplier test");
         string memory sym02 = _uniqueSymbol("SP");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Split Corp", sym02, "SPT001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Split Corp", sym02, "SPT001", admin, new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym02));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(adminPk);
-        tokenB.grantRole(TOKEN_OPS_ROLE, walletOps);
+        tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, walletOps);
 
         _step("[Step 2] mint and distribute 500e18 to userA");
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 1000e18);
+        vault.mint(tokenBAddr, hotWallet, 1000e18);
         vm.broadcast(hotWalletPk);
         tokenB.transfer(userA, 500e18);
         _assertEq(tokenB.balanceOf(userA), 500e18, "userA has 500e18");
 
         _step("[Step 3] operator schedules 2x multiplier (t+300s)");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(2e18, block.timestamp + 300);
+        tokenB.setUIMultiplier(2e18, block.timestamp + 600);
 
         _step("[Step 4] verify pending state");
         _assertEq(tokenB.newUIMultiplier(), 2e18, "newUIMultiplier");
@@ -152,20 +152,20 @@ contract QAE2E is BaseQAScript {
         _logCase("QA-E2E-02-VERIFY", unicode"拆股激活验证");
 
         _step("[Step 1] find E2E-02 tokenB (2x multiplier, userB==0, walletOps has OPS)");
-        uint256 count = factory.deployedTokenCount();
+        uint256 count = factory.tokenCount();
         address tokenBAddr;
         for (uint256 i = count; i > 0; i--) {
-            address[] memory slice = factory.getDeployedTokens(i - 1, 1);
-            SecuritiesToken candidate = SecuritiesToken(slice[0]);
+            address[] memory slice = factory.getTokens(i - 1, 1);
+            ScaledToken candidate = ScaledToken(slice[0]);
             bool has2x = candidate.uiMultiplier() == 2e18
                 || (candidate.hasPendingMultiplier() && candidate.newUIMultiplier() == 2e18);
-            if (has2x && candidate.balanceOf(userB) == 0 && candidate.hasRole(TOKEN_OPS_ROLE, walletOps)) {
+            if (has2x && candidate.balanceOf(userB) == 0 && candidate.hasRole(TOKEN_MULTIPLIER_ROLE, walletOps)) {
                 tokenBAddr = slice[0];
                 break;
             }
         }
         require(tokenBAddr != address(0), "E2E-02 tokenB not found");
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  found tokenB: ", vm.toString(tokenBAddr)));
 
         _step("[Step 2] check if multiplier activated");
@@ -182,7 +182,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 4] cleanup: reset multiplier to 1e18");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(1e18, block.timestamp + 300);
+        tokenB.setUIMultiplier(1e18, block.timestamp + 600);
 
         _logPass();
     }
@@ -194,24 +194,24 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB for isolated multiplier transfer test");
         string memory sym03 = _uniqueSymbol("XF");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Xfer Corp", sym03, "XFR001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Xfer Corp", sym03, "XFR001", admin, new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym03));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(adminPk);
-        tokenB.grantRole(TOKEN_OPS_ROLE, walletOps);
+        tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, walletOps);
 
         _step("[Step 2] mint and distribute 500e18 to userA");
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 1000e18);
+        vault.mint(tokenBAddr, hotWallet, 1000e18);
         vm.broadcast(hotWalletPk);
         tokenB.transfer(userA, 500e18);
         _assertEq(tokenB.balanceOf(userA), 500e18, "userA has 500e18");
 
         _step("[Step 3] schedule 2x multiplier (t+300s)");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(2e18, block.timestamp + 300);
+        tokenB.setUIMultiplier(2e18, block.timestamp + 600);
         _assertEq(tokenB.hasPendingMultiplier(), true, "hasPending");
 
         _step("[Step 4] userA transfers 200e18 underlying to userB (pending phase)");
@@ -232,11 +232,11 @@ contract QAE2E is BaseQAScript {
         _logCase("QA-E2E-03-VERIFY", unicode"乘数激活后转账仍用 underlying");
 
         _step("[Step 1] find E2E-03 tokenB (last deployed with pending/active 2x multiplier, has userB balance)");
-        uint256 count = factory.deployedTokenCount();
+        uint256 count = factory.tokenCount();
         address tokenBAddr;
         for (uint256 i = count; i > 0; i--) {
-            address[] memory slice = factory.getDeployedTokens(i - 1, 1);
-            SecuritiesToken candidate = SecuritiesToken(slice[0]);
+            address[] memory slice = factory.getTokens(i - 1, 1);
+            ScaledToken candidate = ScaledToken(slice[0]);
             if (
                 (candidate.uiMultiplier() == 2e18 || (candidate.hasPendingMultiplier() && candidate.newUIMultiplier() == 2e18))
                 && candidate.balanceOf(userB) > 0
@@ -246,7 +246,7 @@ contract QAE2E is BaseQAScript {
             }
         }
         require(tokenBAddr != address(0), "E2E-03 tokenB not found");
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  found tokenB: ", vm.toString(tokenBAddr)));
 
         _step("[Step 2] verify multiplier activated");
@@ -270,37 +270,37 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 5] cleanup: reset multiplier to 1e18");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(1e18, block.timestamp + 300);
+        tokenB.setUIMultiplier(1e18, block.timestamp + 600);
 
         _logPass();
     }
 
-    // ── QA-E2E-04: 热替换 Compliance 后黑名单清空 ──
+    // ── QA-E2E-04: 热替换 ComplianceRegistry 后黑名单清空 ──
     function test_E2E04() public {
-        _logCase("QA-E2E-04", unicode"热替换 Compliance 后黑名单清空");
+        _logCase("QA-E2E-04", unicode"热替换 ComplianceRegistry 后黑名单清空");
 
         _step("[Step 1] block userA on current compliance");
         _requireNotPaused();
         _mintAndDistribute(userB, 200e18);
         _blockUser(userA);
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked");
 
         _step("[Step 2] verify transfer to userA reverts");
         _expectRevertFrom(
             userB,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: reverted UserBlocked()");
 
-        _step("[Step 3] deploy new Compliance, grant OPS_ROLE, set on token");
+        _step("[Step 3] deploy new ComplianceRegistry, grant OPS_ROLE, set on token");
         vm.broadcast(adminPk);
-        Compliance newCompliance = new Compliance(admin);
+        ComplianceRegistry newCompliance = new ComplianceRegistry(admin);
         vm.broadcast(adminPk);
         newCompliance.grantRole(COMPLIANCE_OPS_ROLE, complianceOps);
         vm.broadcast(adminPk);
-        token.setCompliance(address(newCompliance));
+        token.updateCompliance(address(newCompliance));
         _step(string.concat("  new compliance: ", vm.toString(address(newCompliance))));
 
         _step("[Step 4] transfer to userA now succeeds");
@@ -314,16 +314,16 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 5] cleanup: restore original compliance, unblock userA");
         vm.broadcast(adminPk);
-        token.setCompliance(address(compliance));
+        token.updateCompliance(address(compliance));
         _unblockUser(userA);
         _step("  PASS: original compliance restored, userA unblocked");
 
         _logPass();
     }
 
-    // ── QA-E2E-05: 热替换 PauseManager 后暂停状态清空 ──
+    // ── QA-E2E-05: 热替换 PauseRegistry 后暂停状态清空 ──
     function test_E2E05() public {
-        _logCase("QA-E2E-05", unicode"热替换 PauseManager 后暂停状态清空");
+        _logCase("QA-E2E-05", unicode"热替换 PauseRegistry 后暂停状态清空");
 
         _step("[Step 1] mint BEFORE pause, then pause token");
         _requireNotPaused();
@@ -337,17 +337,19 @@ contract QAE2E is BaseQAScript {
             hotWallet,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            PauseManagerClientUpgradeable.TokenPaused.selector
+            PauseGuardUpgradeable.TokenPaused.selector
         );
         _step("  PASS: reverted TokenPaused()");
 
-        _step("[Step 3] deploy new PauseManager, grant OPS_ROLE, set on token");
+        _step("[Step 3] deploy new PauseRegistry, grant OPS_ROLE, set on token");
         vm.broadcast(adminPk);
-        PauseManager newPM = new PauseManager(admin);
+        PauseRegistry newPM = new PauseRegistry(admin);
         vm.broadcast(adminPk);
-        newPM.grantRole(PAUSE_MANAGER_OPS_ROLE, pauseOps);
+        newPM.grantRole(PAUSE_MANAGER_PAUSE_ROLE, pauseOps);
         vm.broadcast(adminPk);
-        token.setPauseManager(address(newPM));
+        newPM.grantRole(PAUSE_MANAGER_UNPAUSE_ROLE, pauseOps);
+        vm.broadcast(adminPk);
+        token.updatePauseManager(address(newPM));
         _step(string.concat("  new pauseManager: ", vm.toString(address(newPM))));
 
         _step("[Step 4] transfer now succeeds (new PM has no pause)");
@@ -355,28 +357,28 @@ contract QAE2E is BaseQAScript {
         vm.broadcast(hotWalletPk);
         token.transfer(userA, 10e18);
         _assertDiff(hotBefore, token.balanceOf(hotWallet), -10e18, "hotWallet diff");
-        _step("  PASS: transfer succeeded with new PauseManager");
+        _step("  PASS: transfer succeeded with new PauseRegistry");
 
-        _step("[Step 5] cleanup: restore original PauseManager, unpause");
+        _step("[Step 5] cleanup: restore original PauseRegistry, unpause");
         vm.broadcast(adminPk);
-        token.setPauseManager(address(pauseManager));
+        token.updatePauseManager(address(pauseManager));
         vm.broadcast(pauseOpsPk);
         pauseManager.unpauseToken(address(token));
         _requireNotPaused();
-        _step("  PASS: original PauseManager restored, unpaused");
+        _step("  PASS: original PauseRegistry restored, unpaused");
 
         _logPass();
     }
 
-    // ── QA-E2E-06: OperatorWallet 发行流程 ──
+    // ── QA-E2E-06: TokenIssuer 发行流程 ──
     function test_E2E06() public {
-        _logCase("QA-E2E-06", unicode"OperatorWallet 发行流程: mint->transfer");
+        _logCase("QA-E2E-06", unicode"TokenIssuer 发行流程: mint->transfer");
 
         _step("[Step 1] walletOPS mints 1000e18 to hotWallet");
         _requireNotPaused();
         uint256 hotBefore = token.balanceOf(hotWallet);
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), hotWallet, 1000e18);
+        vault.mint(address(token), hotWallet, 1000e18);
         _assertDiff(hotBefore, token.balanceOf(hotWallet), 1000e18, "hotWallet +1000");
 
         _step("[Step 2] hotWallet transfers 1000e18 to userA");
@@ -404,7 +406,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 2] operator schedules 2x multiplier (t+300s)");
         vm.broadcast(walletOpsPk);
-        token.setUIMultiplier(2e18, block.timestamp + 300);
+        token.setUIMultiplier(2e18, block.timestamp + 600);
         _assertEq(token.newUIMultiplier(), 2e18, "pending 2e18");
 
         _step("[Step 3] verify allowance unchanged (underlying amount)");
@@ -413,7 +415,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 4] cleanup: reset multiplier");
         vm.broadcast(walletOpsPk);
-        token.setUIMultiplier(1e18, block.timestamp + 300);
+        token.setUIMultiplier(1e18, block.timestamp + 600);
 
         _logPass();
     }
@@ -425,20 +427,20 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB for isolated test");
         string memory sym08 = _uniqueSymbol("E8");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("E2E Corp", sym08, "E2E001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("E2E Corp", sym08, "E2E001", admin, new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym08));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
 
         _step("[Step 2] admin grants roles");
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(adminPk);
-        tokenB.grantRole(TOKEN_OPS_ROLE, walletOps);
+        tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, walletOps);
         _step("  ISSUER_ROLE + OPS_ROLE granted");
 
         _step("[Step 3] walletOPS mints via wallet to hotWallet");
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 1000e18);
+        vault.mint(tokenBAddr, hotWallet, 1000e18);
         _assertEq(tokenB.balanceOf(hotWallet), 1000e18, "hotWallet balance");
         _step("  PASS: mint via wallet succeeded");
 
@@ -452,10 +454,10 @@ contract QAE2E is BaseQAScript {
         address[] memory a = new address[](1);
         a[0] = userA;
         vm.broadcast(complianceOpsPk);
-        compliance.addToBlocklist(tokenBAddr, a);
-        _assertEq(compliance.blockedAddresses(tokenBAddr, userA), true, "userA blocked on tokenB");
+        compliance.blockUsers(tokenBAddr, a);
+        _assertEq(compliance.isBlocked(tokenBAddr, userA), true, "userA blocked on tokenB");
         vm.broadcast(complianceOpsPk);
-        compliance.removeFromBlocklist(tokenBAddr, a);
+        compliance.unblockUsers(tokenBAddr, a);
         _step("  PASS: blocklist managed");
 
         _step("[Step 6] pauseOPS pause/unpause");
@@ -488,7 +490,7 @@ contract QAE2E is BaseQAScript {
             userA,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userB, 100e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: transfer reverted UserSanctioned()");
 
@@ -497,7 +499,7 @@ contract QAE2E is BaseQAScript {
             userB,
             address(token),
             abi.encodeWithSelector(token.transferFrom.selector, userA, userB, 100e18),
-            Compliance.UserSanctioned.selector
+            ComplianceRegistry.UserSanctioned.selector
         );
         _step("  PASS: transferFrom reverted UserSanctioned()");
 
@@ -551,7 +553,7 @@ contract QAE2E is BaseQAScript {
             userB,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: reverted UserBlocked() (unpause alone not enough)");
 
@@ -580,7 +582,7 @@ contract QAE2E is BaseQAScript {
             userB,
             address(token),
             abi.encodeWithSelector(token.transfer.selector, userA, 10e18),
-            PauseManagerClientUpgradeable.TokenPaused.selector
+            PauseGuardUpgradeable.TokenPaused.selector
         );
         _step("  PASS: reverted TokenPaused() (unblock alone not enough)");
 
@@ -599,13 +601,13 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB, grant ISSUER, mint, distribute");
         string memory sym13 = _uniqueSymbol("RV");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Rev2 Corp", sym13, "RV2001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Rev2 Corp", sym13, "RV2001", admin, new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym13));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 1000e18);
+        vault.mint(tokenBAddr, hotWallet, 1000e18);
         _assertEq(tokenB.balanceOf(hotWallet), 1000e18, "hotWallet minted 1000e18");
         vm.broadcast(hotWalletPk);
         tokenB.transfer(userA, 500e18);
@@ -614,17 +616,17 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 2] revoke ISSUER_ROLE from wallet");
         vm.broadcast(adminPk);
-        tokenB.revokeRole(ISSUER_ROLE, address(wallet));
-        _assertEq(tokenB.hasRole(ISSUER_ROLE, address(wallet)), false, "ISSUER revoked");
+        tokenB.revokeRole(ISSUER_ROLE, address(vault));
+        _assertEq(tokenB.hasRole(ISSUER_ROLE, address(vault)), false, "ISSUER revoked");
 
-        _step("[Step 3] new mint fails (ISSUER_ROLE revoked -> MissingIssuerRole)");
+        _step("[Step 3] new mint fails (ISSUER_ROLE revoked -> UnauthorizedRole)");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.mint.selector, tokenBAddr, hotWallet, 100e18),
-            OperatorWallet.MissingIssuerRole.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.mint.selector, tokenBAddr, hotWallet, 100e18),
+            ScaledToken.UnauthorizedRole.selector
         );
-        _step("  PASS: mint reverted MissingIssuerRole()");
+        _step("  PASS: mint reverted UnauthorizedRole()");
 
         _step("[Step 4] existing balances unaffected, transfer still works");
         _assertEq(tokenB.balanceOf(hotWallet), 500e18, "hotWallet balance intact");
@@ -645,17 +647,17 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB, grant roles");
         string memory sym14 = _uniqueSymbol("SC");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Sched Corp", sym14, "SCH001", admin, new address[](0), new address[](0));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        address tokenBAddr = factory.createToken("Sched Corp", sym14, "SCH001", admin, new address[](0), new address[](0));
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB symbol: ", sym14));
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(adminPk);
-        tokenB.grantRole(TOKEN_OPS_ROLE, walletOps);
+        tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, walletOps);
 
         _step("[Step 2] mint and distribute 500e18 to userA");
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 1000e18);
+        vault.mint(tokenBAddr, hotWallet, 1000e18);
         _assertEq(tokenB.balanceOf(hotWallet), 1000e18, "hotWallet minted");
         vm.broadcast(hotWalletPk);
         tokenB.transfer(userA, 500e18);
@@ -663,13 +665,13 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 3] walletOps schedules 2x multiplier (t+300s)");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(2e18, block.timestamp + 300);
+        tokenB.setUIMultiplier(2e18, block.timestamp + 600);
         _assertEq(tokenB.newUIMultiplier(), 2e18, "pending 2e18");
 
         _step("[Step 4] admin revokes OPS_ROLE from walletOps");
         vm.broadcast(adminPk);
-        tokenB.revokeRole(TOKEN_OPS_ROLE, walletOps);
-        _assertEq(tokenB.hasRole(TOKEN_OPS_ROLE, walletOps), false, "OPS revoked");
+        tokenB.revokeRole(TOKEN_MULTIPLIER_ROLE, walletOps);
+        _assertEq(tokenB.hasRole(TOKEN_MULTIPLIER_ROLE, walletOps), false, "OPS revoked");
 
         _step("[Step 5] scheduled change is still pending (cannot be cancelled)");
         _assertEq(tokenB.newUIMultiplier(), 2e18, "still pending 2e18");
@@ -684,20 +686,20 @@ contract QAE2E is BaseQAScript {
         _logCase("QA-E2E-14-VERIFY", unicode"调度乘数激活验证(需在 E2E14 后执行)");
 
         _step("[Step 1] find E2E-14 tokenB (2x multiplier, walletOps lacks OPS_ROLE)");
-        uint256 count = factory.deployedTokenCount();
+        uint256 count = factory.tokenCount();
         address tokenBAddr;
         for (uint256 i = count; i > 0; i--) {
-            address[] memory slice = factory.getDeployedTokens(i - 1, 1);
-            SecuritiesToken candidate = SecuritiesToken(slice[0]);
+            address[] memory slice = factory.getTokens(i - 1, 1);
+            ScaledToken candidate = ScaledToken(slice[0]);
             bool has2x = candidate.uiMultiplier() == 2e18
                 || (candidate.hasPendingMultiplier() && candidate.newUIMultiplier() == 2e18);
-            if (has2x && !candidate.hasRole(TOKEN_OPS_ROLE, walletOps)) {
+            if (has2x && !candidate.hasRole(TOKEN_MULTIPLIER_ROLE, walletOps)) {
                 tokenBAddr = slice[0];
                 break;
             }
         }
         require(tokenBAddr != address(0), "E2E-14 tokenB not found");
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  found tokenB: ", vm.toString(tokenBAddr)));
 
         _step("[Step 2] verify multiplier activated despite operator revocation");
@@ -714,11 +716,11 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 4] cleanup: re-grant OPS_ROLE, reset multiplier to 1e18");
         vm.broadcast(adminPk);
-        tokenB.grantRole(TOKEN_OPS_ROLE, walletOps);
+        tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, walletOps);
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(1e18, block.timestamp + 300);
+        tokenB.setUIMultiplier(1e18, block.timestamp + 600);
         vm.broadcast(adminPk);
-        tokenB.revokeRole(TOKEN_OPS_ROLE, walletOps);
+        tokenB.revokeRole(TOKEN_MULTIPLIER_ROLE, walletOps);
 
         _logPass();
     }
@@ -776,7 +778,7 @@ contract QAE2E is BaseQAScript {
             userB,
             address(token),
             abi.encodeWithSelector(token.transferFrom.selector, userA, hotWallet, 100e18),
-            Compliance.UserBlocked.selector
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: reverted UserBlocked() on spender");
 
@@ -786,30 +788,30 @@ contract QAE2E is BaseQAScript {
         _logPass();
     }
 
-    // ── QA-E2E-17: OperatorWallet 多热钱包并发分发 ──
+    // ── QA-E2E-17: TokenIssuer 多热钱包并发分发 ──
     function test_E2E17() public {
-        _logCase("QA-E2E-17", unicode"OperatorWallet 多热钱包并发分发");
+        _logCase("QA-E2E-17", unicode"TokenIssuer 多热钱包并发分发");
 
         _step("[Step 1] precondition: hotWallet is registered");
         _requireNotPaused();
-        _assertEq(wallet.isHotWallet(hotWallet), true, "hotWallet registered");
+        _assertEq(vault.isApprovedRecipient(hotWallet), true, "hotWallet registered");
 
         _step("[Step 2] add userA as second hotWallet");
-        bool wasHot = wallet.isHotWallet(userA);
+        bool wasHot = vault.isApprovedRecipient(userA);
         if (!wasHot) {
             vm.broadcast(adminPk);
-            wallet.addHotWallet(userA);
+            vault.addApprovedRecipient(userA);
         }
-        _assertEq(wallet.isHotWallet(userA), true, "userA is hot");
+        _assertEq(vault.isApprovedRecipient(userA), true, "userA is hot");
 
         _step("[Step 3] mint to both hot wallets");
         uint256 hotBefore = token.balanceOf(hotWallet);
         uint256 aBefore = token.balanceOf(userA);
         uint256 supplyBefore = token.totalSupply();
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), hotWallet, 1000e18);
+        vault.mint(address(token), hotWallet, 1000e18);
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), userA, 2000e18);
+        vault.mint(address(token), userA, 2000e18);
 
         _step("[Step 4] verify");
         _assertDiff(hotBefore, token.balanceOf(hotWallet), 1000e18, "hotWallet diff");
@@ -820,7 +822,7 @@ contract QAE2E is BaseQAScript {
         _step("[Step 5] cleanup: remove userA from hotWallets");
         if (!wasHot) {
             vm.broadcast(adminPk);
-            wallet.removeHotWallet(userA);
+            vault.removeApprovedRecipient(userA);
         }
 
         _logPass();
@@ -833,14 +835,14 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] sanction + block userA");
         _sanctionUser(userA);
         _blockUser(userA);
-        _assertEq(compliance.sanctionedAddresses(userA), true, "userA sanctioned");
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "userA blocked");
+        _assertEq(compliance.isSanctioned(userA), true, "userA sanctioned");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "userA blocked");
 
         _step("[Step 2] reset sanctions");
         vm.broadcast(complianceOpsPk);
-        compliance.resetSanctionedAddresses();
-        _assertEq(compliance.sanctionedAddresses(userA), false, "sanction cleared");
-        _assertEq(compliance.blockedAddresses(address(token), userA), true, "blocklist intact");
+        compliance.clearSanctions();
+        _assertEq(compliance.isSanctioned(userA), false, "sanction cleared");
+        _assertEq(compliance.isBlocked(address(token), userA), true, "blocklist intact");
         _step("  PASS: sanction reset, blocklist unaffected");
 
         _step("[Step 3] cleanup: unblock userA");
@@ -849,31 +851,31 @@ contract QAE2E is BaseQAScript {
         _logPass();
     }
 
-    // ── QA-E2E-19: OperatorWallet 被拉黑 ──
+    // ── QA-E2E-19: TokenIssuer 被拉黑 ──
     function test_E2E19() public {
-        _logCase("QA-E2E-19", unicode"OperatorWallet 被拉黑 -> 所有操作失败");
+        _logCase("QA-E2E-19", unicode"TokenIssuer 被拉黑 -> 所有操作失败");
 
-        _step("[Step 1] block OperatorWallet address");
+        _step("[Step 1] block TokenIssuer address");
         _requireNotPaused();
         address[] memory a = new address[](1);
-        a[0] = address(wallet);
+        a[0] = address(vault);
         vm.broadcast(complianceOpsPk);
-        compliance.addToBlocklist(address(token), a);
-        _assertEq(compliance.blockedAddresses(address(token), address(wallet)), true, "wallet blocked");
+        compliance.blockUsers(address(token), a);
+        _assertEq(compliance.isBlocked(address(token), address(vault)), true, "wallet blocked");
 
         _step("[Step 2] walletOps tries mint - wallet is blocked so token.mint reverts UserBlocked");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.mint.selector, address(token), hotWallet, 100e18),
-            Compliance.UserBlocked.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.mint.selector, address(token), hotWallet, 100e18),
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: mint reverted UserBlocked()");
 
-        _step("[Step 3] cleanup: unblock OperatorWallet");
+        _step("[Step 3] cleanup: unblock TokenIssuer");
         vm.broadcast(complianceOpsPk);
-        compliance.removeFromBlocklist(address(token), a);
-        _assertEq(compliance.blockedAddresses(address(token), address(wallet)), false, "wallet unblocked");
+        compliance.unblockUsers(address(token), a);
+        _assertEq(compliance.isBlocked(address(token), address(vault)), false, "wallet unblocked");
         _step("  PASS: wallet unblocked");
 
         _logPass();
@@ -885,10 +887,10 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 1] add userA as second hotWallet");
         _requireNotPaused();
-        bool wasHot = wallet.isHotWallet(userA);
+        bool wasHot = vault.isApprovedRecipient(userA);
         if (!wasHot) {
             vm.broadcast(adminPk);
-            wallet.addHotWallet(userA);
+            vault.addApprovedRecipient(userA);
         }
 
         _step("[Step 2] block hotWallet (primary)");
@@ -897,16 +899,16 @@ contract QAE2E is BaseQAScript {
         _step("[Step 3] mint to blocked hotWallet fails (safeTransfer -> UserBlocked)");
         _expectRevertFrom(
             walletOps,
-            address(wallet),
-            abi.encodeWithSelector(OperatorWallet.mint.selector, address(token), hotWallet, 100e18),
-            Compliance.UserBlocked.selector
+            address(vault),
+            abi.encodeWithSelector(TokenIssuer.mint.selector, address(token), hotWallet, 100e18),
+            ComplianceRegistry.UserBlocked.selector
         );
         _step("  PASS: mint to blocked hotWallet reverted UserBlocked()");
 
         _step("[Step 4] mint to userA (unblocked hotWallet) succeeds");
         uint256 aBefore = token.balanceOf(userA);
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), userA, 100e18);
+        vault.mint(address(token), userA, 100e18);
         _assertDiff(aBefore, token.balanceOf(userA), 100e18, "userA diff");
         _step("  PASS: mint to unblocked hotWallet succeeded");
 
@@ -914,7 +916,7 @@ contract QAE2E is BaseQAScript {
         _unblockUser(hotWallet);
         if (!wasHot) {
             vm.broadcast(adminPk);
-            wallet.removeHotWallet(userA);
+            vault.removeApprovedRecipient(userA);
         }
 
         _logPass();
@@ -930,7 +932,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 2] hotWallet approves wallet for burn");
         vm.broadcast(hotWalletPk);
-        token.approve(address(wallet), type(uint256).max);
+        token.approve(address(vault), type(uint256).max);
 
         _step("[Step 3] userA returns 1000e18 to hotWallet");
         uint256 aBefore = token.balanceOf(userA);
@@ -941,7 +943,7 @@ contract QAE2E is BaseQAScript {
         _step("[Step 4] walletOPS burns 1000e18 from hotWallet");
         uint256 supplyBefore = token.totalSupply();
         vm.broadcast(walletOpsPk);
-        wallet.burn(address(token), hotWallet, 1000e18);
+        vault.burn(address(token), hotWallet, 1000e18);
         _assertDiff(supplyBefore, token.totalSupply(), -1000e18, "supply -1000");
         _step("  PASS: redemption complete, totalSupply -1000e18");
 
@@ -954,25 +956,25 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 1] add userB as new hotWallet");
         _requireNotPaused();
-        bool userBWasHot = wallet.isHotWallet(userB);
+        bool userBWasHot = vault.isApprovedRecipient(userB);
         if (!userBWasHot) {
             vm.broadcast(adminPk);
-            wallet.addHotWallet(userB);
+            vault.addApprovedRecipient(userB);
         }
-        _assertEq(wallet.isHotWallet(userB), true, "userB is hot");
+        _assertEq(vault.isApprovedRecipient(userB), true, "userB is hot");
 
         _step("[Step 2] mint to new hotWallet (userB)");
         uint256 bBefore = token.balanceOf(userB);
         vm.broadcast(walletOpsPk);
-        wallet.mint(address(token), userB, 500e18);
+        vault.mint(address(token), userB, 500e18);
         _assertDiff(bBefore, token.balanceOf(userB), 500e18, "userB diff");
         _step("  PASS: mint to new hotWallet succeeded");
 
         _step("[Step 3] cleanup: remove userB from hotWallets");
         if (!userBWasHot) {
             vm.broadcast(adminPk);
-            wallet.removeHotWallet(userB);
-            _assertEq(wallet.isHotWallet(userB), false, "userB removed");
+            vault.removeApprovedRecipient(userB);
+            _assertEq(vault.isApprovedRecipient(userB), false, "userB removed");
         }
         _step("  PASS: hot wallet rotation complete");
 
@@ -986,17 +988,17 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB for isolated multiplier test");
         string memory sym23 = _uniqueSymbol("ML");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.deployToken("Mul Corp", sym23, "MUL001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Mul Corp", sym23, "MUL001", admin, new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym23));
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
-        tokenB.grantRole(ISSUER_ROLE, address(wallet));
+        tokenB.grantRole(ISSUER_ROLE, address(vault));
         vm.broadcast(adminPk);
-        tokenB.grantRole(TOKEN_OPS_ROLE, walletOps);
+        tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, walletOps);
 
         _step("[Step 2] mint and distribute 500e18 to userA");
         vm.broadcast(walletOpsPk);
-        wallet.mint(tokenBAddr, hotWallet, 1000e18);
+        vault.mint(tokenBAddr, hotWallet, 1000e18);
         vm.broadcast(hotWalletPk);
         tokenB.transfer(userA, 500e18);
 
@@ -1006,7 +1008,7 @@ contract QAE2E is BaseQAScript {
         _step("  PASS: before activation, balanceOfUI == balanceOf");
 
         _step("[Step 4] operator schedules 2x multiplier (t+300s)");
-        uint256 effectiveAt = block.timestamp + 300;
+        uint256 effectiveAt = block.timestamp + 600;
         vm.broadcast(walletOpsPk);
         tokenB.setUIMultiplier(2e18, effectiveAt);
         _assertEq(tokenB.hasPendingMultiplier(), true, "hasPending");
@@ -1025,18 +1027,18 @@ contract QAE2E is BaseQAScript {
         _logCase("QA-E2E-23-VERIFY", unicode"乘数激活验证");
 
         _step("[Step 1] find E2E-23 tokenB (last deployed with pending/active 2x multiplier)");
-        uint256 count = factory.deployedTokenCount();
+        uint256 count = factory.tokenCount();
         address tokenBAddr;
         for (uint256 i = count; i > 0; i--) {
-            address[] memory slice = factory.getDeployedTokens(i - 1, 1);
-            SecuritiesToken candidate = SecuritiesToken(slice[0]);
+            address[] memory slice = factory.getTokens(i - 1, 1);
+            ScaledToken candidate = ScaledToken(slice[0]);
             if (candidate.uiMultiplier() == 2e18 || (candidate.hasPendingMultiplier() && candidate.newUIMultiplier() == 2e18)) {
                 tokenBAddr = slice[0];
                 break;
             }
         }
         require(tokenBAddr != address(0), "E2E-23 tokenB not found");
-        SecuritiesToken tokenB = SecuritiesToken(tokenBAddr);
+        ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  found tokenB: ", vm.toString(tokenBAddr)));
 
         _step("[Step 2] verify multiplier activated");
@@ -1053,7 +1055,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 4] cleanup: reset multiplier to 1e18");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(1e18, block.timestamp + 300);
+        tokenB.setUIMultiplier(1e18, block.timestamp + 600);
 
         _logPass();
     }

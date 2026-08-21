@@ -3,7 +3,7 @@ pragma solidity ^0.8.20;
 
 import {console2} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 contract MultiplierQA2 is BaseQA {
@@ -189,13 +189,13 @@ contract MultiplierQA2 is BaseQA {
     function test_UIPERM01_RevokeOpsBlocksMultiplier() public {
         _logCase("UI-PERM-01", unicode"撤销 OPS 后 setUIMultiplier 失败");
 
-        _step("[Step 1] admin revokes OPS_ROLE from operator");
+        _step("[Step 1] admin revokes MULTIPLIER_SCHEDULER_ROLE from operator");
         vm.prank(admin);
-        token.revokeRole(OPS_ROLE, operator);
+        token.revokeRole(MULTIPLIER_SCHEDULER_ROLE, operator);
 
         _step("[Step 2] operator tries setUIMultiplier");
         vm.prank(operator);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2e18, block.timestamp + 1 hours);
         _step("  PASS: reverted UnauthorizedRole()");
 
@@ -206,14 +206,14 @@ contract MultiplierQA2 is BaseQA {
     function test_UIPERM02_RenounceOpsBlocksMultiplier() public {
         _logCase("UI-PERM-02", unicode"renounce OPS 后 setUIMultiplier 失败");
 
-        _step("[Step 1] operator renounces OPS_ROLE");
+        _step("[Step 1] operator renounces MULTIPLIER_SCHEDULER_ROLE");
         vm.prank(operator);
-        token.renounceRole(OPS_ROLE, operator);
-        assertFalse(token.hasRole(OPS_ROLE, operator));
+        token.renounceRole(MULTIPLIER_SCHEDULER_ROLE, operator);
+        assertFalse(token.hasRole(MULTIPLIER_SCHEDULER_ROLE, operator));
 
         _step("[Step 2] operator tries setUIMultiplier");
         vm.prank(operator);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.setUIMultiplier(2e18, block.timestamp + 1 hours);
         _step("  PASS: reverted after renounce");
 
@@ -231,7 +231,7 @@ contract MultiplierQA2 is BaseQA {
 
         _step("[Step 2] issuer tries to mint");
         vm.prank(issuer);
-        vm.expectRevert(SecuritiesToken.UnauthorizedRole.selector);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
         token.mint(1e18);
         _step("  PASS: reverted after renounce");
 
@@ -266,6 +266,48 @@ contract MultiplierQA2 is BaseQA {
         _step("  uiMultiplier still 1e18");
         assertEq(token.newUIMultiplier(), 5e18);
         _step("  PASS: newUIMultiplier == 5e18");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════
+    //      minMultiplierNotice 最低通知期
+    // ═══════════════════════════════════════════════
+
+    // ── UI-NOTICE-01 ──
+    function test_UINOTICE01_BelowMinNoticeReverts() public {
+        _logCase("UI-NOTICE-01", unicode"低于最低通知期回滚");
+
+        _step("[Step 1] setUIMultiplier with effectiveAt < block.timestamp + minMultiplierNotice");
+        vm.prank(operator);
+        vm.expectRevert("ScaledToken: minimum notice period not met");
+        token.setUIMultiplier(2e18, block.timestamp + 30 minutes);
+        _step("  PASS: reverted (minimum notice period not met)");
+
+        _logPass();
+    }
+
+    // ── UI-NOTICE-02 ──
+    function test_UINOTICE02_ExactMinNoticeSucceeds() public {
+        _logCase("UI-NOTICE-02", unicode"恰好最低通知期成功");
+
+        _step("[Step 1] setUIMultiplier with effectiveAt == block.timestamp + minMultiplierNotice");
+        uint256 effectiveAt = block.timestamp + MIN_MULTIPLIER_NOTICE;
+        vm.prank(operator);
+        token.setUIMultiplier(2e18, effectiveAt);
+        assertEq(token.newUIMultiplier(), 2e18);
+        _step("  PASS: accepted at exact minimum notice boundary");
+
+        _logPass();
+    }
+
+    // ── UI-NOTICE-03 ──
+    function test_UINOTICE03_FactoryNoticePropagated() public {
+        _logCase("UI-NOTICE-03", unicode"Factory minMultiplierNotice 传递到 token");
+
+        _step("[Step 1] token.minMultiplierNotice matches factory construction value");
+        assertEq(token.minMultiplierNotice(), MIN_MULTIPLIER_NOTICE);
+        _step("  PASS: minMultiplierNotice == 1 hours");
 
         _logPass();
     }

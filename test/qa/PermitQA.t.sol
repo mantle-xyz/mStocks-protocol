@@ -3,9 +3,9 @@ pragma solidity ^0.8.20;
 
 import {console2, Vm} from "forge-std/Test.sol";
 import {BaseQA} from "./BaseQA.t.sol";
-import {SecuritiesToken} from "../../src/securitiesToken/SecuritiesToken.sol";
-import {PauseManagerClientUpgradeable} from "../../src/pauseManager/PauseManagerClientUpgradeable.sol";
-import {Compliance} from "../../src/compliance/Compliance.sol";
+import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
+import {PauseGuardUpgradeable} from "../../src/pauseRegistry/PauseGuardUpgradeable.sol";
+import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {ERC20PermitUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
@@ -79,7 +79,7 @@ contract PermitQA is BaseQA {
         address[] memory blocked = new address[](1);
         blocked[0] = holder.addr;
         vm.prank(complianceOps);
-        compliance.addToBlocklist(address(token), blocked);
+        compliance.blockUsers(address(token), blocked);
         _step("  holder is now blocked");
 
         _step("[Step 2] permit itself succeeds (no _update call)");
@@ -92,7 +92,7 @@ contract PermitQA is BaseQA {
 
         _step("[Step 3] transferFrom reverts (UserBlocked)");
         vm.prank(spender);
-        vm.expectRevert(Compliance.UserBlocked.selector);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
         token.transferFrom(holder.addr, spender, 100e18);
         _step("  PASS: transferFrom reverted UserBlocked");
 
@@ -110,7 +110,7 @@ contract PermitQA is BaseQA {
         address[] memory sanctioned = new address[](1);
         sanctioned[0] = holder.addr;
         vm.prank(complianceOps);
-        compliance.addToSanctionsList(sanctioned);
+        compliance.sanctionUsers(sanctioned);
         _step("  holder is now sanctioned");
 
         _step("[Step 2] permit itself succeeds");
@@ -123,7 +123,7 @@ contract PermitQA is BaseQA {
 
         _step("[Step 3] transferFrom reverts (UserSanctioned)");
         vm.prank(spender);
-        vm.expectRevert(Compliance.UserSanctioned.selector);
+        vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
         token.transferFrom(holder.addr, spender, 100e18);
         _step("  PASS: transferFrom reverted UserSanctioned");
 
@@ -152,7 +152,7 @@ contract PermitQA is BaseQA {
 
         _step("[Step 3] transferFrom reverts (TokenPaused)");
         vm.prank(spender);
-        vm.expectRevert(PauseManagerClientUpgradeable.TokenPaused.selector);
+        vm.expectRevert(PauseGuardUpgradeable.TokenPaused.selector);
         token.transferFrom(holder.addr, spender, 100e18);
         _step("  PASS: transferFrom reverted TokenPaused");
 
@@ -241,9 +241,9 @@ contract PermitQA is BaseQA {
 
     // ── PMT-08 ──
     function test_PMT08_SetNameDoesNotBreakPermit() public {
-        _logCase("PMT-08", unicode"setName 后 permit 仍有效");
+        _logCase("PMT-08", unicode"updateName 后 permit 仍有效");
 
-        _step("[Step 1] sign permit before setName");
+        _step("[Step 1] sign permit before updateName");
         Vm.Wallet memory holder = vm.createWallet("holder");
         _mintAndTransfer(holder.addr, 100e18);
 
@@ -251,9 +251,9 @@ contract PermitQA is BaseQA {
         uint256 deadline = block.timestamp + 1 hours;
         (uint8 v, bytes32 r, bytes32 s) = _signPermit(holder, userA, 50e18, deadline);
 
-        _step("[Step 2] admin calls setName");
-        vm.prank(admin);
-        token.setName("New Token Name");
+        _step("[Step 2] tokenOps calls updateName");
+        vm.prank(tokenOps);
+        token.updateName("New Token Name");
         _step("  name changed to 'New Token Name'");
 
         _step("[Step 3] DOMAIN_SEPARATOR unchanged (uses initial name)");
@@ -261,10 +261,10 @@ contract PermitQA is BaseQA {
         assertEq(domainBefore, domainAfter);
         _step("  PASS: DOMAIN_SEPARATOR unchanged");
 
-        _step("[Step 4] permit still valid after setName");
+        _step("[Step 4] permit still valid after updateName");
         IERC20Permit(address(token)).permit(holder.addr, userA, 50e18, deadline, v, r, s);
         assertEq(token.allowance(holder.addr, userA), 50e18);
-        _step("  PASS: permit succeeded after setName");
+        _step("  PASS: permit succeeded after updateName");
 
         _logPass();
     }
@@ -287,12 +287,12 @@ contract PermitQA is BaseQA {
         address[] memory blocked = new address[](1);
         blocked[0] = spender;
         vm.prank(complianceOps);
-        compliance.addToBlocklist(address(token), blocked);
+        compliance.blockUsers(address(token), blocked);
         _step("  spender is blocked");
 
         _step("[Step 3] spender transferFrom reverts (UserBlocked for msg.sender)");
         vm.prank(spender);
-        vm.expectRevert(Compliance.UserBlocked.selector);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
         token.transferFrom(holder.addr, spender, 100e18);
         _step("  PASS: reverted UserBlocked");
 
