@@ -51,21 +51,26 @@ contract ScaledTokenTest is Test {
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
         factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
-        factory.grantRole(factory.OPS_ROLE(), admin); // admin self-grants factory OPS to create/rename in tests
+        // Factory self-grant is blocked, so admin delegates factory OPS to the test contract, which
+        // then calls createToken (unpranked = msg.sender is this test).
+        factory.grantRole(factory.OPS_ROLE(), address(this));
+        compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
+        pauseManager.grantRole(pauseManager.PAUSE_ROLE(), pauseOps);
+        pauseManager.grantRole(pauseManager.UNPAUSE_ROLE(), pauseOps);
+
+        vm.stopPrank();
 
         address[] memory issuers = new address[](1);
         issuers[0] = issuer;
         address[] memory schedulers = new address[](1);
         schedulers[0] = operator;
+        address[] memory noOps = new address[](0);
 
-        address proxy = factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, issuers, schedulers);
+        address proxy = factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, issuers, schedulers, noOps);
         token = ScaledToken(proxy);
+
+        vm.startPrank(admin);
         token.grantRole(token.OPS_ROLE(), tokenOps);
-
-        compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
-        pauseManager.grantRole(pauseManager.PAUSE_ROLE(), pauseOps);
-        pauseManager.grantRole(pauseManager.UNPAUSE_ROLE(), pauseOps);
-
         vm.stopPrank();
 
         ISSUER_ROLE = token.ISSUER_ROLE();
@@ -531,13 +536,15 @@ contract ScaledTokenTest is Test {
         vm.startPrank(admin);
         ScaledTokenFactory customFactory =
             new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 48 hours);
-        customFactory.grantRole(customFactory.OPS_ROLE(), admin);
+        customFactory.grantRole(customFactory.OPS_ROLE(), address(this));
+        vm.stopPrank();
         address[] memory noIssuers = new address[](0);
         address[] memory scheds = new address[](1);
         scheds[0] = operator;
-        ScaledToken customToken =
-            ScaledToken(customFactory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, noIssuers, scheds));
-        vm.stopPrank();
+        address[] memory noOps = new address[](0);
+        ScaledToken customToken = ScaledToken(
+            customFactory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, noIssuers, scheds, noOps)
+        );
 
         assertEq(customToken.minMultiplierNotice(), 48 hours);
 
@@ -627,9 +634,8 @@ contract ScaledTokenTest is Test {
         address[] memory issuers = new address[](1);
         issuers[0] = eoa;
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledToken.IssuerNotContract.selector);
-        factory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, issuers, empty);
+        factory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, issuers, empty, empty);
     }
 
     function test_AdminCanGrantAndRevokeOperator() public {
@@ -687,9 +693,8 @@ contract ScaledTokenTest is Test {
 
     function test_FactoryRejectsDuplicateSymbol() public {
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.TokenSymbolAlreadyExists.selector, "AAPL"));
-        factory.createToken("Apple v2", "AAPL", "ID2", admin, empty, empty);
+        factory.createToken("Apple v2", "AAPL", "ID2", admin, empty, empty, empty);
     }
 
     function test_FactoryRegistersDeployedToken() public {
@@ -700,10 +705,8 @@ contract ScaledTokenTest is Test {
     function test_GetTokensPaginationAndHugeLimit() public {
         // setUp already created one token (AAPL); add two more so total == 3.
         address[] memory empty = new address[](0);
-        vm.startPrank(admin);
-        address t1 = factory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, empty, empty);
-        address t2 = factory.createToken("Amazon", "AMZN", "US0231351067", admin, empty, empty);
-        vm.stopPrank();
+        address t1 = factory.createToken("Tesla Inc.", "TSLA", "US88160R1014", admin, empty, empty, empty);
+        address t2 = factory.createToken("Amazon", "AMZN", "US0231351067", admin, empty, empty, empty);
         assertEq(factory.tokenCount(), 3);
 
         // Normal window.
@@ -727,25 +730,22 @@ contract ScaledTokenTest is Test {
 
     function test_FactoryRejectsInvalidSymbol() public {
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, "AAPL!"));
-        factory.createToken("X", "AAPL!", "ID3", admin, empty, empty);
+        factory.createToken("X", "AAPL!", "ID3", admin, empty, empty, empty);
     }
 
     function test_FactoryRejectsDuplicateAssetCode() public {
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.AssetCodeAlreadyExists.selector, "US0378331005"));
         // Same assetCode as the setUp AAPL token; different name/symbol so we hit the
         // asset-code uniqueness check specifically.
-        factory.createToken("Copycat", "COPY", "US0378331005", admin, empty, empty);
+        factory.createToken("Copycat", "COPY", "US0378331005", admin, empty, empty, empty);
     }
 
     function test_FactoryRejectsInvalidAssetCode() public {
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.InvalidAssetCode.selector, "BAD CODE!"));
-        factory.createToken("New", "NEW", "BAD CODE!", admin, empty, empty);
+        factory.createToken("New", "NEW", "BAD CODE!", admin, empty, empty, empty);
     }
 
     function test_FactoryRegistersAssetCodeMapping() public view {
@@ -756,7 +756,6 @@ contract ScaledTokenTest is Test {
         vm.prank(tokenOps);
         token.updateAssetCode("US0378331006");
 
-        vm.prank(admin);
         factory.renameAssetCode(address(token), "US0378331005", "US0378331006");
 
         assertEq(factory.tokenByAssetCode("US0378331005"), address(0));
@@ -764,7 +763,6 @@ contract ScaledTokenTest is Test {
     }
 
     function test_RenameAssetCodeRevertsWhenTokenNotYetUpdated() public {
-        vm.prank(admin);
         vm.expectRevert(
             abi.encodeWithSelector(ScaledTokenFactory.AssetCodeMismatch.selector, "US0378331005", "US0378331006")
         );
@@ -772,7 +770,6 @@ contract ScaledTokenTest is Test {
     }
 
     function test_RenameAssetCodeRevertsIfTokenNotRegistered() public {
-        vm.prank(admin);
         vm.expectRevert(
             abi.encodeWithSelector(
                 ScaledTokenFactory.TokenNotRegisteredUnderAssetCode.selector, address(token), "WRONG"
@@ -782,7 +779,6 @@ contract ScaledTokenTest is Test {
     }
 
     function test_RenameAssetCodeRevertsOnZeroToken() public {
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.ZeroAddress.selector);
         factory.renameAssetCode(address(0), "US0378331005", "US0378331006");
     }
@@ -799,13 +795,14 @@ contract ScaledTokenTest is Test {
         // BeaconProxy manually and assert the defense-in-depth check inside __scaledToken_init.
         address[] memory empty = new address[](0);
         bytes memory initData = abi.encodeWithSignature(
-            "initialize(string,string,string,address,address,address,address[],address[])",
+            "initialize(string,string,string,address,address,address,address[],address[],address[])",
             "X",
             "X",
             "ID",
             address(compliance),
             address(pauseManager),
             address(0),
+            empty,
             empty,
             empty
         );
@@ -818,7 +815,6 @@ contract ScaledTokenTest is Test {
         vm.prank(tokenOps);
         token.updateSymbol("AAPL2");
 
-        vm.prank(admin);
         factory.renameSymbol(address(token), "AAPL", "AAPL2");
 
         assertEq(factory.tokenBySymbol("AAPL"), address(0));
@@ -828,13 +824,11 @@ contract ScaledTokenTest is Test {
     function test_RenameSymbolRevertsWhenTokenSymbolNotYetUpdated() public {
         // Caller forgot to call token.updateSymbol first — on-token symbol is still "AAPL",
         // so renaming the factory registry to "AAPL2" must revert with SymbolMismatch.
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.SymbolMismatch.selector, "AAPL", "AAPL2"));
         factory.renameSymbol(address(token), "AAPL", "AAPL2");
     }
 
     function test_RenameSymbolRevertsIfTokenNotRegisteredUnderOldSymbol() public {
-        vm.prank(admin);
         vm.expectRevert(
             abi.encodeWithSelector(ScaledTokenFactory.TokenNotRegisteredUnderSymbol.selector, address(token), "WRONG")
         );
@@ -842,7 +836,6 @@ contract ScaledTokenTest is Test {
     }
 
     function test_RenameSymbolRevertsOnZeroToken() public {
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.ZeroAddress.selector);
         factory.renameSymbol(address(0), "AAPL", "AAPL2");
     }
@@ -1027,7 +1020,33 @@ contract ScaledTokenTest is Test {
         address[] memory empty = new address[](0);
         vm.prank(stranger);
         vm.expectRevert(); // AccessControlUnauthorizedAccount
-        factory.createToken("X", "XYZ", "IDXYZ", admin, empty, empty);
+        factory.createToken("X", "XYZ", "IDXYZ", admin, empty, empty, empty);
+    }
+
+    /// @dev createToken grants OPS_ROLE to each `_opsRoles` entry atomically at init.
+    function test_FactoryCreateTokenGrantsOpsRoles() public {
+        address[] memory empty = new address[](0);
+        address[] memory ops = new address[](1);
+        ops[0] = tokenOps;
+        address t = factory.createToken("Nvidia", "NVDA", "US67066G1040", admin, empty, empty, ops);
+        assertTrue(ScaledToken(t).hasRole(ScaledToken(t).OPS_ROLE(), tokenOps));
+    }
+
+    /// @dev A zero address in `_opsRoles` is rejected by initialize.
+    function test_FactoryCreateTokenRejectsZeroOps() public {
+        address[] memory empty = new address[](0);
+        address[] memory ops = new address[](1);
+        ops[0] = address(0);
+        vm.expectRevert(ScaledToken.ZeroAddress.selector);
+        factory.createToken("Meta", "META", "US30303M1027", admin, empty, empty, ops);
+    }
+
+    /// @dev The factory blocks self-grant, so admin cannot grant itself an operational role.
+    function test_Factory_SelfGrantBlocked() public {
+        bytes32 opsRole = factory.OPS_ROLE(); // cache before prank (arg call would consume it)
+        vm.prank(admin);
+        vm.expectRevert(ScaledTokenFactory.SelfGrantNotAllowed.selector);
+        factory.grantRole(opsRole, admin);
     }
 
     function test_Factory_NonOpsCannotRename() public {

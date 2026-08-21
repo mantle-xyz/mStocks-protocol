@@ -58,6 +58,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     error AssetCodeAlreadyExists(string assetCode);
     error ZeroAddress();
     error EmptyString();
+    error SelfGrantNotAllowed();
     error InvalidComplianceContract();
     error InvalidPauseManagerContract();
     /// @dev Reverts when the token's actual `symbol()` does not match the value expected here
@@ -102,14 +103,16 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     /// @notice Deploys a new ScaledToken behind a BeaconProxy and initializes it atomically.
     ///         `_admin` receives DEFAULT_ADMIN_ROLE on the new token (use a multisig, not an EOA);
     ///         `_issuers` receive ISSUER_ROLE (must be contracts); `_multiplierSchedulers`
-    ///         receive MULTIPLIER_SCHEDULER_ROLE.
+    ///         receive MULTIPLIER_SCHEDULER_ROLE; `_opsRoles` receive OPS_ROLE (metadata updates +
+    ///         mint/burn switches) — all granted atomically at initialize.
     function createToken(
         string memory _name,
         string memory _symbol,
         string memory _assetCode,
         address _admin,
         address[] memory _issuers,
-        address[] memory _multiplierSchedulers
+        address[] memory _multiplierSchedulers,
+        address[] memory _opsRoles
     ) external onlyRole(OPS_ROLE) nonReentrant returns (address proxy) {
         if (bytes(_name).length == 0) revert EmptyString();
         if (bytes(_symbol).length == 0) revert EmptyString();
@@ -121,7 +124,7 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
         if (tokenByAssetCode[_assetCode] != address(0)) revert AssetCodeAlreadyExists(_assetCode);
 
         bytes memory initData = abi.encodeWithSignature(
-            "initialize(string,string,string,address,address,address,address[],address[])",
+            "initialize(string,string,string,address,address,address,address[],address[],address[])",
             _name,
             _symbol,
             _assetCode,
@@ -129,7 +132,8 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
             defaultPauseManager,
             _admin,
             _issuers,
-            _multiplierSchedulers
+            _multiplierSchedulers,
+            _opsRoles
         );
 
         BeaconProxy beaconProxy = new BeaconProxy(address(beacon), initData);
@@ -314,5 +318,11 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
             revert CannotRenounceLastAdmin();
         }
         super.renounceRole(role, callerConfirmation);
+    }
+
+    /// @notice Disallows self-grant — admin must delegate operational roles to a separate account.
+    function grantRole(bytes32 role, address account) public virtual override(AccessControl, IAccessControl) {
+        if (account == _msgSender()) revert SelfGrantNotAllowed();
+        super.grantRole(role, account);
     }
 }
