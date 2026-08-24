@@ -32,9 +32,14 @@ contract TokenIssuerTest is Test {
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
         factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
-        factory.grantRole(factory.OPS_ROLE(), admin); // admin self-grants factory OPS to createToken
+        // Factory self-grant is blocked, so admin delegates factory OPS to the test contract.
+        factory.grantRole(factory.OPS_ROLE(), address(this));
+        vm.stopPrank();
+
         address[] memory empty = new address[](0);
-        token = ScaledToken(factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty));
+        token = ScaledToken(factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, empty, empty, empty));
+
+        vm.startPrank(admin);
         token.grantRole(token.OPS_ROLE(), tokenOps); // token metadata / mint-burn switches
 
         TokenIssuer impl = new TokenIssuer();
