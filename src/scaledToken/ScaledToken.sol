@@ -107,10 +107,11 @@ contract ScaledToken is
         address pauseManager_,
         address admin_,
         address[] memory issuers_,
-        address[] memory multiplierSchedulers_
+        address[] memory multiplierSchedulers_,
+        address[] memory opsRoles_
     ) public initializer {
         __scaledToken_init(
-            name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, multiplierSchedulers_
+            name_, symbol_, assetCode_, compliance_, pauseManager_, admin_, issuers_, multiplierSchedulers_, opsRoles_
         );
     }
 
@@ -122,7 +123,8 @@ contract ScaledToken is
         address pauseManager_,
         address admin_,
         address[] memory issuers_,
-        address[] memory multiplierSchedulers_
+        address[] memory multiplierSchedulers_,
+        address[] memory opsRoles_
     ) internal onlyInitializing {
         if (bytes(name_).length == 0) revert EmptyString();
         if (bytes(symbol_).length == 0) revert EmptyString();
@@ -153,6 +155,10 @@ contract ScaledToken is
         for (uint256 i = 0; i < multiplierSchedulers_.length; ++i) {
             if (multiplierSchedulers_[i] == address(0)) revert ZeroAddress();
             _grantRole(MULTIPLIER_SCHEDULER_ROLE, multiplierSchedulers_[i]);
+        }
+        for (uint256 i = 0; i < opsRoles_.length; ++i) {
+            if (opsRoles_[i] == address(0)) revert ZeroAddress();
+            _grantRole(OPS_ROLE, opsRoles_[i]);
         }
         mintAllowed = true;
         burnAllowed = true;

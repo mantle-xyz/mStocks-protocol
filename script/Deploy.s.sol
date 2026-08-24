@@ -234,7 +234,13 @@ contract Deploy is Script {
         // by TransferAdmin. Keeping the broadcaster as admin lets deployTokenIssuer auto-grant
         // ISSUER_ROLE afterwards.
         proxy = factory.createToken(
-            cfg.tokenName, cfg.tokenSymbol, cfg.tokenIdentifier, _deployAdmin(), cfg.issuers, cfg.multiplierSchedulers
+            cfg.tokenName,
+            cfg.tokenSymbol,
+            cfg.tokenIdentifier,
+            _deployAdmin(),
+            cfg.issuers,
+            cfg.multiplierSchedulers,
+            cfg.tokenOps
         );
         console.log("Token (proxy):      ", proxy);
     }
