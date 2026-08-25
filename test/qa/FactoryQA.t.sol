@@ -117,8 +117,7 @@ contract FactoryQA is BaseQA {
         _step("[Step 1] admin deploys a new token");
         uint256 countBefore = factory.tokenCount();
         address[] memory empty = new address[](0);
-        vm.prank(admin);
-        factory.createToken("Tesla", "TSLA", "US88160R1014", admin, empty, empty);
+        factory.createToken("Tesla", "TSLA", "US88160R1014", admin, empty, empty, empty);
         assertEq(factory.tokenCount(), countBefore + 1);
         _step("  PASS: tokenCount increased by 1");
 
@@ -133,7 +132,7 @@ contract FactoryQA is BaseQA {
         address[] memory empty = new address[](0);
         vm.prank(stranger);
         vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, stranger, FACTORY_OPS_ROLE));
-        factory.createToken("Tesla", "TSLA", "US88160R1014", admin, empty, empty);
+        factory.createToken("Tesla", "TSLA", "US88160R1014", admin, empty, empty, empty);
         _step("  PASS: reverted (AccessControl)");
 
         _logPass();
@@ -145,9 +144,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] deploy AAPL again (already exists from setUp)");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.TokenSymbolAlreadyExists.selector, "AAPL"));
-        factory.createToken("Apple 2", "AAPL", "ID", admin, empty, empty);
+        factory.createToken("Apple 2", "AAPL", "ID", admin, empty, empty, empty);
         _step("  PASS: reverted TokenSymbolAlreadyExists(AAPL)");
 
         _logPass();
@@ -159,9 +157,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] createToken with symbol = 'AAPL!'");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, "AAPL!"));
-        factory.createToken("Name", "AAPL!", "ID", admin, empty, empty);
+        factory.createToken("Name", "AAPL!", "ID", admin, empty, empty, empty);
         _step("  PASS: reverted InvalidSymbol");
 
         _logPass();
@@ -173,9 +170,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] createToken with symbol = 'AA PL'");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, "AA PL"));
-        factory.createToken("Name", "AA PL", "ID", admin, empty, empty);
+        factory.createToken("Name", "AA PL", "ID", admin, empty, empty, empty);
         _step("  PASS: reverted InvalidSymbol");
 
         _logPass();
@@ -188,9 +184,8 @@ contract FactoryQA is BaseQA {
         _step("[Step 1] createToken with 33-char symbol");
         string memory longSym = "ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567";
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, longSym));
-        factory.createToken("Name", longSym, "ID", admin, empty, empty);
+        factory.createToken("Name", longSym, "ID", admin, empty, empty, empty);
         _step("  PASS: reverted InvalidSymbol");
 
         _logPass();
@@ -202,14 +197,12 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] deploy with 'BTC-USD', 'TOKEN123', 'aapl'");
         address[] memory empty = new address[](0);
-        vm.startPrank(admin);
-        factory.createToken("N1", "BTC-USD", "ID1", admin, empty, empty);
+        factory.createToken("N1", "BTC-USD", "ID1", admin, empty, empty, empty);
         _step("  PASS: BTC-USD accepted");
-        factory.createToken("N2", "TOKEN123", "ID2", admin, empty, empty);
+        factory.createToken("N2", "TOKEN123", "ID2", admin, empty, empty, empty);
         _step("  PASS: TOKEN123 accepted");
-        factory.createToken("N3", "aapl", "ID3", admin, empty, empty);
+        factory.createToken("N3", "aapl", "ID3", admin, empty, empty, empty);
         _step("  PASS: aapl accepted (case-sensitive, different from AAPL)");
-        vm.stopPrank();
 
         _logPass();
     }
@@ -220,9 +213,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] createToken with name=''");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.EmptyString.selector);
-        factory.createToken("", "NEWT", "ID", admin, empty, empty);
+        factory.createToken("", "NEWT", "ID", admin, empty, empty, empty);
         _step("  PASS: reverted EmptyString()");
 
         _logPass();
@@ -234,9 +226,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] createToken with identifier=''");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.EmptyString.selector);
-        factory.createToken("Name", "NEWT", "", admin, empty, empty);
+        factory.createToken("Name", "NEWT", "", admin, empty, empty, empty);
         _step("  PASS: reverted EmptyString()");
 
         _logPass();
@@ -248,9 +239,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] createToken with admin=address(0)");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.ZeroAddress.selector);
-        factory.createToken("Name", "NEWT", "ID", address(0), empty, empty);
+        factory.createToken("Name", "NEWT", "ID", address(0), empty, empty, empty);
         _step("  PASS: reverted ZeroAddress()");
 
         _logPass();
@@ -265,11 +255,11 @@ contract FactoryQA is BaseQA {
         address op = makeAddr("newOp");
         address[] memory issuers = new address[](1);
         issuers[0] = issuerC;
-        address[] memory ops = new address[](1);
-        ops[0] = op;
+        address[] memory mSchedulers = new address[](1);
+        mSchedulers[0] = op;
+        address[] memory empty = new address[](0);
 
-        vm.prank(admin);
-        address proxy = factory.createToken("Meta", "META", "US30303M1027", admin, issuers, ops);
+        address proxy = factory.createToken("Meta", "META", "US30303M1027", admin, issuers, mSchedulers, empty);
         ScaledToken t = ScaledToken(proxy);
 
         assertEq(t.name(), "Meta");
@@ -307,10 +297,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] deploy 2 more tokens (AAPL already exists)");
         address[] memory empty = new address[](0);
-        vm.startPrank(admin);
-        factory.createToken("N1", "GOOG", "ID1", admin, empty, empty);
-        factory.createToken("N2", "TSLA", "ID2", admin, empty, empty);
-        vm.stopPrank();
+        factory.createToken("N1", "GOOG", "ID1", admin, empty, empty, empty);
+        factory.createToken("N2", "TSLA", "ID2", admin, empty, empty, empty);
 
         assertEq(factory.tokenCount(), 3);
         _step("  PASS: count == 3");
@@ -324,10 +312,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] deploy 2 more, then getAllTokens");
         address[] memory empty = new address[](0);
-        vm.startPrank(admin);
-        factory.createToken("N1", "GOOG", "ID1", admin, empty, empty);
-        factory.createToken("N2", "TSLA", "ID2", admin, empty, empty);
-        vm.stopPrank();
+        factory.createToken("N1", "GOOG", "ID1", admin, empty, empty, empty);
+        factory.createToken("N2", "TSLA", "ID2", admin, empty, empty, empty);
 
         address[] memory all = factory.getAllTokens();
         assertEq(all.length, 3);
@@ -342,12 +328,10 @@ contract FactoryQA is BaseQA {
 
     function _deployFiveTokens() internal {
         address[] memory empty = new address[](0);
-        vm.startPrank(admin);
-        factory.createToken("N1", "GOOG", "ID1", admin, empty, empty);
-        factory.createToken("N2", "TSLA", "ID2", admin, empty, empty);
-        factory.createToken("N3", "MSFT", "ID3", admin, empty, empty);
-        factory.createToken("N4", "AMZN", "ID4", admin, empty, empty);
-        vm.stopPrank();
+        factory.createToken("N1", "GOOG", "ID1", admin, empty, empty, empty);
+        factory.createToken("N2", "TSLA", "ID2", admin, empty, empty, empty);
+        factory.createToken("N3", "MSFT", "ID3", admin, empty, empty, empty);
+        factory.createToken("N4", "AMZN", "ID4", admin, empty, empty, empty);
         // total = 5 (AAPL from setUp + 4 above)
     }
 
@@ -414,7 +398,6 @@ contract FactoryQA is BaseQA {
         _step("[Step 1] token.updateSymbol first, then factory.renameSymbol");
         vm.prank(tokenOps);
         token.updateSymbol("AAPL2");
-        vm.prank(admin);
         factory.renameSymbol(address(token), "AAPL", "AAPL2");
         assertEq(factory.tokenBySymbol("AAPL2"), address(token));
         assertEq(factory.tokenBySymbol("AAPL"), address(0));
@@ -441,7 +424,6 @@ contract FactoryQA is BaseQA {
         _logCase("FT-SYM-03", unicode"旧 symbol 不匹配");
 
         _step("[Step 1] renameSymbol with wrong oldSymbol");
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.TokenNotRegisteredUnderSymbol.selector, address(token), "WRONG"));
         factory.renameSymbol(address(token), "WRONG", "NEW");
         _step("  PASS: reverted TokenNotRegisteredUnderSymbol");
@@ -455,11 +437,9 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] deploy GOOG, update token symbol to GOOG, then renameSymbol hits duplicate");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
-        factory.createToken("Google", "GOOG", "ID", admin, empty, empty);
+        factory.createToken("Google", "GOOG", "ID", admin, empty, empty, empty);
         vm.prank(tokenOps);
         token.updateSymbol("GOOG");
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.TokenSymbolAlreadyExists.selector, "GOOG"));
         factory.renameSymbol(address(token), "AAPL", "GOOG");
         _step("  PASS: reverted TokenSymbolAlreadyExists(GOOG)");
@@ -472,7 +452,6 @@ contract FactoryQA is BaseQA {
         _logCase("FT-SYM-05", unicode"空新 symbol");
 
         _step("[Step 1] updateSymbol with newSymbol=''");
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.EmptyString.selector);
         factory.renameSymbol(address(token), "AAPL", "");
         _step("  PASS: reverted EmptyString()");
@@ -485,7 +464,6 @@ contract FactoryQA is BaseQA {
         _logCase("FT-SYM-06", unicode"无效新 symbol");
 
         _step("[Step 1] updateSymbol with newSymbol='AA!!'");
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.InvalidSymbol.selector, "AA!!"));
         factory.renameSymbol(address(token), "AAPL", "AA!!");
         _step("  PASS: reverted InvalidSymbol");
@@ -590,9 +568,8 @@ contract FactoryQA is BaseQA {
 
         _step("[Step 1] create token with same assetCode as AAPL (US0378331005)");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.AssetCodeAlreadyExists.selector, "US0378331005"));
-        factory.createToken("Apple2", "AAPL2", "US0378331005", admin, empty, empty);
+        factory.createToken("Apple2", "AAPL2", "US0378331005", admin, empty, empty, empty);
         _step("  PASS: reverted AssetCodeAlreadyExists");
 
         _logPass();
@@ -616,7 +593,6 @@ contract FactoryQA is BaseQA {
         _step("[Step 1] token.updateAssetCode first, then factory.renameAssetCode");
         vm.prank(tokenOps);
         token.updateAssetCode("NEWCODE");
-        vm.prank(admin);
         factory.renameAssetCode(address(token), "US0378331005", "NEWCODE");
         assertEq(factory.tokenByAssetCode("NEWCODE"), address(token));
         assertEq(factory.tokenByAssetCode("US0378331005"), address(0));
@@ -630,10 +606,126 @@ contract FactoryQA is BaseQA {
         _logCase("FT-AC-04", unicode"renameAssetCode 旧值不匹配回滚");
 
         _step("[Step 1] renameAssetCode with wrong oldAssetCode");
-        vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(ScaledTokenFactory.TokenNotRegisteredUnderAssetCode.selector, address(token), "WRONG"));
         factory.renameAssetCode(address(token), "WRONG", "NEW");
         _step("  PASS: reverted TokenNotRegisteredUnderAssetCode");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════
+    //      FT-SG — 自授权保护 (PR #35)
+    // ═══════════════════════════════════════════════
+
+    // ── FT-SG-01 ──
+    function test_FTSG01_SelfGrantOpsReverts() public {
+        _logCase("FT-SG-01", unicode"admin 不能自授 OPS_ROLE");
+
+        _step("[Step 1] admin tries factory.grantRole(OPS, admin) -> revert SelfGrantNotAllowed");
+        vm.prank(admin);
+        vm.expectRevert(ScaledTokenFactory.SelfGrantNotAllowed.selector);
+        factory.grantRole(FACTORY_OPS_ROLE, admin);
+        _step("  PASS: reverted SelfGrantNotAllowed()");
+
+        _logPass();
+    }
+
+    // ── FT-SG-02 ──
+    function test_FTSG02_SelfGrantAdminReverts() public {
+        _logCase("FT-SG-02", unicode"admin 不能自授 DEFAULT_ADMIN_ROLE");
+
+        _step("[Step 1] admin tries factory.grantRole(DEFAULT_ADMIN, admin) -> revert SelfGrantNotAllowed");
+        vm.prank(admin);
+        vm.expectRevert(ScaledTokenFactory.SelfGrantNotAllowed.selector);
+        factory.grantRole(DEFAULT_ADMIN_ROLE_HASH, admin);
+        _step("  PASS: reverted SelfGrantNotAllowed()");
+
+        _logPass();
+    }
+
+    // ── FT-SG-03 ──
+    function test_FTSG03_CrossGrantOpsSucceeds() public {
+        _logCase("FT-SG-03", unicode"admin 可授 OPS_ROLE 给他人");
+
+        _step("[Step 1] admin grants OPS to a different address");
+        address newOps = makeAddr("newOps");
+        vm.prank(admin);
+        factory.grantRole(FACTORY_OPS_ROLE, newOps);
+        assertTrue(factory.hasRole(FACTORY_OPS_ROLE, newOps));
+        _step("  PASS: newOps has OPS_ROLE");
+
+        _logPass();
+    }
+
+    // ═══════════════════════════════════════════════
+    //      FT-OPS — createToken opsRoles (PR #35)
+    // ═══════════════════════════════════════════════
+
+    // ── FT-OPS-01 ──
+    function test_FTOPS01_CreateTokenWithOpsRoles() public {
+        _logCase("FT-OPS-01", unicode"createToken 通过 opsRoles 授予 OPS_ROLE");
+
+        _step("[Step 1] createToken with opsRoles=[tokenOps]");
+        address tkOps = makeAddr("tkOps");
+        address[] memory empty = new address[](0);
+        address[] memory opsArr = new address[](1);
+        opsArr[0] = tkOps;
+        address proxy = factory.createToken("Tesla", "TSLA", "US88160R1014", admin, empty, empty, opsArr);
+        ScaledToken t = ScaledToken(proxy);
+
+        assertTrue(t.hasRole(t.OPS_ROLE(), tkOps));
+        _step("  PASS: tkOps has OPS_ROLE on new token");
+
+        _logPass();
+    }
+
+    // ── FT-OPS-02 ──
+    function test_FTOPS02_CreateTokenEmptyOpsRoles() public {
+        _logCase("FT-OPS-02", unicode"createToken 空 opsRoles 仍成功");
+
+        _step("[Step 1] createToken with opsRoles=[]");
+        address[] memory empty = new address[](0);
+        address proxy = factory.createToken("Tesla", "TSLA", "US88160R1014", admin, empty, empty, empty);
+        ScaledToken t = ScaledToken(proxy);
+
+        assertFalse(t.hasRole(t.OPS_ROLE(), admin));
+        _step("  PASS: no OPS_ROLE holders, token still created");
+
+        _logPass();
+    }
+
+    // ── FT-OPS-03 ──
+    function test_FTOPS03_CreateTokenMultiOpsRoles() public {
+        _logCase("FT-OPS-03", unicode"createToken 多个 opsRoles");
+
+        _step("[Step 1] createToken with opsRoles=[ops1, ops2]");
+        address ops1 = makeAddr("ops1");
+        address ops2 = makeAddr("ops2");
+        address[] memory empty = new address[](0);
+        address[] memory opsArr = new address[](2);
+        opsArr[0] = ops1;
+        opsArr[1] = ops2;
+        address proxy = factory.createToken("Tesla", "TSLA", "US88160R1014", admin, empty, empty, opsArr);
+        ScaledToken t = ScaledToken(proxy);
+
+        assertTrue(t.hasRole(t.OPS_ROLE(), ops1));
+        assertTrue(t.hasRole(t.OPS_ROLE(), ops2));
+        _step("  PASS: both ops1 and ops2 have OPS_ROLE");
+
+        _logPass();
+    }
+
+    // ── FT-OPS-04 ──
+    function test_FTOPS04_CreateTokenZeroAddressOpsReverts() public {
+        _logCase("FT-OPS-04", unicode"createToken opsRoles 含零地址回滚");
+
+        _step("[Step 1] createToken with opsRoles=[address(0)]");
+        address[] memory empty = new address[](0);
+        address[] memory opsArr = new address[](1);
+        opsArr[0] = address(0);
+        vm.expectRevert(ScaledToken.ZeroAddress.selector);
+        factory.createToken("Tesla", "TSLA", "US88160R1014", admin, empty, empty, opsArr);
+        _step("  PASS: reverted ZeroAddress()");
 
         _logPass();
     }

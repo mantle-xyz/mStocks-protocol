@@ -114,7 +114,7 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB for isolated multiplier test");
         string memory sym02 = _uniqueSymbol("SP");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Split Corp", sym02, "SPT001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Split Corp", sym02, "SPT001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym02));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
@@ -194,7 +194,7 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB for isolated multiplier transfer test");
         string memory sym03 = _uniqueSymbol("XF");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Xfer Corp", sym03, "XFR001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Xfer Corp", sym03, "XFR001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym03));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
@@ -427,7 +427,7 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB for isolated test");
         string memory sym08 = _uniqueSymbol("E8");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("E2E Corp", sym08, "E2E001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("E2E Corp", sym08, "E2E001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym08));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
 
@@ -601,7 +601,7 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB, grant ISSUER, mint, distribute");
         string memory sym13 = _uniqueSymbol("RV");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Rev2 Corp", sym13, "RV2001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Rev2 Corp", sym13, "RV2001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym13));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
@@ -647,7 +647,7 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB, grant roles");
         string memory sym14 = _uniqueSymbol("SC");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Sched Corp", sym14, "SCH001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Sched Corp", sym14, "SCH001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB symbol: ", sym14));
         vm.broadcast(adminPk);
@@ -988,7 +988,7 @@ contract QAE2E is BaseQAScript {
         _step("[Step 1] deploy tokenB for isolated multiplier test");
         string memory sym23 = _uniqueSymbol("ML");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Mul Corp", sym23, "MUL001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Mul Corp", sym23, "MUL001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym23));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);

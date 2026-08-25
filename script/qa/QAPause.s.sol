@@ -247,7 +247,7 @@ contract QAPause is BaseQAScript {
         _step("[Step 1] deploy tokenB via Factory");
         _requireNotPaused();
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Test Corp", "TSTB", "TEST001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Test Corp", "TSTB", "TEST001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB: ", vm.toString(tokenBAddr)));
 
@@ -353,7 +353,7 @@ contract QAPause is BaseQAScript {
 
         _step("[Step 2] deploy tokenB (during global pause)");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("New Corp", "NEWB", "NEW001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("New Corp", "NEWB", "NEW001", admin, new address[](0), new address[](0), new address[](0));
 
         _step("[Step 3] tokenB should be paused (inherits global)");
         _assertEq(pauseManager.isTokenPaused(tokenBAddr), true, "tokenB paused");

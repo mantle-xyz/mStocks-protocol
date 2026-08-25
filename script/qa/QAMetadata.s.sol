@@ -21,7 +21,7 @@ contract QAMetadata is BaseQAScript {
         _step("[Step 1] deploy tokenB for metadata test");
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("MT");
-        address tokenBAddr = factory.createToken("Meta Corp", sym, "META001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Meta Corp", sym, "META001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
 
         _step("[Step 2] admin sets name");

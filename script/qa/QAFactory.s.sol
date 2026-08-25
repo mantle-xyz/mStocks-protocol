@@ -31,7 +31,7 @@ contract QAFactory is BaseQAScript {
         _step("[Step 2] admin deploys new token");
         string memory sym = _uniqueSymbol("FT");
         vm.broadcast(adminPk);
-        address newToken = factory.createToken("Test Corp", sym, "FT001", admin, new address[](0), new address[](0));
+        address newToken = factory.createToken("Test Corp", sym, "FT001", admin, new address[](0), new address[](0), new address[](0));
         _assertGt(uint160(newToken), 0, "newToken != address(0)");
         _step(string.concat("  newToken: ", vm.toString(newToken)));
 
@@ -108,11 +108,11 @@ contract QAFactory is BaseQAScript {
         string memory s2 = _uniqueSymbol("T2");
         string memory s3 = _uniqueSymbol("T3");
         vm.broadcast(adminPk);
-        address t1 = factory.createToken("Corp One", s1, "T001", admin, new address[](0), new address[](0));
+        address t1 = factory.createToken("Corp One", s1, "T001", admin, new address[](0), new address[](0), new address[](0));
         vm.broadcast(adminPk);
-        address t2 = factory.createToken("Corp Two", s2, "T002", admin, new address[](0), new address[](0));
+        address t2 = factory.createToken("Corp Two", s2, "T002", admin, new address[](0), new address[](0), new address[](0));
         vm.broadcast(adminPk);
-        address t3 = factory.createToken("Corp Three", s3, "T003", admin, new address[](0), new address[](0));
+        address t3 = factory.createToken("Corp Three", s3, "T003", admin, new address[](0), new address[](0), new address[](0));
 
         _step("[Step 3] verify count");
         _assertEq(factory.tokenCount(), countBefore + 3, "count +3");
@@ -135,7 +135,7 @@ contract QAFactory is BaseQAScript {
         string memory oldSym = _uniqueSymbol("SA");
         string memory newSym = _uniqueSymbol("SB");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Sym Corp", oldSym, "SYM001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Sym Corp", oldSym, "SYM001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         _assertEq(factory.tokenBySymbol(oldSym), tokenBAddr, "oldSym mapped");
 
@@ -164,7 +164,7 @@ contract QAFactory is BaseQAScript {
 
         _step(string.concat("[Step 1] deploy tokenB with symbol '", oldSym, "'"));
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Old Corp", oldSym, "OLD001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Old Corp", oldSym, "OLD001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
 
         _step(string.concat("[Step 2] only set token symbol to '", newSym, "', don't call factory.renameSymbol"));

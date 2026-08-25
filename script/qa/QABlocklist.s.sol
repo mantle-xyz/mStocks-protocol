@@ -154,7 +154,7 @@ contract QABlocklist is BaseQAScript {
         _requireNotPaused();
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("BK");
-        address tokenBAddr = factory.createToken("Block Corp", sym, "BLK001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Block Corp", sym, "BLK001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB: ", vm.toString(tokenBAddr)));
 

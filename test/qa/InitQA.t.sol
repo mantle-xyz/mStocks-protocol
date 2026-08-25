@@ -59,7 +59,7 @@ contract InitQA is BaseQA {
         _step("[Step 1] call token.initialize(...) again");
         address[] memory empty = new address[](0);
         vm.expectRevert(Initializable.InvalidInitialization.selector);
-        token.initialize("X", "X", "X", address(compliance), address(pauseManager), admin, empty, empty);
+        token.initialize("X", "X", "X", address(compliance), address(pauseManager), admin, empty, empty, empty);
         _step("  PASS: reverted (Initializable: contract is already initialized)");
 
         _logPass();
@@ -71,9 +71,8 @@ contract InitQA is BaseQA {
 
         _step("[Step 1] createToken with name = empty string");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.EmptyString.selector);
-        factory.createToken("", "NEWT", "ID001", admin, empty, empty);
+        factory.createToken("", "NEWT", "ID001", admin, empty, empty, empty);
         _step("  PASS: reverted EmptyString()");
 
         _logPass();
@@ -85,9 +84,8 @@ contract InitQA is BaseQA {
 
         _step("[Step 1] createToken with symbol = empty string");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.EmptyString.selector);
-        factory.createToken("Name", "", "ID001", admin, empty, empty);
+        factory.createToken("Name", "", "ID001", admin, empty, empty, empty);
         _step("  PASS: reverted EmptyString()");
 
         _logPass();
@@ -99,9 +97,8 @@ contract InitQA is BaseQA {
 
         _step("[Step 1] createToken with identifier = empty string");
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledTokenFactory.EmptyString.selector);
-        factory.createToken("Name", "NEWT", "", admin, empty, empty);
+        factory.createToken("Name", "NEWT", "", admin, empty, empty, empty);
         _step("  PASS: reverted EmptyString()");
 
         _logPass();
@@ -115,9 +112,8 @@ contract InitQA is BaseQA {
         address[] memory issuers = new address[](1);
         issuers[0] = address(0);
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledToken.ZeroAddress.selector);
-        factory.createToken("Name", "NEWT", "ID001", admin, issuers, empty);
+        factory.createToken("Name", "NEWT", "ID001", admin, issuers, empty, empty);
         _step("  PASS: reverted ZeroAddress()");
 
         _logPass();
@@ -131,9 +127,8 @@ contract InitQA is BaseQA {
         address[] memory mSchedulers_ = new address[](1);
         mSchedulers_[0] = address(0);
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledToken.ZeroAddress.selector);
-        factory.createToken("Name", "NEWT", "ID001", admin, empty, mSchedulers_);
+        factory.createToken("Name", "NEWT", "ID001", admin, empty, mSchedulers_, empty);
         _step("  PASS: reverted ZeroAddress()");
 
         _logPass();
@@ -155,9 +150,9 @@ contract InitQA is BaseQA {
         address[] memory mSchedulers = new address[](2);
         mSchedulers[0] = opC;
         mSchedulers[1] = opD;
+        address[] memory empty = new address[](0);
 
-        vm.prank(admin);
-        address proxy = factory.createToken("Multi", "MULT", "ID002", admin, issuers, mSchedulers);
+        address proxy = factory.createToken("Multi", "MULT", "ID002", admin, issuers, mSchedulers, empty);
         ScaledToken t = ScaledToken(proxy);
 
         assertTrue(t.hasRole(t.ISSUER_ROLE(), issuerA));
@@ -195,9 +190,8 @@ contract InitQA is BaseQA {
         address[] memory issuers = new address[](1);
         issuers[0] = eoaAddr;
         address[] memory empty = new address[](0);
-        vm.prank(admin);
         vm.expectRevert(ScaledToken.IssuerNotContract.selector);
-        factory.createToken("EOATest", "EOAT", "ID003", admin, issuers, empty);
+        factory.createToken("EOATest", "EOAT", "ID003", admin, issuers, empty, empty);
         _step(unicode"  PASS: reverted IssuerNotContract() — Factory init path also enforced");
 
         _logPass();

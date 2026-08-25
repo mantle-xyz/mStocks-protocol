@@ -13,10 +13,8 @@ contract PauseManagerQA is BaseQA {
 
     function setUp() public override {
         super.setUp();
-        vm.startPrank(admin);
         address[] memory empty = new address[](0);
-        tokenB = ScaledToken(factory.createToken("Google", "GOOG", "US02079K3059", admin, empty, empty));
-        vm.stopPrank();
+        tokenB = ScaledToken(factory.createToken("Google", "GOOG", "US02079K3059", admin, empty, empty, empty));
     }
 
     // ── PM-INIT-01 ──

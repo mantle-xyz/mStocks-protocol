@@ -211,7 +211,7 @@ contract RoleSeparationQA is BaseQA {
         vm.expectRevert(
             abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, freshAdmin, f2OpsRole)
         );
-        f2.createToken("Test", "TST", "ID001", freshAdmin, empty, empty);
+        f2.createToken("Test", "TST", "ID001", freshAdmin, empty, empty, empty);
         vm.stopPrank();
         _step("  PASS: reverted AccessControlUnauthorizedAccount(freshAdmin, OPS_ROLE)");
 
@@ -234,7 +234,7 @@ contract RoleSeparationQA is BaseQA {
 
         vm.prank(factoryOps);
         address[] memory empty = new address[](0);
-        address proxy = f2.createToken("Test", "TST", "ID001", freshAdmin, empty, empty);
+        address proxy = f2.createToken("Test", "TST", "ID001", freshAdmin, empty, empty, empty);
 
         _step("[Step 2] freshAdmin tries renameSymbol -> revert");
         bytes32 f2OpsRole = f2.OPS_ROLE();
@@ -265,7 +265,7 @@ contract RoleSeparationQA is BaseQA {
         _step("[Step 2] factoryOps createToken");
         vm.prank(factoryOps);
         address[] memory empty = new address[](0);
-        address proxy = f2.createToken("Test", "TST", "ID001", freshAdmin, empty, empty);
+        address proxy = f2.createToken("Test", "TST", "ID001", freshAdmin, empty, empty, empty);
         assertTrue(proxy != address(0));
         _step("  PASS: createToken succeeded");
 

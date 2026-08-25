@@ -37,7 +37,7 @@ contract QARole is BaseQAScript {
         _step("[Step 1] deploy a new TokenIssuer as issuer candidate");
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("RL");
-        address tokenBAddr = factory.createToken("Role Corp", sym, "ROLE001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Role Corp", sym, "ROLE001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
 
         _step("[Step 2] admin grants ISSUER_ROLE to wallet on tokenB");
@@ -56,7 +56,7 @@ contract QARole is BaseQAScript {
         _step("[Step 1] deploy tokenB, grant OPS_ROLE to userA");
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("OP");
-        address tokenBAddr = factory.createToken("Ops Corp", sym, "OPS001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Ops Corp", sym, "OPS001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
         tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, userA);
@@ -84,7 +84,7 @@ contract QARole is BaseQAScript {
         _step("[Step 1] deploy tokenB, grant ISSUER_ROLE to wallet, then revoke");
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("RV");
-        address tokenBAddr = factory.createToken("Rev Corp", sym, "REV001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Rev Corp", sym, "REV001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
         tokenB.grantRole(ISSUER_ROLE, address(vault));
@@ -198,7 +198,7 @@ contract QARole is BaseQAScript {
 
         _step("[Step 1] deploy tokenB, grant userA as second admin");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Ren Corp", _uniqueSymbol("REN"), _uniqueSymbol("REN"), admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Ren Corp", _uniqueSymbol("REN"), _uniqueSymbol("REN"), admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         _requireRole(tokenBAddr, DEFAULT_ADMIN_ROLE_HASH, admin, "admin on tokenB");
         vm.broadcast(adminPk);
@@ -220,7 +220,7 @@ contract QARole is BaseQAScript {
 
         _step("[Step 1] deploy tokenB, grant userA as second admin, then admin renounces");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("NoGov Corp", _uniqueSymbol("NOG"), _uniqueSymbol("NOG"), admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("NoGov Corp", _uniqueSymbol("NOG"), _uniqueSymbol("NOG"), admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
         tokenB.grantRole(DEFAULT_ADMIN_ROLE_HASH, userA);
@@ -283,7 +283,7 @@ contract QARole is BaseQAScript {
 
         _step("[Step 1] deploy tokenB, admin grants OPS_ROLE to userA (EOA)");
         vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("EOA Corp", "EOAB", "EOA001", admin, new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("EOA Corp", "EOAB", "EOA001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         vm.broadcast(adminPk);
         tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, userA);

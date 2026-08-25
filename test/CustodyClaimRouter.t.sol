@@ -42,7 +42,7 @@ contract CustodyClaimRouterTest is Test {
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
         factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
-        factory.grantRole(factory.OPS_ROLE(), admin); // createToken is OPS-gated (role-opt)
+        factory.grantRole(factory.OPS_ROLE(), address(this)); // createToken is OPS-gated
         usdc = new MockUSD();
         registry = PrivatizationRegistry(
             address(
@@ -59,13 +59,16 @@ contract CustodyClaimRouterTest is Test {
                 )
             )
         );
+        vm.stopPrank();
 
         address[] memory issuers = new address[](1);
         issuers[0] = address(this);
         address[] memory none = new address[](0);
-        oldToken = ScaledToken(factory.createToken("Old Co", "OLD", "US0000000001", admin, issuers, none));
-        newToken = ScaledToken(factory.createToken("New Co", "NEW", "US0000000002", admin, issuers, none));
-        cvr = ScaledToken(factory.createToken("Deal CVR", "CVR", "US0000000003", admin, issuers, none));
+        oldToken = ScaledToken(factory.createToken("Old Co", "OLD", "US0000000001", admin, issuers, none, none));
+        newToken = ScaledToken(factory.createToken("New Co", "NEW", "US0000000002", admin, issuers, none, none));
+        cvr = ScaledToken(factory.createToken("Deal CVR", "CVR", "US0000000003", admin, issuers, none, none));
+
+        vm.startPrank(admin);
 
         registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives registry lifecycle
         router.grantRole(router.OPS_ROLE(), ops);

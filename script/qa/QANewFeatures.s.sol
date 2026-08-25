@@ -630,7 +630,7 @@ contract QANewFeatures is BaseQAScript {
         vm.broadcast(adminPk);
         string memory sym = _uniqueSymbol("SYM");
         string memory code1 = _uniqueAssetCode("SC1");
-        factory.createToken("Sym Corp", sym, code1, admin, new address[](0), new address[](0));
+        factory.createToken("Sym Corp", sym, code1, admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB created: symbol=", sym));
 
         _step("[Step 2] try create another token with same symbol");
@@ -662,7 +662,7 @@ contract QANewFeatures is BaseQAScript {
         vm.broadcast(adminPk);
         string memory sym1 = _uniqueSymbol("DUP");
         string memory code = _uniqueAssetCode("DC");
-        factory.createToken("Dup Corp", sym1, code, admin, new address[](0), new address[](0));
+        factory.createToken("Dup Corp", sym1, code, admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB created: symbol=", sym1, " assetCode=", code));
 
         _step("[Step 2] try create another token with same assetCode");

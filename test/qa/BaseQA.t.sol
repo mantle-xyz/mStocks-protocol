@@ -75,23 +75,29 @@ abstract contract BaseQA is Test {
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
         factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE);
-        factory.grantRole(factory.OPS_ROLE(), admin);
+        factory.grantRole(factory.OPS_ROLE(), address(this));
+        vm.stopPrank();
 
         TokenIssuer impl = new TokenIssuer();
+        vm.startPrank(admin);
         bytes memory initData = abi.encodeWithSelector(TokenIssuer.initialize.selector, admin);
         vault = TokenIssuer(payable(address(new ERC1967Proxy(address(impl), initData))));
         vault.grantRole(vault.OPS_ROLE(), walletOps);
         vault.addApprovedRecipient(hotWallet1);
         vault.addApprovedRecipient(hotWallet2);
+        vm.stopPrank();
 
         address[] memory issuers = new address[](1);
         issuers[0] = address(vault);
         address[] memory multiplierSchedulers = new address[](1);
         multiplierSchedulers[0] = operator;
+        address[] memory opsRoles = new address[](1);
+        opsRoles[0] = tokenOps;
 
-        address proxy = factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, issuers, multiplierSchedulers);
+        address proxy = factory.createToken("Apple Inc.", "AAPL", "US0378331005", admin, issuers, multiplierSchedulers, opsRoles);
         token = ScaledToken(proxy);
-        token.grantRole(token.OPS_ROLE(), tokenOps);
+
+        vm.startPrank(admin);
 
         compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
         pauseManager.grantRole(pauseManager.PAUSE_ROLE(), pauseOps);

@@ -44,6 +44,8 @@ contract DeployQA is Test {
     function test_DPL01_StagedDeploy() public {
         _logCase("DPL-01", unicode"分阶段部署");
 
+        address factoryOps = makeAddr("factoryOps");
+
         _step("[Step 1] deployCompliance");
         vm.startPrank(deployer);
         ComplianceRegistry c = new ComplianceRegistry(deployer);
@@ -61,14 +63,17 @@ contract DeployQA is Test {
         _step("  Factory deployed");
 
         _step("[Step 4] createToken");
-        f.grantRole(f.OPS_ROLE(), deployer);
+        f.grantRole(f.OPS_ROLE(), factoryOps);
+        vm.stopPrank();
+
         address issuerContract = address(new TokenIssuer());
         address[] memory issuers = new address[](1);
         issuers[0] = issuerContract;
         address[] memory mSchedulers = new address[](0);
-        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
+        address[] memory opsRoles = new address[](0);
+        vm.prank(factoryOps);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers, opsRoles);
         assertTrue(proxy != address(0));
-        vm.stopPrank();
         _step("  PASS: 4 contracts deployed, all non-zero");
 
         _logPass();
@@ -78,18 +83,23 @@ contract DeployQA is Test {
     function test_DPL02_FullStackDeploy() public {
         _logCase("DPL-02", unicode"全栈部署");
 
+        address factoryOps = makeAddr("factoryOps");
+
         _step("[Step 1] deploy full stack in sequence (equivalent to run())");
         vm.startPrank(deployer);
         ComplianceRegistry c = new ComplianceRegistry(deployer);
         PauseRegistry pm = new PauseRegistry(deployer);
         ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
-        f.grantRole(f.OPS_ROLE(), deployer);
+        f.grantRole(f.OPS_ROLE(), factoryOps);
+        vm.stopPrank();
+
         address issuerContract = address(new TokenIssuer());
         address[] memory issuers = new address[](1);
         issuers[0] = issuerContract;
         address[] memory mSchedulers = new address[](0);
-        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
-        vm.stopPrank();
+        address[] memory opsRoles = new address[](0);
+        vm.prank(factoryOps);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers, opsRoles);
 
         assertTrue(address(c) != address(0));
         assertTrue(address(pm) != address(0));
@@ -104,18 +114,23 @@ contract DeployQA is Test {
     function test_DPL03_ConfigValuesApplied() public {
         _logCase("DPL-03", unicode"config.toml 值正确应用");
 
+        address factoryOps = makeAddr("factoryOps");
+
         _step("[Step 1] deploy token with specific name/symbol/identifier, verify");
         vm.startPrank(deployer);
         ComplianceRegistry c = new ComplianceRegistry(deployer);
         PauseRegistry pm = new PauseRegistry(deployer);
         ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
-        f.grantRole(f.OPS_ROLE(), deployer);
+        f.grantRole(f.OPS_ROLE(), factoryOps);
+        vm.stopPrank();
+
         address issuerContract = address(new TokenIssuer());
         address[] memory issuers = new address[](1);
         issuers[0] = issuerContract;
         address[] memory mSchedulers = new address[](0);
-        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
-        vm.stopPrank();
+        address[] memory opsRoles = new address[](0);
+        vm.prank(factoryOps);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers, opsRoles);
 
         ScaledToken t = ScaledToken(proxy);
         assertEq(t.name(), "Apple Inc.");
@@ -147,6 +162,7 @@ contract DeployQA is Test {
         _step("[Step 1] deploy full stack with specific role grants");
         address cOps = makeAddr("complianceOps");
         address pmOps = makeAddr("pauseOps");
+        address factoryOps = makeAddr("factoryOps");
         address issuerContract = address(new TokenIssuer());
         address oper = makeAddr("tokenOperator");
 
@@ -157,13 +173,16 @@ contract DeployQA is Test {
         pm.grantRole(pm.PAUSE_ROLE(), pmOps);
         pm.grantRole(pm.UNPAUSE_ROLE(), pmOps);
         ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
-        f.grantRole(f.OPS_ROLE(), deployer);
+        f.grantRole(f.OPS_ROLE(), factoryOps);
+        vm.stopPrank();
+
         address[] memory issuers = new address[](1);
         issuers[0] = issuerContract;
         address[] memory mSchedulers = new address[](1);
         mSchedulers[0] = oper;
-        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
-        vm.stopPrank();
+        address[] memory opsRoles = new address[](0);
+        vm.prank(factoryOps);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers, opsRoles);
 
         ScaledToken t = ScaledToken(proxy);
         assertTrue(c.hasRole(c.OPS_ROLE(), cOps));
@@ -208,17 +227,24 @@ contract DeployQA is Test {
     function test_DPL07_TokenIssuerGrantedIssuerRole() public {
         _logCase("DPL-07", unicode"TokenIssuer 获得 ISSUER_ROLE");
 
+        address factoryOps = makeAddr("factoryOps");
+
         _step("[Step 1] deploy full stack + TokenIssuer, grant ISSUER_ROLE on token");
         vm.startPrank(deployer);
         ComplianceRegistry c = new ComplianceRegistry(deployer);
         PauseRegistry pm = new PauseRegistry(deployer);
         ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
-        f.grantRole(f.OPS_ROLE(), deployer);
+        f.grantRole(f.OPS_ROLE(), factoryOps);
+        vm.stopPrank();
+
         address[] memory issuers = new address[](0);
         address[] memory mSchedulers = new address[](0);
-        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers);
+        address[] memory opsRoles = new address[](0);
+        vm.prank(factoryOps);
+        address proxy = f.createToken("Apple Inc.", "AAPL", "US0378331005", deployer, issuers, mSchedulers, opsRoles);
         ScaledToken t = ScaledToken(proxy);
 
+        vm.startPrank(deployer);
         TokenIssuer impl2 = new TokenIssuer();
         bytes memory initData2 = abi.encodeWithSelector(TokenIssuer.initialize.selector, deployer);
         TokenIssuer w = TokenIssuer(payable(address(new ERC1967Proxy(address(impl2), initData2))));
