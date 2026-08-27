@@ -10,6 +10,7 @@ import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/Upgradeabl
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledTokenBeaconDeployer} from "../src/scaledToken/ScaledTokenBeaconDeployer.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
 
@@ -46,7 +47,7 @@ contract ScaledTokenTest is Test {
     ///      TransparentUpgradeableProxy — see Deploy.s.sol) so tests can call implementation
     ///      functions directly without the transparent-admin caller restriction.
     function _deployFactory(uint256 minMultiplierNotice) internal returns (ScaledTokenFactory) {
-        ScaledTokenFactory impl = new ScaledTokenFactory();
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
         bytes memory initData = abi.encodeWithSelector(
             ScaledTokenFactory.initialize.selector,
             address(compliance),

@@ -9,6 +9,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledTokenBeaconDeployer} from "../src/scaledToken/ScaledTokenBeaconDeployer.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 
@@ -178,7 +179,9 @@ contract Deploy is Script {
         // Owner (DEFAULT_ADMIN_ROLE) = deploy admin (broadcaster / Ledger), handed over later.
         // proxyAdmin (beacon owner + factory's own ProxyAdmin owner) = final value from config;
         // no handover needed — upgrade authority never touches the broadcaster.
-        ScaledTokenFactory impl = new ScaledTokenFactory();
+        // beaconDeployer is stateless/privilege-less (see ScaledTokenBeaconDeployer) — deployed
+        // fresh per factory impl rather than tracked/reused, to avoid extra config plumbing.
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
         bytes memory initData = abi.encodeWithSelector(
             ScaledTokenFactory.initialize.selector,
             compliance,

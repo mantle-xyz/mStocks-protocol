@@ -12,6 +12,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 import {ScaledToken} from "./ScaledToken.sol";
+import {ScaledTokenBeaconDeployer} from "./ScaledTokenBeaconDeployer.sol";
 import {IComplianceRegistry} from "../complianceRegistry/IComplianceRegistry.sol";
 import {IPauseRegistry} from "../pauseRegistry/IPauseRegistry.sol";
 
@@ -31,6 +32,13 @@ contract ScaledTokenFactory is Initializable, AccessControlEnumerableUpgradeable
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
 
     UpgradeableBeacon public beacon;
+
+    /// @notice Stateless helper that performs the actual `new ScaledToken(...)` / `new
+    ///         UpgradeableBeacon(...)` CREATEs on {initialize}'s behalf — see
+    ///         {ScaledTokenBeaconDeployer} for why this is split out (EIP-170 contract size).
+    ///         Set once per factory IMPLEMENTATION in the constructor (safe to share across every
+    ///         factory proxy using this implementation: it is stateless and privilege-less).
+    ScaledTokenBeaconDeployer public immutable beaconDeployer;
 
     /// @notice Default compliance registry passed to every new token.
     address public defaultCompliance;
@@ -82,7 +90,9 @@ contract ScaledTokenFactory is Initializable, AccessControlEnumerableUpgradeable
     error CannotRenounceLastAdmin();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
+    constructor(ScaledTokenBeaconDeployer _beaconDeployer) {
+        if (address(_beaconDeployer) == address(0)) revert ZeroAddress();
+        beaconDeployer = _beaconDeployer;
         _disableInitializers();
     }
 
@@ -105,7 +115,7 @@ contract ScaledTokenFactory is Initializable, AccessControlEnumerableUpgradeable
 
         __AccessControlEnumerable_init();
 
-        beacon = new UpgradeableBeacon(address(new ScaledToken(_minMultiplierNotice)), _proxyAdmin);
+        beacon = UpgradeableBeacon(beaconDeployer.deployBeacon(_minMultiplierNotice, _proxyAdmin));
 
         defaultCompliance = _compliance;
         defaultPauseManager = _pauseManager;
