@@ -3,10 +3,13 @@ pragma solidity ^0.8.24;
 
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
-import {AccessControlEnumerable} from "@openzeppelin/contracts/access/extensions/AccessControlEnumerable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import {
+    AccessControlEnumerableUpgradeable
+} from "@openzeppelin/contracts-upgradeable/access/extensions/AccessControlEnumerableUpgradeable.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 import {ScaledToken} from "./ScaledToken.sol";
 import {IComplianceRegistry} from "../complianceRegistry/IComplianceRegistry.sol";
@@ -17,13 +20,17 @@ import {IPauseRegistry} from "../pauseRegistry/IPauseRegistry.sol";
 ///
 ///         OPS_ROLE creates tokens and renames symbol / asset code; owner (DEFAULT_ADMIN_ROLE)
 ///         grants that role and rotates the default compliance / pause registries. proxyAdmin
-///         owns the beacon and is the only address that can upgrade the implementation.
-contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
+///         owns the beacon and is the only address that can upgrade the ScaledToken implementation.
+///
+///         This factory is itself deployed behind a TransparentUpgradeableProxy. Upgrade
+///         authority lives on the auto-created ProxyAdmin (owned by `proxyAdmin`), separate from
+///         `DEFAULT_ADMIN_ROLE` (day-to-day ops) — the same split enforced on the beacon.
+contract ScaledTokenFactory is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
     /// @notice Operational role: creates tokens and renames symbol / asset code. Admin only
     ///         grants/revokes it (separation of duties — admin does not perform these directly).
     bytes32 public constant OPS_ROLE = keccak256("OPS_ROLE");
 
-    UpgradeableBeacon public immutable beacon;
+    UpgradeableBeacon public beacon;
 
     /// @notice Default compliance registry passed to every new token.
     address public defaultCompliance;
@@ -74,22 +81,29 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     error InvalidAssetCode(string assetCode);
     error CannotRenounceLastAdmin();
 
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
     /// @param _minMultiplierNotice Minimum lead time for scheduled UI-multiplier changes, baked
     ///        into the INITIAL beacon implementation (validated in the ScaledToken constructor:
     ///        non-zero and <= 365 days). Not stored on the factory: a later beacon upgrade points
     ///        at a new implementation carrying its own value, so the live figure is read from the
     ///        current implementation via {minMultiplierNotice}.
-    constructor(
+    function initialize(
         address _compliance,
         address _pauseManager,
         address _owner,
         address _proxyAdmin,
         uint256 _minMultiplierNotice
-    ) {
+    ) external initializer {
         _assertCompliance(_compliance);
         _assertPauseManager(_pauseManager);
         if (_owner == address(0)) revert ZeroAddress();
         if (_proxyAdmin == address(0)) revert ZeroAddress();
+
+        __AccessControlEnumerable_init();
 
         beacon = new UpgradeableBeacon(address(new ScaledToken(_minMultiplierNotice)), _proxyAdmin);
 
@@ -307,12 +321,12 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     }
 
     /// @notice Blocks renouncing the final DEFAULT_ADMIN_ROLE holder, which would
-    ///         permanently strip this non-upgradeable factory of admin capability
+    ///         permanently strip the factory of admin capability
     ///         (no more token creation or default-registry rotation).
     function renounceRole(bytes32 role, address callerConfirmation)
         public
         virtual
-        override(AccessControl, IAccessControl)
+        override(AccessControlUpgradeable, IAccessControl)
     {
         if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
             revert CannotRenounceLastAdmin();
@@ -321,8 +335,17 @@ contract ScaledTokenFactory is AccessControlEnumerable, ReentrancyGuard {
     }
 
     /// @notice Disallows self-grant — admin must delegate operational roles to a separate account.
-    function grantRole(bytes32 role, address account) public virtual override(AccessControl, IAccessControl) {
+    function grantRole(bytes32 role, address account)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
     }
+
+    /// @dev Storage gap for upgrade-safe inheritance. 6 vars declared above (beacon,
+    ///      defaultCompliance, defaultPauseManager, tokens, tokenBySymbol, tokenByAssetCode)
+    ///      + 44 = 50 slots reserved, matching the convention used by ScaledToken / TokenIssuer.
+    uint256[44] private __gap;
 }

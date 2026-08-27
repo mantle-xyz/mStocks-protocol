@@ -176,10 +176,29 @@ contract Deploy is Script {
         returns (ScaledTokenFactory factory)
     {
         // Owner (DEFAULT_ADMIN_ROLE) = deploy admin (broadcaster / Ledger), handed over later.
-        // proxyAdmin (beacon owner) = final value from config; no handover needed.
-        factory =
-            new ScaledTokenFactory(compliance, pauseRegistry, _deployAdmin(), cfg.proxyAdmin, cfg.minMultiplierNotice);
-        console.log("Factory:            ", address(factory));
+        // proxyAdmin (beacon owner + factory's own ProxyAdmin owner) = final value from config;
+        // no handover needed — upgrade authority never touches the broadcaster.
+        ScaledTokenFactory impl = new ScaledTokenFactory();
+        bytes memory initData = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector,
+            compliance,
+            pauseRegistry,
+            _deployAdmin(),
+            cfg.proxyAdmin,
+            cfg.minMultiplierNotice
+        );
+        factory = ScaledTokenFactory(
+            payable(address(new TransparentUpgradeableProxy(address(impl), cfg.proxyAdmin, initData)))
+        );
+
+        // Auto-created ProxyAdmin address is stored in EIP-1967 admin slot.
+        address factoryProxyAdmin = address(
+            uint160(uint256(vm.load(address(factory), 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103)))
+        );
+        console.log("Factory impl:       ", address(impl));
+        console.log("Factory proxy:      ", address(factory));
+        console.log("Factory ProxyAdmin: ", factoryProxyAdmin);
+        console.log("  (owner = cfg.proxyAdmin, sole upgrade authority)");
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
         // createToken / rename are OPS_ROLE-gated. Deliberately do NOT self-grant OPS to the deploy

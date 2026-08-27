@@ -7,6 +7,7 @@ import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/Messa
 import {IERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import {BeaconProxy} from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
+import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
@@ -41,6 +42,22 @@ contract ScaledTokenTest is Test {
     bytes32 internal PAUSE_ROLE;
     bytes32 internal UNPAUSE_ROLE;
 
+    /// @dev Factory is deployed behind an ERC1967Proxy in tests (production uses
+    ///      TransparentUpgradeableProxy — see Deploy.s.sol) so tests can call implementation
+    ///      functions directly without the transparent-admin caller restriction.
+    function _deployFactory(uint256 minMultiplierNotice) internal returns (ScaledTokenFactory) {
+        ScaledTokenFactory impl = new ScaledTokenFactory();
+        bytes memory initData = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector,
+            address(compliance),
+            address(pauseManager),
+            admin,
+            proxyAdmin,
+            minMultiplierNotice
+        );
+        return ScaledTokenFactory(payable(address(new ERC1967Proxy(address(impl), initData))));
+    }
+
     function setUp() public {
         // ISSUER_ROLE must be a contract — deploy a stub outside the prank so msg.sender
         // doesn't get spoofed during construction.
@@ -50,7 +67,7 @@ contract ScaledTokenTest is Test {
 
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
-        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
+        factory = _deployFactory(24 hours);
         // Factory self-grant is blocked, so admin delegates factory OPS to the test contract, which
         // then calls createToken (unpranked = msg.sender is this test).
         factory.grantRole(factory.OPS_ROLE(), address(this));
@@ -534,8 +551,7 @@ contract ScaledTokenTest is Test {
     ///      different notice yields tokens that enforce that window instead of 24h.
     function test_CustomNoticeFactoryEnforcesConfiguredWindow() public {
         vm.startPrank(admin);
-        ScaledTokenFactory customFactory =
-            new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 48 hours);
+        ScaledTokenFactory customFactory = _deployFactory(48 hours);
         customFactory.grantRole(customFactory.OPS_ROLE(), address(this));
         vm.stopPrank();
         address[] memory noIssuers = new address[](0);
