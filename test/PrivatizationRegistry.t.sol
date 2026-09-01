@@ -382,4 +382,125 @@ contract PrivatizationRegistryTest is Test {
         vm.expectRevert(); // AccessControlUnauthorizedAccount — admin lacks OPS_ROLE
         registry.createProgram(address(oldToken), _legs3());
     }
+
+    // ── configureProgram lock guards ─────────────────────────────────────────────
+
+    /// @dev Once any leg has been funded, oldToken/oldSupplySnapshot must not move — but other
+    ///      fields (e.g. deadline) remain adjustable.
+    function test_configureProgram_termsLockedAfterFund() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activate(id, oldToken);
+        _fundUsd(id, 300e6); // any non-zero reserve locks the terms
+
+        vm.expectRevert(PrivatizationRegistry.TermsLockedAfterFund.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0), startTime: 0, deadline: 0, oldSupplySnapshot: 999 ether, state: 0
+            })
+        );
+
+        vm.expectRevert(PrivatizationRegistry.TermsLockedAfterFund.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(newToken), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+
+        // other fields remain adjustable after funding
+        uint64 newDeadline = uint64(block.timestamp) + 30 days;
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0), startTime: 0, deadline: newDeadline, oldSupplySnapshot: 0, state: 0
+            })
+        );
+        (,, uint64 deadline,,) = registry.programs(id);
+        assertEq(deadline, newDeadline);
+    }
+
+    /// @dev Once any claim has succeeded, configureProgram refuses the whole patch — every
+    ///      claimant of a program must be settled under identical terms.
+    function test_configureProgram_lockedAfterClaimStarted() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activate(id, oldToken);
+        _fundUsd(id, 300e6);
+        _fund(id, newToken, 200 ether);
+        _fund(id, cvr, 100 ether);
+
+        vm.startPrank(alice);
+        oldToken.approve(address(registry), 50 ether);
+        registry.claim(id, 50 ether);
+        vm.stopPrank();
+
+        assertTrue(registry.claimStarted(id));
+
+        vm.expectRevert(PrivatizationRegistry.ConfigureLockedAfterClaim.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: uint64(block.timestamp) + 999 days, // even a "harmless" deadline extension
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+    }
+
+    function test_configureProgram_cannotRegressState() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activate(id, oldToken); // now Active
+
+        vm.expectRevert(PrivatizationRegistry.InvalidStateTransition.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: 0,
+                oldSupplySnapshot: 0,
+                state: uint8(PrivatizationRegistry.State.Created)
+            })
+        );
+    }
+
+    function test_configureProgram_cannotJumpToClosed() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3()); // Created
+
+        vm.expectRevert(PrivatizationRegistry.InvalidStateTransition.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: 0,
+                oldSupplySnapshot: 0,
+                state: uint8(PrivatizationRegistry.State.Closed)
+            })
+        );
+    }
+
+    function test_configureProgram_cannotReopenClosedProgram() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + 1 days));
+        vm.warp(block.timestamp + 2 days);
+        registry.sweepUnclaimed(id, custody); // now Closed
+
+        vm.expectRevert(PrivatizationRegistry.InvalidStateTransition.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: 0,
+                oldSupplySnapshot: 0,
+                state: uint8(PrivatizationRegistry.State.Active)
+            })
+        );
+    }
 }

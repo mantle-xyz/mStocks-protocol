@@ -40,6 +40,10 @@ import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 ///         ever draws from its own program's reserve, so programs never touch each other's money,
 ///         and `sweepUnclaimed` is precise and deadline-gated.
 ///
+///         `oldToken` / `oldSupplySnapshot` are frozen by {configureProgram} once any leg has been
+///         funded, and the whole patch is refused once any {claim} has succeeded — see
+///         {configureProgram} for why.
+///
 ///         A CVR-mStock is redeemed by simply registering another program whose `oldToken` is that
 ///         CVR-mStock — the deferred settlement reuses this same machinery, no bespoke contract.
 ///
@@ -81,6 +85,9 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     mapping(uint256 => Leg[]) internal _legs;
     /// @notice programId => reward token => amount still reserved to back claims.
     mapping(uint256 => mapping(address => uint256)) public reserved;
+    /// @notice programId => whether at least one {claim} has succeeded. Once true,
+    ///         {configureProgram} refuses any further patch to this program (see {configureProgram}).
+    mapping(uint256 => bool) public claimStarted;
     uint256 public programCount;
 
     event ProgramCreated(uint256 indexed programId, address indexed oldToken);
@@ -93,6 +100,9 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error NoLegs();
     error BadLeg();
     error UnknownProgram();
+    error InvalidStateTransition();
+    error TermsLockedAfterFund();
+    error ConfigureLockedAfterClaim();
     error NotActive();
     error ClaimNotStarted();
     error ClaimClosed();
@@ -147,23 +157,53 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///         supplying `{startTime, deadline, oldSupplySnapshot, state: Active}`, or extend the
     ///         deadline alone by supplying only `deadline` (everything else 0).
     ///
-    ///         OPS-only and fully trusted: the contract does NOT read the snapshot on-chain or
-    ///         verify the old supply is frozen. OPS is responsible for supplying the correct
+    ///         Three guards on top of the free-overwrite rule, all because `claim` reads `oldToken`
+    ///         and `oldSupplySnapshot` **live** rather than from a pre-committed per-account amount:
+    ///           - `oldToken` / `oldSupplySnapshot` are frozen as soon as any leg has been funded
+    ///             ({fund}) — they're the numerator token / denominator of every payout, and swapping
+    ///             either after real reward tokens are already reserved would let a later claim burn
+    ///             a different old token while dividing by a stale snapshot (or vice versa),
+    ///             mis-scaling every payout from that point on.
+    ///           - `state` must move strictly forward (`Created` → `Active`) and can never reach
+    ///             `Closed` here — that transition is {sweepUnclaimed}'s exclusively, atomically
+    ///             paired with sweeping the remaining reserve.
+    ///           - Once any {claim} has succeeded, the ENTIRE patch is refused — every claimant of a
+    ///             program must be settled under the exact same terms.
+    ///
+    ///         OPS-only and fully trusted otherwise: the contract does NOT read the snapshot on-chain
+    ///         or verify the old supply is frozen. OPS is responsible for supplying the correct
     ///         `oldSupplySnapshot` — the old token's `totalSupply()` captured AFTER freezing it
     ///         (`setMintAllowed(false)` off-registry) — as the pro-rata denominator, and for setting
     ///         `state` to `Active` when the program is ready to claim. A wrong snapshot mis-scales
-    ///         every payout, so freeze first, then snapshot.
+    ///         every payout, so freeze first, then snapshot, then fund.
     function configureProgram(uint256 programId, Program calldata program) external onlyRole(OPS_ROLE) {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
+        if (claimStarted[programId]) revert ConfigureLockedAfterClaim();
 
-        if (program.oldToken != address(0)) p.oldToken = program.oldToken;
+        if (program.oldToken != address(0) || program.oldSupplySnapshot != 0) {
+            if (_isFunded(programId)) revert TermsLockedAfterFund();
+            if (program.oldToken != address(0)) p.oldToken = program.oldToken;
+            if (program.oldSupplySnapshot != 0) p.oldSupplySnapshot = program.oldSupplySnapshot;
+        }
         if (program.startTime != 0) p.startTime = program.startTime;
         if (program.deadline != 0) p.deadline = program.deadline;
-        if (program.oldSupplySnapshot != 0) p.oldSupplySnapshot = program.oldSupplySnapshot;
-        if (program.state != 0) p.state = program.state;
+        if (program.state != 0) {
+            if (program.state <= p.state || program.state >= uint8(State.Closed)) revert InvalidStateTransition();
+            p.state = program.state;
+        }
 
         emit ProgramConfigured(programId, p.startTime, p.deadline, p.oldSupplySnapshot);
+    }
+
+    /// @dev True once any leg of `programId` has a non-zero reserve, i.e. {fund} has run at least
+    ///      once. Used to lock `oldToken` / `oldSupplySnapshot` in {configureProgram}.
+    function _isFunded(uint256 programId) internal view returns (bool) {
+        Leg[] storage legs = _legs[programId];
+        for (uint256 i = 0; i < legs.length; ++i) {
+            if (reserved[programId][legs[i].token] != 0) return true;
+        }
+        return false;
     }
 
     /// @notice Fund + reserve `amount` of `token` for `programId`. OPS-only, accounted so a claim
@@ -236,6 +276,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         }
         if (!delivered) revert NothingToDeliver(); // guard a dust claim that burns for nothing
 
+        claimStarted[programId] = true;
         emit Claimed(programId, msg.sender, amount);
     }
 
@@ -286,7 +327,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         super.renounceRole(role, callerConfirmation);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 4 vars (programs, _legs, reserved,
-    ///      programCount) + 46 = 50 slots reserved.
-    uint256[46] private __gap;
+    /// @dev Storage gap for upgrade-safe additions. 5 vars (programs, _legs, reserved,
+    ///      claimStarted, programCount) + 45 = 50 slots reserved.
+    uint256[45] private __gap;
 }
