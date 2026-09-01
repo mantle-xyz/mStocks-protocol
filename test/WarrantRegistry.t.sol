@@ -19,6 +19,7 @@ contract WarrantRegistryTest is Test {
     address internal custody = makeAddr("custody");
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
+    address internal mallory = makeAddr("mallory");
     address internal oldStock = makeAddr("oldStock");
 
     function setUp() public {
@@ -416,5 +417,149 @@ contract WarrantRegistryTest is Test {
         vm.prank(admin);
         vm.expectRevert(WarrantRegistry.CannotRenounceLastAdmin.selector);
         reg.renounceRole(0x00, admin);
+    }
+    // ── configureProgram is frozen once anyone has claimed ──────────────────────
+
+    /// @dev The hole this closes: `merkleRoot` had no lock. OPS could swap the whole holder set
+    ///      after the program was funded AND after holders had begun claiming — redirecting
+    ///      committed funds to an address absent from the original root, while `state` stayed
+    ///      `Active` and nothing on chain marked that it had happened. {PrivatizationRegistry}
+    ///      guarded the same thing with `claimStarted`; this contract did not.
+    function test_configureProgram_rootCannotBeSwappedAfterAClaim() public {
+        // Tree B puts mallory at alice's index 0 with alice's share.
+        bytes32 rootB = _hashPair(_leaf(0, mallory, 0.6e18), _leaf(1, bob, 0.3e18));
+
+        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        _fund(id, 1000e6);
+
+        vm.prank(bob);
+        reg.claim(id, 1, bob, 0.3e18, _proofBob());
+        assertTrue(reg.claimStarted(id), "a successful claim must set claimStarted");
+
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.ConfigureLockedAfterClaim.selector);
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: address(0),
+                merkleRoot: rootB,
+                settlementToken: address(0),
+                settleTotal: 0,
+                startTime: 0,
+                deadline: 0,
+                state: 0
+            })
+        );
+
+        (, bytes32 storedRoot,,,,,) = reg.programs(id);
+        assertEq(storedRoot, _root(), "root must still be the one holders were told about");
+
+        // And alice, entitled under the original root, can still claim.
+        vm.prank(alice);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertEq(usd.balanceOf(alice), 600e6);
+    }
+
+    /// @dev The lock is whole-patch, so it also blocks extending the deadline once claiming has
+    ///      started. Documented as a test because it is a real operational limit, not an accident:
+    ///      a window that has to move after the first claim needs a new program.
+    function test_configureProgram_deadlineCannotBeExtendedAfterAClaim() public {
+        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        _fund(id, 1000e6);
+
+        // Before any claim, extending is fine.
+        vm.prank(ops);
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: address(0),
+                merkleRoot: bytes32(0),
+                settlementToken: address(0),
+                settleTotal: 0,
+                startTime: 0,
+                deadline: uint64(block.timestamp + 30 days),
+                state: 0
+            })
+        );
+
+        vm.prank(bob);
+        reg.claim(id, 1, bob, 0.3e18, _proofBob());
+
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.ConfigureLockedAfterClaim.selector);
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: address(0),
+                merkleRoot: bytes32(0),
+                settlementToken: address(0),
+                settleTotal: 0,
+                startTime: 0,
+                deadline: uint64(block.timestamp + 60 days),
+                state: 0
+            })
+        );
+    }
+
+    // ── gaps closed from the self-test doc ─────────────────────────────────────
+
+    /// @dev A program that exists but was never configured has no root and no window, so it must
+    ///      not be claimable. Guards against `Created` being mistaken for claimable.
+    function test_claim_beforeConfigureReverts() public {
+        vm.prank(ops);
+        uint256 id = reg.createProgram(oldStock, address(usd));
+
+        vm.prank(alice);
+        vm.expectRevert(WarrantRegistry.NotActive.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+    }
+
+    /// @dev Anyone may submit a valid proof on an account's behalf; both the payout and the
+    ///      on-chain record must accrue to `account`, never to the submitter. The contract's own
+    ///      doc comment promises this, so it needs a test.
+    function test_claim_onBehalfOfAnotherAccount() public {
+        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        _fund(id, 1000e6);
+
+        address relayer = makeAddr("relayer");
+        vm.prank(relayer);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+
+        assertEq(usd.balanceOf(alice), 600e6, "payout goes to the account, not the submitter");
+        assertEq(usd.balanceOf(relayer), 0, "submitter receives nothing");
+        assertEq(reg.warrant(id, alice), 0.6e18, "record accrues to the account");
+        assertEq(reg.warrant(id, relayer), 0);
+    }
+
+    /// @dev A share so small that `amount * settleTotal / RATE_SCALE` floors to zero must revert
+    ///      rather than consume the index for nothing. Reachable in production: shares are
+    ///      normalized to RATE_SCALE, so a holder with a tiny fraction of the supply can round to
+    ///      zero against a small settleTotal.
+    function test_claim_dustShareRoundingToZeroReverts() public {
+        // alice's share is 1 wei of RATE_SCALE; with settleTotal 100 the payout floors to 0.
+        bytes32 root = _hashPair(_leaf(0, alice, 1), _leaf(1, bob, 0.3e18));
+        uint256 id = _createActiveProgram(root, 100, 7 days);
+        _fund(id, 100);
+
+        bytes32[] memory proof = new bytes32[](1);
+        proof[0] = _leaf(1, bob, 0.3e18);
+
+        vm.prank(alice);
+        vm.expectRevert(WarrantRegistry.NothingToSettle.selector);
+        reg.claim(id, 0, alice, 1, proof);
+
+        assertFalse(reg.isClaimed(id, 0), "a reverted claim must not consume the index");
+        assertFalse(reg.claimStarted(id), "a reverted claim must not freeze configureProgram");
+    }
+
+    /// @dev sweepUnclaimed must reject the zero address — the reserve would otherwise be burned.
+    function test_sweepUnclaimed_rejectsZeroAddress() public {
+        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        _fund(id, 1000e6);
+        vm.warp(block.timestamp + 8 days);
+
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.ZeroAddress.selector);
+        reg.sweepUnclaimed(id, address(0));
     }
 }

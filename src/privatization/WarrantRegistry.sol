@@ -82,6 +82,12 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
 
     mapping(uint256 => BitMaps.BitMap) private _claimed; // programId => merkle index bitmap
     uint256 public programCount;
+    /// @notice programId => whether at least one {claim} has succeeded. Once true,
+    ///         {configureProgram} refuses any further patch to this program (see
+    ///         {configureProgram}). Appended after `programCount` rather than grouped with the
+    ///         other mappings: this contract is already deployed behind a proxy, and inserting a
+    ///         slot would shift every variable after it.
+    mapping(uint256 => bool) public claimStarted;
 
     event ProgramCreated(uint256 indexed programId, address indexed token, address settlementToken);
     event ProgramConfigured(
@@ -102,6 +108,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     error UnknownProgram();
     error InvalidStateTransition();
     error SettlementTermsLocked();
+    error ConfigureLockedAfterClaim();
     error NotActive();
     error ClaimNotStarted();
     error ClaimClosed();
@@ -174,6 +181,17 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     ///         move an amount that was never funded in it, potentially out of another program's
     ///         balance of that same token). Before any funding, both remain freely adjustable.
     ///
+    ///         Once any {claim} has succeeded the whole patch is refused
+    ///         (`ConfigureLockedAfterClaim`), matching {PrivatizationRegistry}. Before this, the
+    ///         `merkleRoot` had no lock at all: OPS could swap the entire holder set after the
+    ///         program was funded and after holders had begun claiming, redirecting committed funds
+    ///         to addresses absent from the original root while `state` stayed `Active` and nothing
+    ///         on chain marked that it had happened.
+    ///
+    ///         The consequence to weigh: the deadline can no longer be extended once the first
+    ///         holder claims. Extending it before that is still fine, and a program whose window
+    ///         needs to move after claiming has started can only be handled by a new program.
+    ///
     ///         OPS-only and fully trusted otherwise: the contract does NOT verify the snapshot /
     ///         root off-chain provenance. OPS is responsible for supplying the correct `merkleRoot`
     ///         and `settleTotal`, and for setting `state` to `Active` when the program is ready to
@@ -181,6 +199,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     function configureProgram(uint256 programId, Program calldata program) external onlyRole(OPS_ROLE) {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
+        if (claimStarted[programId]) revert ConfigureLockedAfterClaim();
 
         if (program.token != address(0)) p.token = program.token;
         if (program.merkleRoot != bytes32(0)) p.merkleRoot = program.merkleRoot;
@@ -258,6 +277,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         _claimed[programId].set(index);
         warrant[programId][account] += amount; // on-chain queryable record
         settleReserve[programId] = reserve - out;
+        claimStarted[programId] = true; // freezes configureProgram from here on
 
         // interaction
         IERC20(p.settlementToken).safeTransfer(account, out);
@@ -307,7 +327,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         super.renounceRole(role, callerConfirmation);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 4 vars (programs, warrant, settleReserve,
-    ///      _claimed) + programCount + 45 = 50 slots reserved.
-    uint256[45] private __gap;
+    /// @dev Storage gap for upgrade-safe additions. 5 vars (programs, warrant, settleReserve,
+    ///      _claimed, claimStarted) + programCount + 44 = 50 slots reserved.
+    uint256[44] private __gap;
 }
