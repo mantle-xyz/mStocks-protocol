@@ -196,7 +196,9 @@ contract Deploy is Script {
 
         // Auto-created ProxyAdmin address is stored in EIP-1967 admin slot.
         address factoryProxyAdmin = address(
-            uint160(uint256(vm.load(address(factory), 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103)))
+            uint160(
+                uint256(vm.load(address(factory), 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103))
+            )
         );
         console.log("Factory impl:       ", address(impl));
         console.log("Factory proxy:      ", address(factory));
@@ -204,6 +206,7 @@ contract Deploy is Script {
         console.log("  (owner = cfg.proxyAdmin, sole upgrade authority)");
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
+
         // createToken / rename are OPS_ROLE-gated. Deliberately do NOT self-grant OPS to the deploy
         // admin here — that backdoor would linger until someone remembers to revoke it. Grant only
         // the configured operational addresses; deployToken must be run by a factory OPS signer.

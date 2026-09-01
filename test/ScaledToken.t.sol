@@ -1128,4 +1128,43 @@ contract ScaledTokenTest is Test {
         pauseManager.unpauseGlobally();
         assertFalse(pauseManager.isTokenPaused(address(token)));
     }
+
+    // ── burn-only BURN_ROLE (additive; ISSUER_ROLE unchanged) ─────────
+
+    function test_BurnRole_canBurnNotMint() public {
+        address burner = address(new IssuerStub());
+        bytes32 burnRole = token.BURN_ROLE();
+        vm.prank(admin);
+        token.grantRole(burnRole, burner);
+
+        // Seed the burner with tokens via the issuer.
+        vm.prank(issuer);
+        token.mint(100 ether);
+        vm.prank(issuer);
+        token.transfer(burner, 100 ether);
+
+        vm.prank(burner);
+        token.burn(40 ether);
+        assertEq(token.balanceOf(burner), 60 ether);
+
+        vm.prank(burner);
+        vm.expectRevert(ScaledToken.UnauthorizedRole.selector);
+        token.mint(1 ether);
+    }
+
+    function test_IssuerRole_stillMintsAndBurns() public {
+        // Regression: the combined ISSUER_ROLE keeps doing both.
+        vm.prank(issuer);
+        token.mint(100 ether);
+        vm.prank(issuer);
+        token.burn(30 ether);
+        assertEq(token.balanceOf(issuer), 70 ether);
+    }
+
+    function test_BurnRole_rejectEOAGrant() public {
+        bytes32 burnRole = token.BURN_ROLE();
+        vm.prank(admin);
+        vm.expectRevert(ScaledToken.IssuerNotContract.selector);
+        token.grantRole(burnRole, stranger); // EOA — BURN_ROLE must be a contract
+    }
 }
