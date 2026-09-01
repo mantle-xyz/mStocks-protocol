@@ -304,6 +304,62 @@ contract WarrantRegistryTest is Test {
         reg.configureProgram(id, _emptyPatch(uint8(WarrantRegistry.State.Active)));
     }
 
+    /// @dev Once {fund} has put a balance behind a program, settlementToken/settleTotal must not
+    ///      move — otherwise settleReserve would be denominated in a token that was never actually
+    ///      funded in that amount.
+    function test_configureProgram_settlementTermsLockedAfterFund() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 100e6); // any non-zero reserve locks the terms
+
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.SettlementTermsLocked.selector);
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: address(0),
+                merkleRoot: bytes32(0),
+                settlementToken: address(0),
+                settleTotal: 600e6,
+                startTime: 0,
+                deadline: 0,
+                state: 0
+            })
+        );
+
+        MockUSD other = new MockUSD();
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.SettlementTermsLocked.selector);
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: address(0),
+                merkleRoot: bytes32(0),
+                settlementToken: address(other),
+                settleTotal: 0,
+                startTime: 0,
+                deadline: 0,
+                state: 0
+            })
+        );
+
+        // other fields (e.g. deadline) remain freely adjustable after funding
+        vm.prank(ops);
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: address(0),
+                merkleRoot: bytes32(0),
+                settlementToken: address(0),
+                settleTotal: 0,
+                startTime: 0,
+                deadline: uint64(block.timestamp) + 30 days,
+                state: 0
+            })
+        );
+        (,,,,, uint64 deadline,) = reg.programs(id);
+        assertEq(deadline, uint64(block.timestamp) + 30 days);
+    }
+
     // ── role guards ──────────────────────────────────────────────────────────────
 
     function test_createProgram_onlyOps() public {

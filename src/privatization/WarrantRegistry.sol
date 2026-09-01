@@ -101,6 +101,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     error ZeroAmount();
     error UnknownProgram();
     error InvalidStateTransition();
+    error SettlementTermsLocked();
     error NotActive();
     error ClaimNotStarted();
     error ClaimClosed();
@@ -165,6 +166,14 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     ///         reserve — {sweepUnclaimed} only runs from `Active`) or reopen an already-`Closed`
     ///         (already swept) program.
     ///
+    ///         `settlementToken` / `settleTotal` are likewise frozen once {fund} has put any
+    ///         balance behind this program (`settleReserve[programId] != 0`). `settleReserve` is
+    ///         only ever accounted in whatever token was `settlementToken` at fund time — changing
+    ///         either afterward would desync that reserve from the token actually held (the old
+    ///         token's balance becomes stranded, and the new token's `claim`/`sweepUnclaimed` would
+    ///         move an amount that was never funded in it, potentially out of another program's
+    ///         balance of that same token). Before any funding, both remain freely adjustable.
+    ///
     ///         OPS-only and fully trusted otherwise: the contract does NOT verify the snapshot /
     ///         root off-chain provenance. OPS is responsible for supplying the correct `merkleRoot`
     ///         and `settleTotal`, and for setting `state` to `Active` when the program is ready to
@@ -175,8 +184,11 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
 
         if (program.token != address(0)) p.token = program.token;
         if (program.merkleRoot != bytes32(0)) p.merkleRoot = program.merkleRoot;
-        if (program.settlementToken != address(0)) p.settlementToken = program.settlementToken;
-        if (program.settleTotal != 0) p.settleTotal = program.settleTotal;
+        if (program.settlementToken != address(0) || program.settleTotal != 0) {
+            if (settleReserve[programId] != 0) revert SettlementTermsLocked();
+            if (program.settlementToken != address(0)) p.settlementToken = program.settlementToken;
+            if (program.settleTotal != 0) p.settleTotal = program.settleTotal;
+        }
         if (program.startTime != 0) p.startTime = program.startTime;
         if (program.deadline != 0) p.deadline = program.deadline;
         if (program.state != 0) {
