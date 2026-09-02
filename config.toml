@@ -1,49 +1,35 @@
 
-proxyAdmin = "0x0000000000000000000000000000000000000000"
+proxyAdmin = "0xa867e8a127F043dd0F2C71a33f516f9C126918Ac"
+# Beacon owner + ProxyAdmin owner  多签2 Timelock (3/6+24h)
 
 [factory]
-
-finalAdmin = "0x0000000000000000000000000000000000000000"
-opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on Factory — createToken / renameSymbol / renameAssetCode
-
+finalAdmin = "0x75FFd111A49fbeA4894A41F93F41D7071C1778D3"
+#  Factory Admin 多签1 Timelock(3/6+12h)
+opsRole = ["0x8b9c6a17d669578ff2bc1220ed6ca41f5f413b16"]    #EOA1 (RWA-Bycustody): Factory OPS 
 minMultiplierNotice = 300
 
+
 [compliance]
-finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
-opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on ComplianceRegistry  — manage blocklist + sanctions
+finalAdmin = "0x3CB2C729c86bB0d8cB31b4dA1f604a937c2FaeD4"  # 多签4 Timelock(3/6+12h): Compliance/Pause Registry Admin 
+opsRole = ["0x965c7601bfBdAf2fEE15e06D7bB64Ab81E80aD8E"]        # EOA5 (Mantle):        ComplianceRegistry OPS  
 
 [pauseRegistry]
-finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
-pauseRole = ["0x0000000000000000000000000000000000000000"]      # PAUSE_ROLE on PauseRegistry     — pause tokens / global
-unpauseRole = ["0x0000000000000000000000000000000000000000"]    # UNPAUSE_ROLE on PauseRegistry   — unpause tokens / global
+finalAdmin = "0x3CB2C729c86bB0d8cB31b4dA1f604a937c2FaeD4"  # 多签4 Timelock(3/6+12h): Compliance/Pause Registry Admin 
+pauseRole = ["0xb779e02ac9aa9c4541463f87631f9755cee85bf7"]    # EOA6 (RWA-Bycustody): PAUSE_ROLE  
+unpauseRole = ["0xdf1aa6a2Ffa1798493B5Ec8597DDF36DbBaAf347"]  #  多签5 (无TL): UNPAUSE_ROLE 
 
 [tokenIssuer]
-finalAdmin = "0x0000000000000000000000000000000000000000"
-opsRole = ["0x0000000000000000000000000000000000000000"]
-approvedRecipients = ["0x0000000000000000000000000000000000000000"]
+finalAdmin = "0xCc64C93eBEb4efAB2C5Ba4f7CFc3AB62c28F5880" # 多签3 Timelock(3/6+12h): TokenIssuer Admin 
+opsRole = ["0xe1468dd2caddd00dbd44905902b921bb4935d9ab"]  # EOA4 (RWA-Bycustody): TokenIssuer OPS (mint/burn/transfer
+approvedRecipients = ["0x8b9c6a17d669578ff2bc1220ed6ca41f5f413b16","0x1f7fdf514029ae6e1d4bdeeec7b05c5d4497c4f0","0xe1468dd2caddd00dbd44905902b921bb4935d9ab","0xe59927790e8f060b3c03fc04095fa80a3b5f6559"]  # bybit 热钱包地址
+
 
 [token]
-name = "Apple Inc."
-symbol = "AAPL"
-identifier = "US0378331005"
-finalAdmin = "0x0000000000000000000000000000000000000000"
-opsRole = ["0x0000000000000000000000000000000000000000"]         # OPS_ROLE on the token — updateName/Symbol/AssetCode + setMint/BurnAllowed
-issuers = []
-multiplierSchedulers = ["0x0000000000000000000000000000000000000000"]
+name = ""
+symbol = ""
+identifier = ""
 
-
-# [[tokens]]
-# name = "Tesla Inc."
-# symbol = "TSLA"
-# identifier = "US88160R1014"
-# admin = "0x..."                 # this token's admin (multisig)
-# issuers = []                    # usually empty; grant ISSUER_ROLE later via grantIssuer(...)
-# multiplierSchedulers = ["0x..."]
-#
-# [[tokens]]
-# name = "Amazon.com Inc."
-# symbol = "AMZN"
-# identifier = "US0231351067"
-# admin = "0x..."
-# issuers = []
-# multiplierSchedulers = ["0x..."]
+opsRole = ["0x1f7fdf514029ae6e1d4bdeeec7b05c5d4497c4f0"]         # EOA2 (RWA-Bycustody): ScaledToken OPS  
+finalAdmin = "0x75FFd111A49fbeA4894A41F93F41D7071C1778D3" # ScaledToken Admin 多签1 Timelock (3/6+12h)
+issuers = [] # 额外的tokenIssuer合约，填空
+multiplierSchedulers = ["0xf2ba844142fccaf02053795a95b1b1803e196940"]  # EOA3 (RWA-Bycustody): MULTIPLIER_SCHEDULER 
