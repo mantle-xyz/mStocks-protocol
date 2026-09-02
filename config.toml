@@ -13,7 +13,7 @@ minMultiplierNotice = 300
 finalAdmin = "0x3CB2C729c86bB0d8cB31b4dA1f604a937c2FaeD4"  # 多签4 Timelock(3/6+12h): Compliance/Pause Registry Admin 
 opsRole = ["0x965c7601bfBdAf2fEE15e06D7bB64Ab81E80aD8E"]        # EOA5 (Mantle):        ComplianceRegistry OPS  
 
-[pauseManager]
+[pauseRegistry]
 finalAdmin = "0x3CB2C729c86bB0d8cB31b4dA1f604a937c2FaeD4"  # 多签4 Timelock(3/6+12h): Compliance/Pause Registry Admin 
 pauseRole = ["0xb779e02ac9aa9c4541463f87631f9755cee85bf7"]    # EOA6 (RWA-Bycustody): PAUSE_ROLE  
 unpauseRole = ["0xdf1aa6a2Ffa1798493B5Ec8597DDF36DbBaAf347"]  #  多签5 (无TL): UNPAUSE_ROLE 
