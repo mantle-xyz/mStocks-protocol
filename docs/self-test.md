@@ -8,7 +8,7 @@
 | 合约仓库 | `mStocks-protocol` @ `feat/warrant-plus-privatization` |
 | 服务仓库 | `mstocks-merkle-service` @ `develop` |
 | 自动化基线 | 合约 **199 passed / 0 failed**;服务 **13 个包全过** |
-| 已过审计 | Blocksec、Spearbit(`docs/security-news/`)—— 覆盖 §6.1–§6.3,**不含** privatization 模块 |
+| 已过审计 | Blocksec、Spearbit(`docs/security-news/`)—— 覆盖代币层与管控层,**不含** privatization 模块,也不含本次新加的 `BURN_ROLE` |
 
 ---
 
@@ -41,26 +41,39 @@
 
 ### 在范围
 
-| 模块 | 章节 | 是否过审计 |
+| 模块 | 章节 | 说明 |
 |---|---|---|
-| ScaledToken + Factory | §6.1 | ✅ |
-| ComplianceRegistry / PauseRegistry | §6.2 | ✅ |
-| TokenIssuer | §6.3 | ✅ |
-| 链下 Merkle 服务 | §6.4 | — |
-| WarrantRegistry(warrant + 配资) | §6.5 | ❌ 本次新增 |
-| PrivatizationRegistry | §6.6 | ❌ 本次新增 |
-| CustodyClaimRouter | §6.7 | ❌ 本次新增 |
-| 端到端主流程 | §7 | — |
-
-**测试重点放在 §6.4–§6.7 和 §7** —— 前三个模块过了两轮审计且有 151 个自动化用例,
-后面四个是新的。
+| ScaledToken —— **仅 `BURN_ROLE` 增量** | §6.1 | 本次在已过审计的合约上加的新角色 |
+| 链下 Merkle 服务 | §6.4 | 本次新增 |
+| WarrantRegistry(warrant + 配资) | §6.5 | 本次新增,未过审计 |
+| PrivatizationRegistry | §6.6 | 本次新增,未过审计 |
+| CustodyClaimRouter | §6.7 | 本次新增,未过审计 |
+| 端到端主流程 | §7 | |
 
 ### 不在范围
 
-- 合约升级流程(ProxyAdmin / beacon 升级本身)
-- 前端
-- CEX 侧的对账流程(`CustodyClaimRouter` 只测到链上那一段)
-- 多链部署(当前只在 Mantle 主网)
+**已有且本分支未改动的模块不重复测。** 依据是 `git diff origin/main...HEAD -- src/`:
+
+```
+src/privatization/CustodyClaimRouter.sol     +199   新增
+src/privatization/PrivatizationRegistry.sol  +333   新增
+src/privatization/WarrantRegistry.sol        +333   新增
+src/scaledToken/ScaledToken.sol               +15/-8  ← 只加了 BURN_ROLE
+```
+
+| 移出范围 | 理由 |
+|---|---|
+| `ScaledTokenFactory` | 本分支未改动;过两轮审计 |
+| `ComplianceRegistry` / `PauseRegistry` | 同上 |
+| `TokenIssuer` | 同上;46 个自动化用例 |
+| ScaledToken 的其余部分(拆股 / permit / 元数据 / ERC-20) | 未改动;102 个自动化用例 |
+| 合约升级流程(ProxyAdmin / beacon) | |
+| 前端 | |
+| CEX 侧对账流程 | `CustodyClaimRouter` 只测到链上那一段 |
+| 多链部署 | 当前只在 Mantle 主网 |
+
+**但有一类必须测:新模块与旧模块的相互作用。** 审计和自动化都没覆盖跨模块 ——
+见 §6.5.32 / §6.6.6(被封禁或代币暂停时,claim 应当整笔失败)。
 
 ---
 
@@ -85,9 +98,10 @@ RPC:  https://rpc.mantle.xyz
 | Slipstream NPM | `0xB65EDa352dF237089Cfc9647A8Ed7C159Cc8fE1E` |
 | Slipstream factory | `0xF39196CEf9B5Bf90B23cfAE2eBeeFDf9a9F42604` |
 
-> `PrivatizationRegistry` / `CustodyClaimRouter` / `ScaledTokenFactory` /
-> `ComplianceRegistry` / `PauseRegistry` / `TokenIssuer` **在主网上还没有测试部署**。
-> 这几个模块目前只能用 `forge test` 和本地 anvil 测(§5.3)。需要主网实例的话找研发部一套。
+> **`PrivatizationRegistry` 和 `CustodyClaimRouter` 在主网上还没有测试部署** ——
+> §6.6 / §6.7 只能用 `forge test` 和本地 anvil 测(§5.3)。需要主网实例找研发部一套。
+>
+> §6.1 的 `BURN_ROLE` 也需要本地环境:主网上那个 AAPL 没有可授权的销毁方合约。
 
 ### 服务
 
@@ -194,79 +208,49 @@ forge script script/Deploy.s.sol --broadcast --rpc-url http://localhost:8545
 | `SetUIMultiplier.s.sol` | 调度拆股(§6.1.2) |
 | `DeployTimelock.s.sol` | 时间锁 |
 
-§6.1–§6.3 和 §6.6–§6.7 在主网无实例,用这个环境测。
+§6.1(需要一个可授 `BURN_ROLE` 的代币)、§6.6、§6.7 在主网无实例,用这个环境测。
+§6.4 和 §6.5 有主网实例,直接打 §3 的地址。
 
 ---
 
 ## 6. 分模块用例
 
-每张表的「自动化」列表示是否已有 forge 用例覆盖 —— 有的可以只抽验,没有的必须手工过。
+每张表的「自动化」列表示是否已有 forge 用例覆盖 —— ✅ 可以只抽验,❌ **必须手工过**。
 
-### 6.1 ScaledToken + Factory(105 个自动化用例)
+> 编号从 6.1 跳到 6.4:原来的 §6.2(ComplianceRegistry / PauseRegistry)和
+> §6.3(TokenIssuer)已按 §2 移出范围。编号保留不重排,免得用例 ID 和之前的记录对不上。
 
-**核心概念:raw vs UI**。链上余额是 raw,用户看到的是 `raw × uiMultiplier / 1e18`。
-`uiMultiplier` 初始 1e18(1.0x),拆股改它。
+### 6.1 ScaledToken —— 只测 `BURN_ROLE` 增量
 
-| # | 用例 | 预期 | 自动化 | 实测 |
-|---|---|---|---|---|
-| 6.1.1 | `toUIAmount(raw)` 随乘数变化 | `raw × mult / 1e18` | ✅ | |
-| 6.1.2 | 调度拆股 `setUIMultiplier(2e18, T)` | T 之后 UI 余额翻倍,**raw 不变** | ✅ | |
-| 6.1.3 | 通知期不足的调度 | revert —— 有最小提前期 `minMultiplierNotice` | ✅ | |
-| 6.1.4 | 通知期为 0 或超过 365 天(部署参数) | revert `InvalidNoticePeriod` | ✅ | |
-| 6.1.5 | 覆盖一个待生效的调度 | 允许,发事件 | ✅ | |
-| 6.1.6 | 非 `MULTIPLIER_SCHEDULER_ROLE` 调度 | revert | ✅ | |
-| 6.1.7 | admin 调度 | **revert** —— admin 不做运营动作 | ✅ | |
-| 6.1.8 | `ISSUER_ROLE` 授给 EOA | **revert** —— 必须是合约 | ✅ | |
-| 6.1.9 | admin 自授任何角色 | revert `SelfGrantNotAllowed` | ✅ | |
-| 6.1.10 | 最后一个 admin renounce | revert | ✅ | |
-| 6.1.11 | 非最后一个 admin renounce | 允许 | ✅ | |
-| 6.1.12 | EIP-2612 `permit` | 签名转账授权生效;nonce 递增 | ✅ | |
-| 6.1.13 | Factory 部署重复 symbol / assetCode | revert | ✅ | |
-| 6.1.14 | Factory 部署时 issuer 是 EOA | revert | ✅ | |
-| 6.1.15 | `renameSymbol` / `renameAssetCode` 顺序 | 必须先在代币上改,注册表才认 | ✅ | |
-| 6.1.16 | beacon 升级 | 已部署代币的 notice 一并更新 | ✅ | |
+本分支在 `ScaledToken` 上加了一个新角色:
 
-**手工重点**:6.1.2 要在**真实时间推进**下验(自动化用 `vm.warp`)。QA 应当调度一个
-几分钟后生效的乘数,等到时间点,确认 UI 余额确实变了而 raw 没变。
+```solidity
+bytes32 public constant BURN_ROLE = keccak256("BURN_ROLE");
+```
 
-### 6.2 ComplianceRegistry / PauseRegistry
+**只能销毁,不能铸造。** 动机是最小权限:`PrivatizationRegistry` 必须销毁用户交回的
+旧代币,但绝不应该能铸造。原来只有 `ISSUER_ROLE`(铸+销一体),给注册表授它等于给了
+无限铸造权。
+
+`ISSUER_ROLE` 的行为完全不变 —— 这是一个**增量**,不是替换。
+
+> **这是在已过审计的合约上加的新权限,两轮审计都没覆盖它。**
 
 | # | 用例 | 预期 | 自动化 | 实测 |
 |---|---|---|---|---|
-| 6.2.1 | 封禁地址后转账 | revert | ✅ | |
-| 6.2.2 | 封禁名单**按代币隔离** | A 代币封的人在 B 代币能转 | ✅ | |
-| 6.2.3 | 全局制裁 | 所有代币都禁 | ✅ | |
-| 6.2.4 | `clearSanctions` | O(1) 清空 | ✅ | |
-| 6.2.5 | 重复封禁同一地址 | 事件和状态都去重 | ✅ | |
-| 6.2.6 | `replaceSanctions` 传空列表 | revert | ✅ | |
-| 6.2.7 | 单代币暂停后转账 | revert | ✅ | |
-| 6.2.8 | 全局暂停 | 所有代币转账 revert | ✅ | |
-| 6.2.9 | 未暂停时 unpause | revert | ✅ | |
-| 6.2.10 | unpause 后恢复转账 | 成功 | ✅ | |
-| 6.2.11 | 非 `OPS_ROLE` 操作名单/暂停 | revert | ✅ | |
+| 6.1.1 | `BURN_ROLE` 持有者 `burn` | 成功 | ✅ `test_BurnRole_canBurnNotMint` | |
+| 6.1.2 | `BURN_ROLE` 持有者 `mint` | revert `UnauthorizedRole` | ✅ 同上 | |
+| 6.1.3 | `ISSUER_ROLE` 仍能铸+销 | 两个都成功(回归) | ✅ `test_IssuerRole_stillMintsAndBurns` | |
+| 6.1.4 | 把 `BURN_ROLE` 授给 **EOA** | revert `IssuerNotContract` | ✅ `test_BurnRole_rejectEOAGrant` | |
+| 6.1.5 | `burnAllowed = false` 时 `BURN_ROLE` 销毁 | revert `BurnNotAllowed` | ❌ **无用例** | |
+| 6.1.6 | 撤销 `BURN_ROLE` 后再销毁 | revert `UnauthorizedRole` | ❌ **无用例** | |
+| 6.1.7 | admin 自授 `BURN_ROLE` | revert `SelfGrantNotAllowed` | ❌ **无用例** | |
+| 6.1.8 | 既无 `ISSUER_ROLE` 也无 `BURN_ROLE` 的合约销毁 | revert `UnauthorizedRole` | ❌ **无用例** | |
 
-**手工重点**:6.2.1 和 6.2.7 要验**被封禁/暂停期间 §6.5 的 claim 也会失败**
-—— 跨模块的相互作用自动化里没覆盖。
+6.1.5–6.1.8 **必须手工过** —— 现有 3 个用例只覆盖了主路径和 EOA 那条。
 
-### 6.3 TokenIssuer(46 个自动化用例)
-
-托管式铸销:只能铸给**白名单收款人**或自己。
-
-| # | 用例 | 预期 | 自动化 | 实测 |
-|---|---|---|---|---|
-| 6.3.1 | OPS 铸给白名单收款人 | 成功,发 `Minted` | ✅ | |
-| 6.3.2 | OPS 铸给非白名单地址 | revert `RecipientNotApproved` | ✅ | |
-| 6.3.3 | OPS 铸给自己(库存) | 成功 | ✅ | |
-| 6.3.4 | **admin 铸/销** | **revert** —— admin 不做运营动作 | ✅ | |
-| 6.3.5 | 加白名单:重复 / 零地址 / 自己 | 全部 revert | ✅ | |
-| 6.3.6 | 移除白名单后铸 | revert | ✅ | |
-| 6.3.7 | 暂停后铸/销 | revert | ✅ | |
-| 6.3.8 | issuer 没有代币的 `ISSUER_ROLE` | **原子** revert,无部分状态 | ✅ | |
-| 6.3.9 | 代币 `setMintAllowed(false)` 后铸 | revert | ✅ | |
-| 6.3.10 | 从非白名单地址销 | revert `FromNotApproved` | ✅ | |
-| 6.3.11 | 非 admin `withdraw` | revert | ✅ | |
-| 6.3.12 | issuer 收原生币 | 拒收 | ✅ | |
-| 6.3.13 | `initialize` 二次调用 | revert | ✅ | |
+6.1.4 的意义:`_grantRole` 的"必须是合约"守卫从只管 `ISSUER_ROLE` 扩到了也管
+`BURN_ROLE`。一个 EOA 拿到销毁权就等于一个可以烧别人交回的代币的私钥。
 
 ### 6.4 链下 Merkle 服务
 
@@ -504,6 +488,12 @@ root 里不存在的地址,原受益人 `InvalidProof`,而 `state` 仍是 `Activ
 | 6.5.30 | `createProgram(token, 0x0)` + configure(root, Active) | 成功,root 上链存证 | ✅ | |
 | 6.5.31 | 对它 claim | revert `NotConvertibleYet` | ✅ | |
 
+#### 跨模块相互作用(审计和自动化都没覆盖)
+
+| # | 用例 | 预期 | 自动化 | 实测 |
+|---|---|---|---|---|
+| 6.5.32 | 结算资产被暂停 / 领取人被封禁时 claim | 整笔 revert,**index 不消耗** | ❌ | |
+
 配资只做存证,永不注资、永不 claim。快照侧用 `kind: PROGRAM_KIND_LEVERAGE` + `ratio`
 (不是 `total`)。
 
@@ -599,7 +589,8 @@ CEX 热钱包只能 `transfer`、不能调合约,所以需要这个路由。
 | 8.8 | `treeUri`(S3 直连)可能 403 | bucket 的对象读策略未确认。改用 `GET /tree`(带 key) |
 | 8.9 | "零值 = 保留原值" | 无法把 `settleTotal` / `startTime` / `deadline` 改回 0 |
 | 8.10 | `docs/corporate-actions-td.md` 缺失 | 两个契约的注释引用了它 |
-| 8.11 | §6.1–6.3、§6.6–6.7 主网无实例 | 只能本地 anvil 测(§5.3) |
+| 8.11 | §6.1、§6.6、§6.7 主网无实例 | 只能本地 anvil 测(§5.3) |
+| 8.12 | `BURN_ROLE` 未过审计 | §6.1。在已审计合约上新加的权限,4 个用例缺失 |
 
 ---
 
