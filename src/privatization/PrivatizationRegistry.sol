@@ -85,8 +85,9 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     mapping(uint256 => Leg[]) internal _legs;
     /// @notice programId => reward token => amount still reserved to back claims.
     mapping(uint256 => mapping(address => uint256)) public reserved;
-    /// @notice programId => whether at least one {claim} has succeeded. Once true,
-    ///         {configureProgram} refuses any further patch to this program (see {configureProgram}).
+    /// @notice programId => whether at least one {claim} has succeeded. Informational:
+    ///         {configureProgram} is gated on the program still being Created, not on
+    ///         this, so it freezes nothing.
     mapping(uint256 => bool) public claimStarted;
     uint256 public programCount;
 
@@ -102,7 +103,13 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error UnknownProgram();
     error InvalidStateTransition();
     error TermsLockedAfterFund();
-    error ConfigureLockedAfterClaim();
+    error ConfigureLockedOnceActive();
+    /// @notice {fund} ran before {configureProgram} set `oldSupplySnapshot`. Funding locks
+    ///         the snapshot, so this order would leave the claim denominator at zero
+    ///         permanently and every claim reverting.
+    error SupplySnapshotNotSet();
+    /// @notice A program cannot become Active until every leg's reserve covers its `total`.
+    error LegNotFullyFunded(address token, uint256 reserved, uint256 total);
     error NotActive();
     error ClaimNotStarted();
     error ClaimClosed();
@@ -179,7 +186,14 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     function configureProgram(uint256 programId, Program calldata program) external onlyRole(OPS_ROLE) {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
-        if (claimStarted[programId]) revert ConfigureLockedAfterClaim();
+        // Created is the only configurable state. Active means the terms are published and
+        // the reserves committed, so everything this exposes is something a holder already
+        // relies on; Closed means the program is history.
+        //
+        // This subsumes the previous "locked once a claim landed" rule — claiming requires
+        // Active — and covers what that rule could not: a program nobody ever claims, whose
+        // deadline stayed shrinkable and whose snapshot stayed rewritable indefinitely.
+        if (p.state != uint8(State.Created)) revert ConfigureLockedOnceActive();
 
         if (program.oldToken != address(0) || program.oldSupplySnapshot != 0) {
             if (_isFunded(programId)) revert TermsLockedAfterFund();
@@ -190,6 +204,17 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         if (program.deadline != 0) p.deadline = program.deadline;
         if (program.state != 0) {
             if (program.state <= p.state || program.state >= uint8(State.Closed)) revert InvalidStateTransition();
+            // Active means claimable, so it has to mean funded — on every leg. A holder
+            // whose claim reverts InsufficientReserved cannot tell an under-funded program
+            // from a broken one, and a basket that is short on one leg pays out on none of
+            // them, since claim() delivers all legs or reverts.
+            if (program.state == uint8(State.Active)) {
+                Leg[] storage legs = _legs[programId];
+                for (uint256 i = 0; i < legs.length; ++i) {
+                    uint256 r = reserved[programId][legs[i].token];
+                    if (r < legs[i].total) revert LegNotFullyFunded(legs[i].token, r, legs[i].total);
+                }
+            }
             p.state = program.state;
         }
 
@@ -214,6 +239,12 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         if (s == uint8(State.None)) revert UnknownProgram();
         if (s == uint8(State.Closed)) revert ClaimClosed();
         if (token == address(0)) revert ZeroAddress();
+        // oldToken and the legs are fixed at creation, but oldSupplySnapshot — the claim
+        // denominator — is not, and funding locks it. Without this a caller could fund
+        // straight after creating, stranding the snapshot at zero: previewClaim would
+        // return zeros and every claim would revert on the division. The program would
+        // look configured, hold the reserves, and deliver nothing.
+        if (programs[programId].oldSupplySnapshot == 0) revert SupplySnapshotNotSet();
         if (amount == 0) revert ZeroAmount();
         reserved[programId][token] += amount;
         IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
@@ -276,6 +307,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         }
         if (!delivered) revert NothingToDeliver(); // guard a dust claim that burns for nothing
 
+        // Informational only now: configureProgram locks at Active, and claiming requires
+        // Active, so this can no longer be the thing that freezes anything.
         claimStarted[programId] = true;
         emit Claimed(programId, msg.sender, amount);
     }

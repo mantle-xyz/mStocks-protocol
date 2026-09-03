@@ -112,13 +112,14 @@ contract CustodyClaimRouterTest is Test {
         vm.prank(tokenOps);
         oldToken.setMintAllowed(false);
 
-        // configure: OPS supplies the frozen 100e18 snapshot + window + state=Active
+        // configure: OPS supplies the frozen 100e18 snapshot + window, staying Created —
+        // the registry will not open a program until every leg is funded.
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
             oldToken: address(0),
             startTime: uint64(block.timestamp),
             deadline: uint64(block.timestamp + 7 days),
             oldSupplySnapshot: 100 ether,
-            state: uint8(PrivatizationRegistry.State.Active)
+            state: 0
         });
         registry.configureProgram(programId, cfg);
 
@@ -126,6 +127,18 @@ contract CustodyClaimRouterTest is Test {
         _fundUsd(300e6);
         _fund(newToken, 200 ether);
         _fund(cvr, 100 ether);
+
+        // ...and only then open it.
+        registry.configureProgram(
+            programId,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: 0,
+                oldSupplySnapshot: 0,
+                state: uint8(PrivatizationRegistry.State.Active)
+            })
+        );
     }
 
     function _fund(ScaledToken t, uint256 amount) internal {
