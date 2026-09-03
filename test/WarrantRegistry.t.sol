@@ -10,7 +10,7 @@ import {MockUSD} from "./mocks/MockUSD.sol";
 import {MockComplianceGuardedToken, MockUnguardedToken} from "./mocks/MockComplianceGuardedToken.sol";
 
 /// @notice Tests for WarrantRegistry: record-date snapshot + Merkle, single-step
-///         "claim = record + settle". 配资 reuses the contract as a record anchor only
+///         "claim = record + settle". Leverage records reuse the contract as a record anchor only
 ///         (createProgram + configureProgram, never claimed). The whole program lifecycle
 ///         (create/configure/fund/sweep) is OPS-driven; admin only manages roles.
 contract WarrantRegistryTest is Test {
@@ -277,7 +277,7 @@ contract WarrantRegistryTest is Test {
         assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Active));
     }
 
-    /// 配资 records never settle and never fund, so the funding requirement must not
+    /// Leverage records never settle and never fund, so the funding requirement must not
     /// apply to them — settleTotal == 0 is the marker.
     function test_configureProgram_recordOnlyProgramGoesActiveUnfunded() public {
         vm.startPrank(ops);
@@ -756,7 +756,7 @@ contract WarrantRegistryTest is Test {
         assertEq(reg.settleReserve(id), 0);
     }
 
-    // ── 配资: record anchor only — createProgram + configureProgram, no claim/fund ─────
+    // ── leverage: record anchor only — createProgram + configureProgram, no claim/fund ─────
 
     function test_leverage_recordAnchorOnly() public {
         vm.startPrank(ops);
@@ -780,7 +780,7 @@ contract WarrantRegistryTest is Test {
         assertEq(settlementToken, address(0), "no settlement - record only");
         assertEq(reg.warrant(id, alice), 0, "nobody claims leverage record");
 
-        // No claim path: claiming reverts (not convertible), consistent with 配资 having no claim.
+        // No claim path: claiming reverts (not convertible), consistent with leverage having no claim.
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.NotConvertibleYet.selector);
         reg.claim(id, 0, alice, 0.6e18, _proofAlice());

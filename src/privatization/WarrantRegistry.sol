@@ -26,8 +26,8 @@ interface IComplianceGuardedToken {
     function compliance() external view returns (IComplianceRegistry);
 }
 
-/// @notice Registry for warrant issuance and 配资 (leverage) records — see [TD] 私有化退市 +
-///         Warrant 发放 + 配资 合约技术设计, Part II.
+/// @notice Registry for warrant issuance and leverage records — see [TD] Privatisation delisting +
+///         warrant issuance + leverage records, Part II.
 ///
 ///         Warrants are a rights-offering-style entitlement whose per-account amount is fixed at a
 ///         **record-date snapshot** and published as a Merkle root. There is no on-chain option
@@ -45,7 +45,7 @@ interface IComplianceGuardedToken {
 ///         reverts so the holder simply retries once the operator has funded and configured it via
 ///         {configureProgram} — the proof stays valid and the Merkle index is not consumed.
 ///
-///         配资 (leverage) reuses this contract only as an on-chain record anchor: OPS
+///         Leverage records reuse this contract only as an on-chain record anchor: OPS
 ///         `createProgram`s + `configureProgram`s the credit-line snapshot root and nobody claims
 ///         — the actual leverage is used / settled elsewhere. Such a program simply keeps
 ///         `settlementToken` zero and is never funded or claimed.
@@ -79,7 +79,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     struct Program {
         address token; // original mStocks address (informational — which stock this program covers)
         bytes32 merkleRoot; // record-date snapshot: leaf(index, account, amount)
-        address settlementToken; // convertible asset (e.g. USDC); zero = not-yet-convertible / 配资 record-only
+        address settlementToken; // convertible asset (e.g. USDC); zero = not-yet-convertible / leverage record-only
         uint256 settleTotal; // total settlement asset backing this program's warrant amounts
         uint64 startTime; // claims accepted from this timestamp (inclusive)
         uint64 deadline; // claims accepted up to and including this timestamp
@@ -166,7 +166,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     // ── program lifecycle ─────────────────────────────────────────────────────
 
     /// @notice Register a program. OPS-only. `settlementToken` may be zero — for a warrant whose
-    ///         milestone hasn't resolved yet (set later via {configureProgram}), or for a 配资
+    ///         milestone hasn't resolved yet (set later via {configureProgram}), or for a leverage
     ///         record whose root is anchored on-chain but never settled here. The program starts in
     ///         `Created` — it becomes claimable only after {configureProgram}.
     function createProgram(address token, address settlementToken)
@@ -233,7 +233,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         // relies on; Closed means the program is history.
         //
         // This subsumes the previous "locked once a claim landed" rule — claiming requires
-        // Active — and covers what that rule could not: a program nobody ever claims. 配资
+        // Active — and covers what that rule could not: a program nobody ever claims. Leverage
         // records are exactly that, and their root is their whole output, so under the old
         // rule it stayed editable indefinitely.
         if (p.state != uint8(State.Created)) revert ConfigureLockedOnceActive();
@@ -253,7 +253,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
             // reverts InsufficientReserved cannot tell an under-funded program from a
             // broken one, and the operator only finds out from the complaint.
             //
-            // settleTotal == 0 is the 配资 record-only case: it never settles and never
+            // settleTotal == 0 is the leverage record-only case: it never settles and never
             // funds, so it is exempt rather than blocked.
             //
             // The bound is settleTotal, which is exact when the tree's amounts sum to

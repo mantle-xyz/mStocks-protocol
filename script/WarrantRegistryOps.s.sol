@@ -7,15 +7,15 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {WarrantRegistry} from "../src/privatization/WarrantRegistry.sol";
 
-/// @notice Deploy + operate the upgradeable WarrantRegistry ([TD] 私有化退市 + Warrant 发放 + 配资
-///         合约技术设计, Part II). Deployed behind a TransparentUpgradeableProxy, like TokenIssuer.
+/// @notice Deploy + operate the upgradeable WarrantRegistry ([TD] Privatisation delisting + warrant issuance +
+///         leverage records, Part II). Deployed behind a TransparentUpgradeableProxy, like TokenIssuer.
 ///
 ///         Warrant flow: deploy → createProgram(token, settlementToken) → configureProgram(root +
 ///         settleTotal + window + state=Active) → fund → users claim (off-chain proofs against the
 ///         root). If settlement resolves later: createProgram with settlementToken=0, then
 ///         configureProgram again once ready (any 0 field in the patch keeps the stored value).
 ///
-///         配资 (leverage): deploy + createProgram(token, 0) + configureProgram(root + window +
+///         Leverage: deploy + createProgram(token, 0) + configureProgram(root + window +
 ///         state=Active, settlementToken/settleTotal left 0) to anchor the credit-line root
 ///         on-chain; no fund / claim (settled elsewhere).
 ///
@@ -38,7 +38,7 @@ contract WarrantRegistryOps is Script {
     }
 
     /// @notice Register a program. `settlementToken` may be 0 (set later via configureProgram, or
-    ///         leave 0 for a 配资 record anchor). Broadcaster must hold OPS_ROLE.
+    ///         leave 0 for a leverage record anchor). Broadcaster must hold OPS_ROLE.
     function createProgram(address registry, address token, address settlementToken)
         external
         returns (uint256 programId)
