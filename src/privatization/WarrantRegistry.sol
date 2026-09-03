@@ -13,6 +13,18 @@ import {BitMaps} from "@openzeppelin/contracts/utils/structs/BitMaps.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IComplianceRegistry} from "../complianceRegistry/IComplianceRegistry.sol";
+
+/// @notice The compliance registry a token enforces, as exposed by
+///         {ComplianceGuardUpgradeable}'s public `compliance` variable.
+///
+/// @dev Declared here rather than alongside {IComplianceRegistry} because it is the
+///      *token's* ABI, not the registry's: the registry answers `checkIsCompliant`, the
+///      token says which registry to ask. This contract is the only thing that needs to
+///      ask, so a one-method interface local to it beats a shared file.
+interface IComplianceGuardedToken {
+    function compliance() external view returns (IComplianceRegistry);
+}
 
 /// @notice Registry for warrant issuance and 配资 (leverage) records — see [TD] 私有化退市 +
 ///         Warrant 发放 + 配资 合约技术设计, Part II.
@@ -120,6 +132,11 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     error InsufficientReserved();
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
+    /// @notice The program's token does not expose a compliance registry, so whether an
+    ///         account may be paid cannot be established. Recoverable: no claim can have
+    ///         succeeded, so `claimStarted` is false and {configureProgram} can still
+    ///         repoint `token`.
+    error ComplianceUnavailable(address token);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -267,6 +284,11 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
         if (!MerkleProof.verify(proof, p.merkleRoot, leaf)) revert InvalidProof();
 
+        // Checked after the proof so an unauthenticated caller cannot use this entry point
+        // to probe the registry, and before any effect so a blocked account leaves its
+        // index unconsumed and can claim once unblocked.
+        _requireCompliant(p.token, account);
+
         if (p.settlementToken == address(0)) revert NotConvertibleYet();
         uint256 out = Math.mulDiv(amount, p.settleTotal, RATE_SCALE);
         if (out == 0) revert NothingToSettle();
@@ -282,6 +304,35 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         // interaction
         IERC20(p.settlementToken).safeTransfer(account, out);
         emit Claimed(programId, index, account, amount, out);
+    }
+
+    /// @notice Reverts unless `account` passes the compliance check the program's token
+    ///         enforces on its own transfers.
+    ///
+    ///         The registry is read from `token` rather than configured here on purpose. A
+    ///         warrant is an entitlement derived from holding that security, so it has to
+    ///         honour the same blocklist the security does; a second configured address
+    ///         would be a second thing to get wrong, and getting it wrong means paying an
+    ///         account the token itself refuses.
+    ///
+    ///         `account`, not `_msgSender()`: {claim} accepts a proof on any account's
+    ///         behalf and pays `account`, so checking the caller would let a clean relayer
+    ///         collect on behalf of a blocked one.
+    ///
+    /// @dev Fails closed. If `token` does not expose a registry the answer is unknown, and
+    ///      settling a security's entitlement to an account whose standing cannot be
+    ///      established is the case this check exists to prevent. Only the `compliance()`
+    ///      lookup is caught — a registry that reverts with `UserBlocked` or
+    ///      `UserSanctioned` propagates, so the reason reaches the caller.
+    function _requireCompliant(address token, address account) private view {
+        IComplianceRegistry registry;
+        try IComplianceGuardedToken(token).compliance() returns (IComplianceRegistry c) {
+            registry = c;
+        } catch {
+            revert ComplianceUnavailable(token);
+        }
+        if (address(registry) == address(0)) revert ComplianceUnavailable(token);
+        registry.checkIsCompliant(token, account);
     }
 
     /// @notice After the deadline, sweep the program's remaining (unclaimed) settlement reserve to

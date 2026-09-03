@@ -4,7 +4,10 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {WarrantRegistry} from "../src/privatization/WarrantRegistry.sol";
+import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
+import {IComplianceRegistry} from "../src/complianceRegistry/IComplianceRegistry.sol";
 import {MockUSD} from "./mocks/MockUSD.sol";
+import {MockComplianceGuardedToken, MockUnguardedToken} from "./mocks/MockComplianceGuardedToken.sol";
 
 /// @notice Tests for WarrantRegistry: record-date snapshot + Merkle, single-step
 ///         "claim = record + settle". 配资 reuses the contract as a record anchor only
@@ -13,6 +16,8 @@ import {MockUSD} from "./mocks/MockUSD.sol";
 contract WarrantRegistryTest is Test {
     WarrantRegistry internal reg;
     MockUSD internal usd;
+    ComplianceRegistry internal comp;
+    MockComplianceGuardedToken internal stock;
 
     address internal admin = makeAddr("admin");
     address internal ops = makeAddr("ops");
@@ -20,10 +25,23 @@ contract WarrantRegistryTest is Test {
     address internal alice = makeAddr("alice");
     address internal bob = makeAddr("bob");
     address internal mallory = makeAddr("mallory");
-    address internal oldStock = makeAddr("oldStock");
+    /// The program's token. A real one is compliance-guarded, and WarrantRegistry reads
+    /// its registry to decide whether an account may be paid, so an EOA here would only
+    /// prove the contract works against a token that cannot exist in production.
+    address internal oldStock;
 
     function setUp() public {
         usd = new MockUSD();
+        // The real registry, not a mock: these tests are as much about the integration
+        // — that UserBlocked and UserSanctioned reach the claimer — as about the branch.
+        comp = new ComplianceRegistry(admin);
+        // The role is read first: vm.prank applies to the next call, and comp.OPS_ROLE()
+        // would otherwise be it.
+        bytes32 compOps = comp.OPS_ROLE();
+        vm.prank(admin);
+        comp.grantRole(compOps, ops);
+        stock = new MockComplianceGuardedToken(IComplianceRegistry(address(comp)));
+        oldStock = address(stock);
         reg = WarrantRegistry(
             address(
                 new ERC1967Proxy(address(new WarrantRegistry()), abi.encodeCall(WarrantRegistry.initialize, (admin)))
@@ -103,6 +121,227 @@ contract WarrantRegistryTest is Test {
         assertEq(usd.balanceOf(alice), 300e6, "settled in U");
         assertEq(reg.settleReserve(id), 200e6, "reserve drawn down");
         assertTrue(reg.isClaimed(id, 0));
+    }
+
+    // ── compliance ───────────────────────────────────────────────────────────────
+    // A warrant is an entitlement derived from holding the security, so it has to honour
+    // the same blocklist the security does. The registry is read off the program's token
+    // rather than configured on this contract, so there is no second address that can
+    // drift out of step with the one the token enforces.
+
+    function _blockAlice() internal {
+        address[] memory who = new address[](1);
+        who[0] = alice;
+        vm.prank(ops);
+        comp.blockUsers(oldStock, who);
+    }
+
+    function _sanctionAlice() internal {
+        address[] memory who = new address[](1);
+        who[0] = alice;
+        vm.prank(ops);
+        comp.sanctionUsers(who);
+    }
+
+    /// Token-level block: the reason has to reach the caller, not be flattened into a
+    /// generic failure, because "blocked for this token" and "globally sanctioned" are
+    /// resolved by different desks.
+    function test_claim_blockedAccountReverts() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+        _blockAlice();
+
+        vm.prank(alice);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+    }
+
+    function test_claim_sanctionedAccountReverts() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+        _sanctionAlice();
+
+        vm.prank(alice);
+        vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+    }
+
+    /// The check is on `account`, not the caller. claim() accepts a proof on anyone's
+    /// behalf and pays `account`, so checking the caller would let a clean relayer collect
+    /// for a blocked one — which is the whole of the bypass.
+    function test_claim_blockedAccountCannotBeClaimedForByACleanRelayer() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+        _blockAlice();
+
+        // bob is not blocked and is a legitimate claimer of his own leaf.
+        vm.prank(bob);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+    }
+
+    /// Blocking one account must not close the program for everyone else.
+    function test_claim_blockOnOneAccountDoesNotAffectAnother() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+        _blockAlice();
+
+        vm.prank(bob);
+        reg.claim(id, 1, bob, 0.3e18, _proofBob());
+        assertEq(usd.balanceOf(bob), 150e6);
+    }
+
+    /// A block is a hold, not a forfeiture: the rejected claim must leave its index
+    /// unconsumed so the same leaf still settles once compliance clears. If the revert
+    /// landed after `_claimed.set`, the entitlement would be destroyed by a hold.
+    function test_claim_blockedThenUnblockedStillSettles() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+        _blockAlice();
+
+        vm.prank(alice);
+        vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+
+        assertFalse(reg.isClaimed(id, 0), "a rejected claim must not consume the index");
+        assertEq(reg.warrant(id, alice), 0, "nothing recorded");
+        assertEq(reg.settleReserve(id), 500e6, "reserve untouched");
+        assertFalse(reg.claimStarted(id), "a rejected claim must not lock configureProgram");
+
+        address[] memory who = new address[](1);
+        who[0] = alice;
+        vm.prank(ops);
+        comp.unblockUsers(oldStock, who);
+
+        vm.prank(alice);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertEq(usd.balanceOf(alice), 300e6);
+        assertTrue(reg.isClaimed(id, 0));
+    }
+
+    /// A block scoped to a different token must not reach this program. The registry is
+    /// keyed (token, user), and passing the wrong token here would either block accounts
+    /// that are clear or clear accounts that are blocked.
+    function test_claim_blockOnADifferentTokenDoesNotApply() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+
+        address[] memory who = new address[](1);
+        who[0] = alice;
+        vm.prank(ops);
+        comp.blockUsers(address(usd), who); // blocked for the settlement asset, not the stock
+
+        vm.prank(alice);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertEq(usd.balanceOf(alice), 300e6);
+    }
+
+    /// Fails closed. A token with no registry means the account's standing is unknown, and
+    /// paying out a security's entitlement to an account that cannot be checked is the
+    /// case this guard exists to prevent.
+    function test_claim_tokenWithoutAComplianceRegistryFailsClosed() public {
+        MockUnguardedToken plain = new MockUnguardedToken();
+
+        vm.startPrank(ops);
+        uint256 id = reg.createProgram(address(plain), address(usd));
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: address(0),
+                merkleRoot: _root(),
+                settlementToken: address(0),
+                settleTotal: 500e6,
+                startTime: uint64(block.timestamp),
+                deadline: uint64(block.timestamp + 7 days),
+                state: uint8(WarrantRegistry.State.Active)
+            })
+        );
+        vm.stopPrank();
+        _fund(id, 500e6);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(WarrantRegistry.ComplianceUnavailable.selector, address(plain)));
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+    }
+
+    /// Same, for a token whose registry address is zero — what an uninitialized token
+    /// proxy looks like from the outside. `compliance()` returns rather than reverts here,
+    /// so it is a distinct branch from the case above.
+    function test_claim_tokenWithAZeroComplianceRegistryFailsClosed() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+        stock.setCompliance(IComplianceRegistry(address(0)));
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(WarrantRegistry.ComplianceUnavailable.selector, oldStock));
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+    }
+
+    /// The bricked state is recoverable, which is what makes failing closed acceptable:
+    /// no claim can have succeeded, so `claimStarted` is false and configureProgram can
+    /// still repoint `token`.
+    function test_claim_aBrickedProgramIsRecoverableByRepointingTheToken() public {
+        MockUnguardedToken plain = new MockUnguardedToken();
+
+        vm.startPrank(ops);
+        uint256 id = reg.createProgram(address(plain), address(usd));
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: address(0),
+                merkleRoot: _root(),
+                settlementToken: address(0),
+                settleTotal: 500e6,
+                startTime: uint64(block.timestamp),
+                deadline: uint64(block.timestamp + 7 days),
+                state: uint8(WarrantRegistry.State.Active)
+            })
+        );
+        vm.stopPrank();
+        _fund(id, 500e6);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(WarrantRegistry.ComplianceUnavailable.selector, address(plain)));
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+
+        // Repoint at a compliance-guarded token. Everything else is left at zero, which
+        // configureProgram reads as "keep".
+        vm.prank(ops);
+        reg.configureProgram(
+            id,
+            WarrantRegistry.Program({
+                token: oldStock,
+                merkleRoot: bytes32(0),
+                settlementToken: address(0),
+                settleTotal: 0,
+                startTime: 0,
+                deadline: 0,
+                state: 0
+            })
+        );
+
+        vm.prank(alice);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertEq(usd.balanceOf(alice), 300e6);
+    }
+
+    /// Sanctions are cleared by an epoch bump rather than per-entry deletes, so this
+    /// checks the claim path sees the bump.
+    function test_claim_clearingSanctionsReopensTheClaim() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+        _sanctionAlice();
+
+        vm.prank(alice);
+        vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+
+        vm.prank(ops);
+        comp.clearSanctions();
+
+        vm.prank(alice);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertEq(usd.balanceOf(alice), 300e6);
     }
 
     // ── not-convertible-yet → revert → configure + fund → retry succeeds ────────
@@ -418,6 +657,7 @@ contract WarrantRegistryTest is Test {
         vm.expectRevert(WarrantRegistry.CannotRenounceLastAdmin.selector);
         reg.renounceRole(0x00, admin);
     }
+
     // ── configureProgram is frozen once anyone has claimed ──────────────────────
 
     /// @dev The hole this closes: `merkleRoot` had no lock. OPS could swap the whole holder set
