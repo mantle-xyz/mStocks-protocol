@@ -7,6 +7,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledTokenBeaconDeployer} from "../src/scaledToken/ScaledTokenBeaconDeployer.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
 
@@ -27,11 +28,27 @@ contract TokenIssuerTest is Test {
 
     bytes32 internal OPS_ROLE;
 
+    /// @dev Factory is deployed behind an ERC1967Proxy in tests (production uses
+    ///      TransparentUpgradeableProxy — see Deploy.s.sol) so tests can call implementation
+    ///      functions directly without the transparent-admin caller restriction.
+    function _deployFactory(uint256 minMultiplierNotice) internal returns (ScaledTokenFactory) {
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory initData = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector,
+            address(compliance),
+            address(pauseManager),
+            admin,
+            proxyAdmin,
+            minMultiplierNotice
+        );
+        return ScaledTokenFactory(payable(address(new ERC1967Proxy(address(impl), initData))));
+    }
+
     function setUp() public {
         vm.startPrank(admin);
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
-        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
+        factory = _deployFactory(24 hours);
         // Factory self-grant is blocked, so admin delegates factory OPS to the test contract.
         factory.grantRole(factory.OPS_ROLE(), address(this));
         vm.stopPrank();

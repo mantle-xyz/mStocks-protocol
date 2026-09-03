@@ -9,6 +9,7 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledTokenBeaconDeployer} from "../src/scaledToken/ScaledTokenBeaconDeployer.sol";
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {TokenIssuer} from "../src/tokenIssuer/TokenIssuer.sol";
 
@@ -176,13 +177,35 @@ contract Deploy is Script {
         returns (ScaledTokenFactory factory)
     {
         // Owner (DEFAULT_ADMIN_ROLE) = deploy admin (broadcaster / Ledger), handed over later.
-        // proxyAdmin (beacon owner) = final value from config; no handover needed.
-        factory =
-            new ScaledTokenFactory(compliance, pauseRegistry, _deployAdmin(), cfg.proxyAdmin, cfg.minMultiplierNotice);
-        console.log("Factory:            ", address(factory));
+        // proxyAdmin (beacon owner + factory's own ProxyAdmin owner) = final value from config;
+        // no handover needed — upgrade authority never touches the broadcaster.
+        // beaconDeployer is stateless/privilege-less (see ScaledTokenBeaconDeployer) — deployed
+        // fresh per factory impl rather than tracked/reused, to avoid extra config plumbing.
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory initData = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector,
+            compliance,
+            pauseRegistry,
+            _deployAdmin(),
+            cfg.proxyAdmin,
+            cfg.minMultiplierNotice
+        );
+        factory = ScaledTokenFactory(
+            payable(address(new TransparentUpgradeableProxy(address(impl), cfg.proxyAdmin, initData)))
+        );
+
+        // Auto-created ProxyAdmin address is stored in EIP-1967 admin slot.
+        address factoryProxyAdmin = address(
+            uint160(
+                uint256(vm.load(address(factory), 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103))
+            )
+        );
+        console.log("Factory impl:       ", address(impl));
+        console.log("Factory proxy:      ", address(factory));
+        console.log("Factory ProxyAdmin: ", factoryProxyAdmin);
+        console.log("  (owner = cfg.proxyAdmin, sole upgrade authority)");
         console.log("Beacon:             ", address(factory.beacon()));
         console.log("MinMultiplierNotice:", cfg.minMultiplierNotice);
-
 
         // createToken / rename are OPS_ROLE-gated. Deliberately do NOT self-grant OPS to the deploy
         // admin here — that backdoor would linger until someone remembers to revoke it. Grant only

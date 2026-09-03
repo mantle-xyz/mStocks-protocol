@@ -6,6 +6,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 
 import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledTokenBeaconDeployer} from "../src/scaledToken/ScaledTokenBeaconDeployer.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../src/pauseRegistry/PauseRegistry.sol";
 import {PrivatizationRegistry} from "../src/privatization/PrivatizationRegistry.sol";
@@ -37,12 +38,30 @@ contract CustodyClaimRouterTest is Test {
     bytes32 internal BURN_ROLE;
     uint256 internal programId;
 
+    /// @dev Factory is deployed behind an ERC1967Proxy in tests (production uses
+    ///      TransparentUpgradeableProxy — see Deploy.s.sol) so tests can call implementation
+    ///      functions directly without the transparent-admin caller restriction.
+    function _deployFactory() internal returns (ScaledTokenFactory) {
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory initData = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector,
+            address(compliance),
+            address(pauseManager),
+            admin,
+            proxyAdmin,
+            24 hours
+        );
+        return ScaledTokenFactory(payable(address(new ERC1967Proxy(address(impl), initData))));
+    }
+
     function setUp() public {
         vm.startPrank(admin);
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
-        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, 24 hours);
-        factory.grantRole(factory.OPS_ROLE(), address(this)); // createToken is OPS-gated
+        factory = _deployFactory();
+        // Factory self-grant is blocked, so admin delegates factory OPS to the test contract, which
+        // then calls createToken (unpranked = msg.sender is this test).
+        factory.grantRole(factory.OPS_ROLE(), address(this));
         usdc = new MockUSD();
         registry = PrivatizationRegistry(
             address(
@@ -59,6 +78,9 @@ contract CustodyClaimRouterTest is Test {
                 )
             )
         );
+        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives registry lifecycle
+        router.grantRole(router.OPS_ROLE(), ops);
+        router.registerHotWallet(hotWallet);
         vm.stopPrank();
 
         address[] memory issuers = new address[](1);
@@ -67,13 +89,6 @@ contract CustodyClaimRouterTest is Test {
         oldToken = ScaledToken(factory.createToken("Old Co", "OLD", "US0000000001", admin, issuers, none, none));
         newToken = ScaledToken(factory.createToken("New Co", "NEW", "US0000000002", admin, issuers, none, none));
         cvr = ScaledToken(factory.createToken("Deal CVR", "CVR", "US0000000003", admin, issuers, none, none));
-
-        vm.startPrank(admin);
-
-        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives registry lifecycle
-        router.grantRole(router.OPS_ROLE(), ops);
-        router.registerHotWallet(hotWallet);
-        vm.stopPrank();
 
         BURN_ROLE = oldToken.BURN_ROLE();
 
