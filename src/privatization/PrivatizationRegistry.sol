@@ -110,6 +110,9 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error SupplySnapshotNotSet();
     /// @notice A program cannot become Active until every leg's reserve covers its `total`.
     error LegNotFullyFunded(address token, uint256 reserved, uint256 total);
+    /// @notice {fund} after the program opened. Funding is part of getting a program ready,
+    ///         not a way to patch one that is already claimable.
+    error FundLockedOnceActive();
     error NotActive();
     error ClaimNotStarted();
     error ClaimClosed();
@@ -237,7 +240,10 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     function fund(uint256 programId, address token, uint256 amount) external onlyRole(OPS_ROLE) nonReentrant {
         uint8 s = programs[programId].state;
         if (s == uint8(State.None)) revert UnknownProgram();
-        if (s == uint8(State.Closed)) revert ClaimClosed();
+        // Funding belongs to the Created state. Active asserts that every leg's reserve
+        // covers its total, and that assertion is worthless if the reserves can still move
+        // afterwards. Closed falls under the same condition.
+        if (s != uint8(State.Created)) revert FundLockedOnceActive();
         if (token == address(0)) revert ZeroAddress();
         // oldToken and the legs are fixed at creation, but oldSupplySnapshot — the claim
         // denominator — is not, and funding locks it. Without this a caller could fund

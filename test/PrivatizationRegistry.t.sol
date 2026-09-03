@@ -342,6 +342,35 @@ contract PrivatizationRegistryTest is Test {
         vm.stopPrank();
     }
 
+    /// Funding is a Created-state action. Active asserts that every leg's reserve covers its
+    /// total, and that assertion would mean nothing if the reserves could still move —
+    /// including upward, since a later top-up implies it was wrong when made.
+    function test_fund_lockedOnceActive() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+
+        usdc.mint(address(this), 1e6);
+        usdc.approve(address(registry), 1e6);
+        vm.expectRevert(PrivatizationRegistry.FundLockedOnceActive.selector);
+        registry.fund(id, address(usdc), 1e6);
+        assertEq(registry.reserved(id, address(usdc)), 300e6, "unchanged");
+    }
+
+    /// And after sweeping, which the same condition covers.
+    function test_fund_lockedOnceClosed() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+        registry.sweepUnclaimed(id, custody);
+
+        usdc.mint(address(this), 1e6);
+        usdc.approve(address(registry), 1e6);
+        vm.expectRevert(PrivatizationRegistry.FundLockedOnceActive.selector);
+        registry.fund(id, address(usdc), 1e6);
+    }
+
     /// The check that makes the above unreachable through the normal path. A basket short on
     /// any leg pays out on none of them, since claim() delivers every leg or reverts, so the
     /// bound is per leg rather than "something was funded".
