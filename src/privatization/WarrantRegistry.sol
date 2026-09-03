@@ -94,9 +94,9 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
 
     mapping(uint256 => BitMaps.BitMap) private _claimed; // programId => merkle index bitmap
     uint256 public programCount;
-    /// @notice programId => whether at least one {claim} has succeeded. Once true,
-    ///         {configureProgram} refuses any further patch to this program (see
-    ///         {configureProgram}). Appended after `programCount` rather than grouped with the
+    /// @notice programId => whether at least one {claim} has succeeded. Informational:
+    ///         {configureProgram} is gated on the program still being Created, not on
+    ///         this, so it freezes nothing. Appended after `programCount` rather than grouped with the
     ///         other mappings: this contract is already deployed behind a proxy, and inserting a
     ///         slot would shift every variable after it.
     mapping(uint256 => bool) public claimStarted;
@@ -120,7 +120,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     error UnknownProgram();
     error InvalidStateTransition();
     error SettlementTermsLocked();
-    error ConfigureLockedAfterClaim();
+    error ConfigureLockedOnceActive();
     error NotActive();
     error ClaimNotStarted();
     error ClaimClosed();
@@ -133,10 +133,19 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
     /// @notice The program's token does not expose a compliance registry, so whether an
-    ///         account may be paid cannot be established. Recoverable: no claim can have
-    ///         succeeded, so `claimStarted` is false and {configureProgram} can still
-    ///         repoint `token`.
+    ///         account may be paid cannot be established.
+    ///
+    ///         Strands the program once it is Active — {configureProgram} is closed by
+    ///         then, so `token` cannot be repointed and no claim will ever succeed. The
+    ///         reserve is still recoverable through {sweepUnclaimed} after the deadline.
+    ///         Catch it while the program is Created, which is what that state is for.
     error ComplianceUnavailable(address token);
+    /// @notice {fund} before {configureProgram} set `settleTotal`. Funding locks the
+    ///         settlement terms, so this order would leave `settleTotal` at zero
+    ///         permanently and every claim reverting {NothingToSettle}.
+    error SettleTotalNotSet();
+    /// @notice A program cannot become Active until its reserve covers `settleTotal`.
+    error NotFullyFunded(uint256 reserve, uint256 settleTotal);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -216,7 +225,15 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     function configureProgram(uint256 programId, Program calldata program) external onlyRole(OPS_ROLE) {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
-        if (claimStarted[programId]) revert ConfigureLockedAfterClaim();
+        // Created is the only configurable state. Active means the root is published and
+        // the reserve committed, so every field it exposes is something a holder already
+        // relies on; Closed means the program is history.
+        //
+        // This subsumes the previous "locked once a claim landed" rule — claiming requires
+        // Active — and covers what that rule could not: a program nobody ever claims. 配资
+        // records are exactly that, and their root is their whole output, so under the old
+        // rule it stayed editable indefinitely.
+        if (p.state != uint8(State.Created)) revert ConfigureLockedOnceActive();
 
         if (program.token != address(0)) p.token = program.token;
         if (program.merkleRoot != bytes32(0)) p.merkleRoot = program.merkleRoot;
@@ -229,6 +246,21 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         if (program.deadline != 0) p.deadline = program.deadline;
         if (program.state != 0) {
             if (program.state <= p.state || program.state >= uint8(State.Closed)) revert InvalidStateTransition();
+            // Active means claimable, so it has to mean funded. A holder whose claim
+            // reverts InsufficientReserved cannot tell an under-funded program from a
+            // broken one, and the operator only finds out from the complaint.
+            //
+            // settleTotal == 0 is the 配资 record-only case: it never settles and never
+            // funds, so it is exempt rather than blocked.
+            //
+            // The bound is settleTotal, which is exact when the tree's amounts sum to
+            // RATE_SCALE as they are meant to. A tree summing higher needs proportionally
+            // more, and this cannot know the sum — so it narrows the failure to that one
+            // misconfiguration instead of eliminating InsufficientReserved outright.
+            if (program.state == uint8(State.Active) && p.settleTotal != 0 && settleReserve[programId] < p.settleTotal)
+            {
+                revert NotFullyFunded(settleReserve[programId], p.settleTotal);
+            }
             p.state = program.state;
         }
 
@@ -245,6 +277,11 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         if (p.state == uint8(State.None)) revert UnknownProgram();
         if (p.state == uint8(State.Closed)) revert ClaimClosed();
         if (p.settlementToken == address(0)) revert NotConvertibleYet();
+        // createProgram already sets settlementToken, so without this a caller could fund
+        // straight after creating — and funding locks the settlement terms, so settleTotal
+        // would be stuck at zero and every claim would revert NothingToSettle. The program
+        // would look configured, hold the money, and pay nobody.
+        if (p.settleTotal == 0) revert SettleTotalNotSet();
         if (amount == 0) revert ZeroAmount();
         settleReserve[programId] += amount;
         IERC20(p.settlementToken).safeTransferFrom(msg.sender, address(this), amount);
@@ -299,7 +336,11 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         _claimed[programId].set(index);
         warrant[programId][account] += amount; // on-chain queryable record
         settleReserve[programId] = reserve - out;
-        claimStarted[programId] = true; // freezes configureProgram from here on
+        // Informational only now: configureProgram locks at Active, and claiming requires
+        // Active, so this can no longer be the thing that freezes anything. Kept because it
+        // answers "was this program ever claimed against" in one call, and because removing
+        // it would move __gap and complicate the upgrade for no gain.
+        claimStarted[programId] = true;
 
         // interaction
         IERC20(p.settlementToken).safeTransfer(account, out);
