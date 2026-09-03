@@ -13,9 +13,21 @@ import {BitMaps} from "@openzeppelin/contracts/utils/structs/BitMaps.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {IComplianceRegistry} from "../complianceRegistry/IComplianceRegistry.sol";
 
-/// @notice Registry for warrant issuance and 配资 (leverage) records — see [TD] 私有化退市 +
-///         Warrant 发放 + 配资 合约技术设计, Part II.
+/// @notice The compliance registry a token enforces, as exposed by
+///         {ComplianceGuardUpgradeable}'s public `compliance` variable.
+///
+/// @dev Declared here rather than alongside {IComplianceRegistry} because it is the
+///      *token's* ABI, not the registry's: the registry answers `checkIsCompliant`, the
+///      token says which registry to ask. This contract is the only thing that needs to
+///      ask, so a one-method interface local to it beats a shared file.
+interface IComplianceGuardedToken {
+    function compliance() external view returns (IComplianceRegistry);
+}
+
+/// @notice Registry for warrant issuance and leverage records — see [TD] Privatisation delisting +
+///         warrant issuance + leverage records, Part II.
 ///
 ///         Warrants are a rights-offering-style entitlement whose per-account amount is fixed at a
 ///         **record-date snapshot** and published as a Merkle root. There is no on-chain option
@@ -33,7 +45,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 ///         reverts so the holder simply retries once the operator has funded and configured it via
 ///         {configureProgram} — the proof stays valid and the Merkle index is not consumed.
 ///
-///         配资 (leverage) reuses this contract only as an on-chain record anchor: OPS
+///         Leverage records reuse this contract only as an on-chain record anchor: OPS
 ///         `createProgram`s + `configureProgram`s the credit-line snapshot root and nobody claims
 ///         — the actual leverage is used / settled elsewhere. Such a program simply keeps
 ///         `settlementToken` zero and is never funded or claimed.
@@ -67,7 +79,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     struct Program {
         address token; // original mStocks address (informational — which stock this program covers)
         bytes32 merkleRoot; // record-date snapshot: leaf(index, account, amount)
-        address settlementToken; // convertible asset (e.g. USDC); zero = not-yet-convertible / 配资 record-only
+        address settlementToken; // convertible asset (e.g. USDC); zero = not-yet-convertible / leverage record-only
         uint256 settleTotal; // total settlement asset backing this program's warrant amounts
         uint64 startTime; // claims accepted from this timestamp (inclusive)
         uint64 deadline; // claims accepted up to and including this timestamp
@@ -82,9 +94,9 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
 
     mapping(uint256 => BitMaps.BitMap) private _claimed; // programId => merkle index bitmap
     uint256 public programCount;
-    /// @notice programId => whether at least one {claim} has succeeded. Once true,
-    ///         {configureProgram} refuses any further patch to this program (see
-    ///         {configureProgram}). Appended after `programCount` rather than grouped with the
+    /// @notice programId => whether at least one {claim} has succeeded. Informational:
+    ///         {configureProgram} is gated on the program still being Created, not on
+    ///         this, so it freezes nothing. Appended after `programCount` rather than grouped with the
     ///         other mappings: this contract is already deployed behind a proxy, and inserting a
     ///         slot would shift every variable after it.
     mapping(uint256 => bool) public claimStarted;
@@ -108,7 +120,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     error UnknownProgram();
     error InvalidStateTransition();
     error SettlementTermsLocked();
-    error ConfigureLockedAfterClaim();
+    error ConfigureLockedOnceActive();
     error NotActive();
     error ClaimNotStarted();
     error ClaimClosed();
@@ -120,6 +132,23 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     error InsufficientReserved();
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
+    /// @notice The program's token does not expose a compliance registry, so whether an
+    ///         account may be paid cannot be established.
+    ///
+    ///         Strands the program once it is Active — {configureProgram} is closed by
+    ///         then, so `token` cannot be repointed and no claim will ever succeed. The
+    ///         reserve is still recoverable through {sweepUnclaimed} after the deadline.
+    ///         Catch it while the program is Created, which is what that state is for.
+    error ComplianceUnavailable(address token);
+    /// @notice {fund} before {configureProgram} set `settleTotal`. Funding locks the
+    ///         settlement terms, so this order would leave `settleTotal` at zero
+    ///         permanently and every claim reverting {NothingToSettle}.
+    error SettleTotalNotSet();
+    /// @notice A program cannot become Active until its reserve covers `settleTotal`.
+    error NotFullyFunded(uint256 reserve, uint256 settleTotal);
+    /// @notice {fund} after the program opened. Funding is part of getting a program ready,
+    ///         not a way to patch one that is already claimable.
+    error FundLockedOnceActive();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -137,7 +166,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     // ── program lifecycle ─────────────────────────────────────────────────────
 
     /// @notice Register a program. OPS-only. `settlementToken` may be zero — for a warrant whose
-    ///         milestone hasn't resolved yet (set later via {configureProgram}), or for a 配资
+    ///         milestone hasn't resolved yet (set later via {configureProgram}), or for a leverage
     ///         record whose root is anchored on-chain but never settled here. The program starts in
     ///         `Created` — it becomes claimable only after {configureProgram}.
     function createProgram(address token, address settlementToken)
@@ -199,7 +228,15 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     function configureProgram(uint256 programId, Program calldata program) external onlyRole(OPS_ROLE) {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
-        if (claimStarted[programId]) revert ConfigureLockedAfterClaim();
+        // Created is the only configurable state. Active means the root is published and
+        // the reserve committed, so every field it exposes is something a holder already
+        // relies on; Closed means the program is history.
+        //
+        // This subsumes the previous "locked once a claim landed" rule — claiming requires
+        // Active — and covers what that rule could not: a program nobody ever claims. Leverage
+        // records are exactly that, and their root is their whole output, so under the old
+        // rule it stayed editable indefinitely.
+        if (p.state != uint8(State.Created)) revert ConfigureLockedOnceActive();
 
         if (program.token != address(0)) p.token = program.token;
         if (program.merkleRoot != bytes32(0)) p.merkleRoot = program.merkleRoot;
@@ -212,6 +249,21 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         if (program.deadline != 0) p.deadline = program.deadline;
         if (program.state != 0) {
             if (program.state <= p.state || program.state >= uint8(State.Closed)) revert InvalidStateTransition();
+            // Active means claimable, so it has to mean funded. A holder whose claim
+            // reverts InsufficientReserved cannot tell an under-funded program from a
+            // broken one, and the operator only finds out from the complaint.
+            //
+            // settleTotal == 0 is the leverage record-only case: it never settles and never
+            // funds, so it is exempt rather than blocked.
+            //
+            // The bound is settleTotal, which is exact when the tree's amounts sum to
+            // RATE_SCALE as they are meant to. A tree summing higher needs proportionally
+            // more, and this cannot know the sum — so it narrows the failure to that one
+            // misconfiguration instead of eliminating InsufficientReserved outright.
+            if (program.state == uint8(State.Active) && p.settleTotal != 0 && settleReserve[programId] < p.settleTotal)
+            {
+                revert NotFullyFunded(settleReserve[programId], p.settleTotal);
+            }
             p.state = program.state;
         }
 
@@ -226,8 +278,22 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     function fund(uint256 programId, uint256 amount) external onlyRole(OPS_ROLE) nonReentrant {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
-        if (p.state == uint8(State.Closed)) revert ClaimClosed();
+        // Funding belongs to the Created state. Active is the second look — "the reserve
+        // covers what this program owes, open it" — and that assertion is worthless if the
+        // reserve can still move afterwards. Closed is covered by the same condition.
+        //
+        // The consequence is that a tree whose amounts sum above RATE_SCALE has to be caught
+        // before opening: afterwards its later claimants cannot be paid and the reserve only
+        // returns through sweepUnclaimed. Nothing on chain can catch it — the sum is not
+        // visible here — so the check is the operator reconciling settleReserve against the
+        // sum of previewClaim over the leaves, while the program is still Created.
+        if (p.state != uint8(State.Created)) revert FundLockedOnceActive();
         if (p.settlementToken == address(0)) revert NotConvertibleYet();
+        // createProgram already sets settlementToken, so without this a caller could fund
+        // straight after creating — and funding locks the settlement terms, so settleTotal
+        // would be stuck at zero and every claim would revert NothingToSettle. The program
+        // would look configured, hold the money, and pay nobody.
+        if (p.settleTotal == 0) revert SettleTotalNotSet();
         if (amount == 0) revert ZeroAmount();
         settleReserve[programId] += amount;
         IERC20(p.settlementToken).safeTransferFrom(msg.sender, address(this), amount);
@@ -267,6 +333,11 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
         if (!MerkleProof.verify(proof, p.merkleRoot, leaf)) revert InvalidProof();
 
+        // Checked after the proof so an unauthenticated caller cannot use this entry point
+        // to probe the registry, and before any effect so a blocked account leaves its
+        // index unconsumed and can claim once unblocked.
+        _requireCompliant(p.token, account);
+
         if (p.settlementToken == address(0)) revert NotConvertibleYet();
         uint256 out = Math.mulDiv(amount, p.settleTotal, RATE_SCALE);
         if (out == 0) revert NothingToSettle();
@@ -277,11 +348,44 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         _claimed[programId].set(index);
         warrant[programId][account] += amount; // on-chain queryable record
         settleReserve[programId] = reserve - out;
-        claimStarted[programId] = true; // freezes configureProgram from here on
+        // Informational only now: configureProgram locks at Active, and claiming requires
+        // Active, so this can no longer be the thing that freezes anything. Kept because it
+        // answers "was this program ever claimed against" in one call, and because removing
+        // it would move __gap and complicate the upgrade for no gain.
+        claimStarted[programId] = true;
 
         // interaction
         IERC20(p.settlementToken).safeTransfer(account, out);
         emit Claimed(programId, index, account, amount, out);
+    }
+
+    /// @notice Reverts unless `account` passes the compliance check the program's token
+    ///         enforces on its own transfers.
+    ///
+    ///         The registry is read from `token` rather than configured here on purpose. A
+    ///         warrant is an entitlement derived from holding that security, so it has to
+    ///         honour the same blocklist the security does; a second configured address
+    ///         would be a second thing to get wrong, and getting it wrong means paying an
+    ///         account the token itself refuses.
+    ///
+    ///         `account`, not `_msgSender()`: {claim} accepts a proof on any account's
+    ///         behalf and pays `account`, so checking the caller would let a clean relayer
+    ///         collect on behalf of a blocked one.
+    ///
+    /// @dev Fails closed. If `token` does not expose a registry the answer is unknown, and
+    ///      settling a security's entitlement to an account whose standing cannot be
+    ///      established is the case this check exists to prevent. Only the `compliance()`
+    ///      lookup is caught — a registry that reverts with `UserBlocked` or
+    ///      `UserSanctioned` propagates, so the reason reaches the caller.
+    function _requireCompliant(address token, address account) private view {
+        IComplianceRegistry registry;
+        try IComplianceGuardedToken(token).compliance() returns (IComplianceRegistry c) {
+            registry = c;
+        } catch {
+            revert ComplianceUnavailable(token);
+        }
+        if (address(registry) == address(0)) revert ComplianceUnavailable(token);
+        registry.checkIsCompliant(token, account);
     }
 
     /// @notice After the deadline, sweep the program's remaining (unclaimed) settlement reserve to
