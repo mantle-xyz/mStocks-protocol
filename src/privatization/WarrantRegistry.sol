@@ -146,6 +146,9 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     error SettleTotalNotSet();
     /// @notice A program cannot become Active until its reserve covers `settleTotal`.
     error NotFullyFunded(uint256 reserve, uint256 settleTotal);
+    /// @notice {fund} after the program opened. Funding is part of getting a program ready,
+    ///         not a way to patch one that is already claimable.
+    error FundLockedOnceActive();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -275,7 +278,16 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     function fund(uint256 programId, uint256 amount) external onlyRole(OPS_ROLE) nonReentrant {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
-        if (p.state == uint8(State.Closed)) revert ClaimClosed();
+        // Funding belongs to the Created state. Active is the second look — "the reserve
+        // covers what this program owes, open it" — and that assertion is worthless if the
+        // reserve can still move afterwards. Closed is covered by the same condition.
+        //
+        // The consequence is that a tree whose amounts sum above RATE_SCALE has to be caught
+        // before opening: afterwards its later claimants cannot be paid and the reserve only
+        // returns through sweepUnclaimed. Nothing on chain can catch it — the sum is not
+        // visible here — so the check is the operator reconciling settleReserve against the
+        // sum of previewClaim over the leaves, while the program is still Created.
+        if (p.state != uint8(State.Created)) revert FundLockedOnceActive();
         if (p.settlementToken == address(0)) revert NotConvertibleYet();
         // createProgram already sets settlementToken, so without this a caller could fund
         // straight after creating — and funding locks the settlement terms, so settleTotal

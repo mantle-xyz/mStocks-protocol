@@ -216,6 +216,36 @@ contract WarrantRegistryTest is Test {
         assertEq(id, 0);
     }
 
+    /// Funding is a Created-state action. Active asserts that the reserve covers what the
+    /// program owes, and that assertion would mean nothing if the reserve could still move
+    /// — including upward, since a later top-up implies the assertion was wrong when made.
+    function test_fund_lockedOnceActive() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+
+        usd.mint(ops, 1e6);
+        vm.startPrank(ops);
+        usd.approve(address(reg), 1e6);
+        vm.expectRevert(WarrantRegistry.FundLockedOnceActive.selector);
+        reg.fund(id, 1e6);
+        vm.stopPrank();
+        assertEq(reg.settleReserve(id), 500e6, "unchanged");
+    }
+
+    /// And after sweeping, which the same condition covers.
+    function test_fund_lockedOnceClosed() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 1 days);
+        vm.warp(block.timestamp + 2 days);
+        vm.prank(ops);
+        reg.sweepUnclaimed(id, custody);
+
+        usd.mint(ops, 1e6);
+        vm.startPrank(ops);
+        usd.approve(address(reg), 1e6);
+        vm.expectRevert(WarrantRegistry.FundLockedOnceActive.selector);
+        reg.fund(id, 1e6);
+        vm.stopPrank();
+    }
+
     /// Active means claimable, so it has to mean funded. Otherwise holders discover the
     /// shortfall as InsufficientReserved and cannot tell it from a bug.
     function test_configureProgram_activeRequiresFullFunding() public {
@@ -598,16 +628,16 @@ contract WarrantRegistryTest is Test {
         assertEq(reg.warrant(id, alice), 0, "the record-only program recorded nothing");
     }
 
-    /// InsufficientReserved now means one specific thing: the tree's amounts sum above
-    /// RATE_SCALE, so the program owes more than `settleTotal`. Going Active already
-    /// guarantees the reserve covers settleTotal, which is exact for a tree summing to
-    /// RATE_SCALE — so under-funding can no longer produce this, and a caller who sees it
-    /// should look at the snapshot rather than the treasury.
+    /// InsufficientReserved means one specific thing: the tree's amounts sum above
+    /// RATE_SCALE, so the program owes more than `settleTotal`. Opening requires the reserve
+    /// to cover settleTotal, which is exact for a tree summing to RATE_SCALE — under-funding
+    /// cannot produce this, and a caller who sees it should look at the snapshot.
     ///
-    /// Here the leaves sum to 1.3e18 against a settleTotal of 500e6: alice draws 400e6,
-    /// leaving 100e6 for a claim owed 250e6. The first claimer wins and the second is
-    /// stuck — which is why the service is supposed to emit total == 1e18.
-    function test_claim_insufficientReservedWhenTheTreeSumsAboveRateScale_thenTopUp() public {
+    /// And it is unrecoverable, which is the point of funding being a Created-state action:
+    /// Active asserts "the reserve covers what this program owes", and that assertion would
+    /// mean nothing if the reserve could still move. So the reconciliation has to happen
+    /// before opening. Nothing on chain can do it — the sum is not visible to the contract.
+    function test_claim_treeSummingAboveRateScaleStrandsTheLastClaimant() public {
         uint256 id = _createActiveProgram(_overSumRoot(), 500e6, 7 days);
         assertEq(reg.settleReserve(id), 500e6, "Active implies the reserve covers settleTotal");
         assertEq(reg.previewClaim(id, 0.8e18), 400e6);
@@ -622,12 +652,42 @@ contract WarrantRegistryTest is Test {
         reg.claim(id, 1, bob, 0.5e18, _overSumProofBob());
         assertFalse(reg.isClaimed(id, 1), "a rejected claim must not consume the index");
 
-        // Recoverable by topping up — fund() is not blocked by claimStarted, only the
-        // settlement *terms* are.
-        _fund(id, 150e6);
+        // No topping up: the program is Active.
+        usd.mint(ops, 150e6);
+        vm.startPrank(ops);
+        usd.approve(address(reg), 150e6);
+        vm.expectRevert(WarrantRegistry.FundLockedOnceActive.selector);
+        reg.fund(id, 150e6);
+        vm.stopPrank();
+
+        // bob's entitlement is stuck until the deadline; the reserve is not lost.
+        vm.warp(block.timestamp + 8 days);
+        vm.prank(ops);
+        reg.sweepUnclaimed(id, custody);
+        assertEq(usd.balanceOf(custody), 100e6);
+        assertEq(usd.balanceOf(bob), 0, "never paid");
+    }
+
+    /// The same tree, reconciled before opening: fund what the leaves actually sum to rather
+    /// than what settleTotal says, and both claims settle. This is the check that has to
+    /// happen while the program is Created — Σ previewClaim over the leaves against
+    /// settleReserve.
+    function test_fund_reconcilingBeforeOpeningPaysEveryone() public {
+        uint256 id = _createConfiguredProgram(_overSumRoot(), 500e6, 7 days);
+
+        // 0.8e18 + 0.5e18 = 1.3e18 of RATE_SCALE, so the program owes 1.3 * settleTotal.
+        assertEq(reg.previewClaim(id, 0.8e18) + reg.previewClaim(id, 0.5e18), 650e6);
+        _fund(id, 650e6);
+        vm.prank(ops);
+        reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
+
+        vm.prank(alice);
+        reg.claim(id, 0, alice, 0.8e18, _overSumProofAlice());
         vm.prank(bob);
         reg.claim(id, 1, bob, 0.5e18, _overSumProofBob());
+        assertEq(usd.balanceOf(alice), 400e6);
         assertEq(usd.balanceOf(bob), 250e6);
+        assertEq(reg.settleReserve(id), 0, "exactly consumed");
     }
 
     function test_claim_doubleClaimReverts() public {
