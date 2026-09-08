@@ -24,17 +24,21 @@ import {WarrantRegistry} from "../src/privatization/WarrantRegistry.sol";
 contract WarrantRegistryOps is Script {
     /// @notice Deploy behind a TransparentUpgradeableProxy. `proxyAdmin` owns upgrades; `admin`
     ///         gets DEFAULT_ADMIN_ROLE.
-    function deploy(address proxyAdmin, address admin) external returns (address registry) {
+    function deploy(address proxyAdmin, address admin, address[] calldata ops) external returns (address registry) {
         require(proxyAdmin != address(0) && admin != address(0), "zero addr");
         vm.startBroadcast();
         WarrantRegistry impl = new WarrantRegistry();
-        bytes memory initData = abi.encodeWithSelector(WarrantRegistry.initialize.selector, admin);
+        bytes memory initData = abi.encodeWithSelector(WarrantRegistry.initialize.selector, admin, ops);
         registry = address(new TransparentUpgradeableProxy(address(impl), proxyAdmin, initData));
         vm.stopBroadcast();
         console.log("WarrantRegistry impl: ", address(impl));
         console.log("WarrantRegistry proxy:", registry);
         console.log("proxyAdmin:           ", proxyAdmin);
         console.log("admin:                ", admin);
+        console.log("OPS_ROLE granted at init to", ops.length, "address(es)");
+        for (uint256 i = 0; i < ops.length; ++i) {
+            console.log("  ", ops[i]);
+        }
     }
 
     /// @notice Register a program. `settlementToken` may be 0 (set later via configureProgram, or

@@ -42,14 +42,15 @@ contract WarrantRegistryTest is Test {
         comp.grantRole(compOps, ops);
         stock = new MockComplianceGuardedToken(IComplianceRegistry(address(comp)));
         oldStock = address(stock);
+        address[] memory registryOps = new address[](1);
+        registryOps[0] = ops;
         reg = WarrantRegistry(
             address(
-                new ERC1967Proxy(address(new WarrantRegistry()), abi.encodeCall(WarrantRegistry.initialize, (admin)))
+                new ERC1967Proxy(
+                    address(new WarrantRegistry()), abi.encodeCall(WarrantRegistry.initialize, (admin, registryOps))
+                )
             )
         );
-        bytes32 opsRole = reg.OPS_ROLE();
-        vm.prank(admin);
-        reg.grantRole(opsRole, ops);
     }
 
     // ── merkle helpers: 2-leaf tree over (index, account, amount) ────────────────
