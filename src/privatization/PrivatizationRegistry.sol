@@ -120,6 +120,10 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error SupplySnapshotNotSet();
     /// @notice A program cannot become Active until every leg's reserve covers its `total`.
     error LegNotFullyFunded(address token, uint256 reserved, uint256 total);
+    /// @notice {fund} was called with a token that is not one of `programId`'s legs. Crediting it
+    ///         to `reserved` anyway would strand it forever — {claim} and {sweepUnclaimed} only
+    ///         ever iterate over the program's legs.
+    error NotALegToken(address token);
     /// @notice {fund} after the program opened. Funding is part of getting a program ready,
     ///         not a way to patch one that is already claimable.
     error FundLockedOnceActive();
@@ -267,6 +271,18 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         return false;
     }
 
+    /// @dev True if `token` is one of `programId`'s legs. Used to reject {fund} deposits of a token
+    ///      that isn't part of the basket — a wrong-token transfer would otherwise get credited to
+    ///      `reserved` and then never be read by {claim} or {sweepUnclaimed}, both of which only
+    ///      ever iterate over the program's legs, stranding it permanently.
+    function _isLegToken(uint256 programId, address token) internal view returns (bool) {
+        Leg[] storage legs = _legs[programId];
+        for (uint256 i = 0; i < legs.length; ++i) {
+            if (legs[i].token == token) return true;
+        }
+        return false;
+    }
+
     /// @notice Fund + reserve `amount` of `token` for `programId`. OPS-only, accounted so a claim
     ///         can never dip into another program's (or unrelated) balance. Caller must `approve`
     ///         this registry for `amount` first. Allowed while the program exists and is not closed.
@@ -278,6 +294,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         // afterwards. Closed falls under the same condition.
         if (s != uint8(State.Created)) revert FundLockedOnceActive();
         if (token == address(0)) revert ZeroAddress();
+        if (!_isLegToken(programId, token)) revert NotALegToken(token);
         // oldToken and the legs are fixed at creation, but oldSupplySnapshot — the claim
         // denominator — is not, and funding locks it. Without this a caller could fund
         // straight after creating, stranding the snapshot at zero: previewClaim would
