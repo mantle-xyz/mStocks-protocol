@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Script, console} from "forge-std/Script.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 
 import {CustodyClaimRouter} from "../src/privatization/CustodyClaimRouter.sol";
 
@@ -19,22 +20,56 @@ import {CustodyClaimRouter} from "../src/privatization/CustodyClaimRouter.sol";
 ///         4) claimFor           — OPS (after a hot wallet has transferred old tokens into router)
 ///         5) rescue             — router admin (recover stray / unclaimed assets)
 contract CustodyClaimRouterOps is Script {
-    /// @notice Step 1 — deploy the router behind a TransparentUpgradeableProxy, bound to `registry`.
-    ///         `proxyAdmin` owns the auto-created ProxyAdmin (sole upgrade authority); `admin` gets
-    ///         DEFAULT_ADMIN_ROLE (maintains the hot-wallet allowlist and can rescue). OPS_ROLE is
-    ///         granted separately.
-    function deploy(address proxyAdmin, address registry, address admin) external returns (address router) {
+    /// @notice Step 1 — deploy the router behind a TransparentUpgradeableProxy, bound to `registry`,
+    ///         and try to register `hotWallets` in the same broadcast. `proxyAdmin` owns the
+    ///         auto-created ProxyAdmin (sole upgrade authority); `admin` gets DEFAULT_ADMIN_ROLE
+    ///         (maintains the hot-wallet allowlist and can rescue) — `admin` is caller-supplied here
+    ///         (unlike {Deploy._deployTokenIssuer}, which hardcodes the broadcaster as a *temporary*
+    ///         admin later handed off via TransferAdmin.s.sol), so the broadcaster only actually
+    ///         holds DEFAULT_ADMIN_ROLE if the caller passed `admin == broadcaster`. Registration is
+    ///         skipped with a log (not a revert) when it doesn't — run {registerHotWallets}
+    ///         separately, broadcast by whoever `admin` actually is. Pass an empty `hotWallets`
+    ///         array to always skip.
+    function deploy(
+        address proxyAdmin,
+        address registry,
+        address admin,
+        address[] calldata ops,
+        address[] calldata hotWallets
+    ) external returns (address router) {
         require(proxyAdmin != address(0) && registry != address(0) && admin != address(0), "zero addr");
         vm.startBroadcast();
         CustodyClaimRouter impl = new CustodyClaimRouter();
-        bytes memory initData = abi.encodeWithSelector(CustodyClaimRouter.initialize.selector, registry, admin);
+        bytes memory initData = abi.encodeWithSelector(CustodyClaimRouter.initialize.selector, registry, admin, ops);
         router = address(new TransparentUpgradeableProxy(address(impl), proxyAdmin, initData));
+        bool registeredAtDeploy;
+        if (hotWallets.length > 0) {
+            if (IAccessControl(router).hasRole(bytes32(0), _broadcaster())) {
+                CustodyClaimRouter(router).registerHotWallets(hotWallets);
+                registeredAtDeploy = true;
+            }
+        }
         vm.stopBroadcast();
         console.log("CustodyClaimRouter impl:   ", address(impl));
         console.log("CustodyClaimRouter proxy:  ", router);
         console.log("  proxyAdmin (upgrade auth):", proxyAdmin);
         console.log("  registry:                ", registry);
         console.log("  admin (DEFAULT_ADMIN):   ", admin);
+        console.log("  OPS_ROLE granted at init to", ops.length, "address(es)");
+        for (uint256 i = 0; i < ops.length; ++i) {
+            console.log("    ", ops[i]);
+        }
+        if (hotWallets.length == 0) {
+            console.log("  No hot wallets passed; register later via registerHotWallets.");
+        } else if (registeredAtDeploy) {
+            console.log("  Hot wallets registered at deploy:", hotWallets.length);
+            for (uint256 i = 0; i < hotWallets.length; ++i) {
+                console.log("    ", hotWallets[i]);
+            }
+        } else {
+            console.log("  Skipped hot wallet registration: broadcaster != admin.");
+            console.log("  Run registerHotWallets(address,address[]) separately, broadcast by admin.");
+        }
         console.log("  NOTE: whitelist this router on the ComplianceRegistry before use.");
     }
 
@@ -89,5 +124,12 @@ contract CustodyClaimRouterOps is Script {
         console.log("Rescued from router:");
         console.log("  token/amount:", token, amount);
         console.log("  to:", to);
+    }
+
+    /// @dev Mirrors forge-script's signer resolution: PRIVATE_KEY env, else tx.origin.
+    function _broadcaster() internal view returns (address) {
+        uint256 pk = vm.envOr("PRIVATE_KEY", uint256(0));
+        if (pk != 0) return vm.addr(pk);
+        return msg.sender;
     }
 }

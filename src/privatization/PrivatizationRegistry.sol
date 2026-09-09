@@ -129,12 +129,18 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         _disableInitializers();
     }
 
-    function initialize(address admin) external initializer {
+    /// @param ops Initial OPS_ROLE holders (may be empty — grant later via {grantRole}), matching
+    ///        the pattern {ScaledToken.initialize} already uses for its own opsRoles_.
+    function initialize(address admin, address[] calldata ops) external initializer {
         if (admin == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
         // ReentrancyGuardTransient (EIP-1153 TSTORE) uses transient storage — no initializer needed.
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
+        for (uint256 i = 0; i < ops.length; ++i) {
+            if (ops[i] == address(0)) revert ZeroAddress();
+            _grantRole(OPS_ROLE, ops[i]);
+        }
     }
 
     // ── program lifecycle ─────────────────────────────────────────────────────
