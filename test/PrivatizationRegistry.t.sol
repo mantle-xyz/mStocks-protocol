@@ -738,4 +738,76 @@ contract PrivatizationRegistryTest is Test {
         assertEq(startTime, uint64(block.timestamp));
         assertEq(deadline, uint64(block.timestamp) + 1 days);
     }
+
+    // ── oldToken uniqueness ──────────────────────────────────────────────────────
+
+    /// @dev A second program cannot target an oldToken another program already targets — two
+    ///      programs redeeming the same security against two independently-frozen snapshots would
+    ///      let it be claimed against twice, inconsistently.
+    function test_createProgram_rejectsDuplicateOldToken() public {
+        registry.createProgram(address(oldToken), _legs3());
+
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(oldToken))
+        );
+        registry.createProgram(address(oldToken), _legs3());
+    }
+
+    /// @dev A closed program's oldToken stays registered — it was retired, not freed up for reuse.
+    function test_createProgram_rejectsOldTokenFromAClosedProgram() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+        registry.sweepUnclaimed(id, custody); // now Closed
+
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(oldToken))
+        );
+        registry.createProgram(address(oldToken), _legs3());
+    }
+
+    /// @dev configureProgram's oldToken repoint is subject to the same uniqueness check as creation.
+    function test_configureProgram_rejectsRepointToAlreadyRegisteredOldToken() public {
+        registry.createProgram(address(newToken), _legs3()); // registers newToken
+
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(newToken))
+        );
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(newToken), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+    }
+
+    /// @dev Repointing to a brand-new oldToken registers it; repointing back to the program's own
+    ///      current oldToken is a no-op, not a self-conflict.
+    function test_configureProgram_repointToFreshOldTokenRegistersIt() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(cvr), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+        (address oldTok,,,,) = registry.programs(id);
+        assertEq(oldTok, address(cvr));
+        assertTrue(registry.oldTokenRegistered(address(cvr)));
+
+        // now a fresh program cannot also target cvr
+        vm.expectRevert(abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(cvr)));
+        registry.createProgram(address(cvr), _legs3());
+
+        // re-supplying the program's own current oldToken is not treated as a repoint at all
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(cvr), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+    }
 }
