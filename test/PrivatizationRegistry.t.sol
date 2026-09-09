@@ -873,4 +873,46 @@ contract PrivatizationRegistryTest is Test {
         vm.expectRevert(PrivatizationRegistry.BadLeg.selector);
         registry.createProgram(address(oldToken), legs);
     }
+
+    // ── previewClaim considers program state ────────────────────────────────────
+
+    /// @dev previewClaim returns zeros while still Created, even once snapshot + window are set —
+    ///      claim() itself would revert (not yet Active), so previewing a payout here is misleading.
+    function test_previewClaim_zeroWhileCreated() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _freeze(oldToken);
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK)); // snapshot set, stays Created
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        for (uint256 i = 0; i < outs.length; ++i) {
+            assertEq(outs[i], 0);
+        }
+    }
+
+    /// @dev previewClaim returns zeros again once the program has closed.
+    function test_previewClaim_zeroOnceClosed() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+        registry.sweepUnclaimed(id, custody); // now Closed
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        for (uint256 i = 0; i < outs.length; ++i) {
+            assertEq(outs[i], 0);
+        }
+    }
+
+    /// @dev previewClaim returns the real pro-rata payout once Active — the one state it's meant
+    ///      to preview.
+    function test_previewClaim_nonZeroWhenActive() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        assertEq(outs[0], 300e6);
+        assertEq(outs[1], 200 ether);
+        assertEq(outs[2], 100 ether);
+    }
 }

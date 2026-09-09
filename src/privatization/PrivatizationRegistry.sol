@@ -322,12 +322,15 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     }
 
     /// @notice Per-leg consideration for surrendering `oldAmount` (raw), in leg order. Returns zeros
-    ///         until the program is configured (snapshot == 0).
+    ///         unless the program is currently `Active` (configured, funded, and open) — `Created`
+    ///         has no committed reserve to preview against yet, and `Closed` no longer accepts
+    ///         claims at all, so a snapshot-only check would keep previewing a payout that {claim}
+    ///         would immediately revert on.
     function previewClaim(uint256 programId, uint256 oldAmount) public view returns (uint256[] memory outs) {
         Leg[] storage legs = _legs[programId];
         outs = new uint256[](legs.length);
+        if (programs[programId].state != uint8(State.Active)) return outs;
         uint256 snapshot = programs[programId].oldSupplySnapshot;
-        if (snapshot == 0) return outs;
         for (uint256 i = 0; i < legs.length; ++i) {
             outs[i] = Math.mulDiv(oldAmount, legs[i].total, snapshot);
         }
