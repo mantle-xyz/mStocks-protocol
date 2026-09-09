@@ -416,6 +416,21 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         super.renounceRole(role, callerConfirmation);
     }
 
+    /// @notice Blocks revoking the final DEFAULT_ADMIN_ROLE holder — {renounceRole} is guarded
+    ///         against this, but `revokeRole` is a second path to the exact same self-removal (an
+    ///         admin can revoke its own role via `revokeRole` just as well as `renounceRole`), so it
+    ///         needs the identical guard.
+    function revokeRole(bytes32 role, address account)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.revokeRole(role, account);
+    }
+
     /// @dev Storage gap for upgrade-safe additions. 6 vars (programs, _legs, reserved,
     ///      claimStarted, oldTokenRegistered, programCount) + 44 = 50 slots reserved.
     uint256[44] private __gap;
