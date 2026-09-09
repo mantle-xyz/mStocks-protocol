@@ -107,6 +107,10 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
     error ZeroAddress();
     error NoLegs();
+    /// @notice A leg has a zero token/total, or its token equals `oldToken` — the latter would let
+    ///         {claim} burn `oldToken` and then try to pay a leg in the very token it just burned,
+    ///         out of a reserve that can never be funded (minting it back defeats the whole point
+    ///         of retiring it), permanently DOSing every claim on the program.
     error BadLeg();
     /// @notice `oldToken` is already targeted by another program (see {oldTokenRegistered}).
     error OldTokenAlreadyRegistered(address oldToken);
@@ -181,7 +185,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         programs[programId] =
             Program({oldToken: oldToken, startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: uint8(State.Created)});
         for (uint256 i = 0; i < legs.length; ++i) {
-            if (legs[i].token == address(0) || legs[i].total == 0) revert BadLeg();
+            if (legs[i].token == address(0) || legs[i].total == 0 || legs[i].token == oldToken) revert BadLeg();
             _legs[programId].push(legs[i]);
         }
         emit ProgramCreated(programId, oldToken);

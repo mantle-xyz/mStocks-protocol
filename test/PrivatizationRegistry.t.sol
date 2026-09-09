@@ -769,7 +769,10 @@ contract PrivatizationRegistryTest is Test {
 
     /// @dev configureProgram's oldToken repoint is subject to the same uniqueness check as creation.
     function test_configureProgram_rejectsRepointToAlreadyRegisteredOldToken() public {
-        registry.createProgram(address(newToken), _legs3()); // registers newToken
+        PrivatizationRegistry.Leg[] memory legsWithoutNewToken = new PrivatizationRegistry.Leg[](2);
+        legsWithoutNewToken[0] = PrivatizationRegistry.Leg(address(usdc), 300e6);
+        legsWithoutNewToken[1] = PrivatizationRegistry.Leg(address(cvr), 100 ether);
+        registry.createProgram(address(newToken), legsWithoutNewToken); // registers newToken
 
         uint256 id = registry.createProgram(address(oldToken), _legs3());
         vm.expectRevert(
@@ -855,5 +858,19 @@ contract PrivatizationRegistryTest is Test {
         registry.revokeRole(0x00, secondAdmin);
         assertFalse(registry.hasRole(0x00, secondAdmin));
         assertTrue(registry.hasRole(0x00, admin), "sole remaining admin untouched");
+    }
+
+    // ── leg token cannot equal oldToken ─────────────────────────────────────────
+
+    /// @dev A leg paid in `oldToken` itself would have claim() burn oldToken and then try to pay
+    ///      that same leg out of a reserve that can never legitimately be funded (minting oldToken
+    ///      back defeats the point of retiring it) — permanently DOSing every claim on the program.
+    function test_createProgram_rejectsLegTokenEqualToOldToken() public {
+        PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](2);
+        legs[0] = PrivatizationRegistry.Leg(address(usdc), 300e6);
+        legs[1] = PrivatizationRegistry.Leg(address(oldToken), 100 ether); // mismatched: == oldToken
+
+        vm.expectRevert(PrivatizationRegistry.BadLeg.selector);
+        registry.createProgram(address(oldToken), legs);
     }
 }
