@@ -12,16 +12,19 @@ import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 ///         §4, privatization-runbook.md §2). Deployed behind a TransparentUpgradeableProxy, like
 ///         TokenIssuer. Each entrypoint is broadcast by the appropriate role — run them in order.
 ///
-///         1)  deploy           — deployer (proxyAdmin owns upgrades; admin = DEFAULT_ADMIN_ROLE)
-///         2)  createProgram    — registry OPS (legs = token + total; program starts Created)
-///         3a) wireBurnRole     — OLD token ADMIN (grant registry BURN_ROLE)
-///         3b) freezeSupply     — OLD token OPS   (setMintAllowed=false; ≠ admin — self-grant blocked)
-///         4)  configureProgram — registry OPS (supply frozen totalSupply as snapshot + window +
-///                                state=Active; any 0 field keeps the stored value)
-///         5)  fund             — registry OPS (holds reward tokens)
-///         6)  sweep            — registry OPS, after the program deadline
+///         1)  deploy                 — deployer (proxyAdmin owns upgrades; admin = DEFAULT_ADMIN_ROLE)
+///         2)  createProgram          — registry OPS (legs = token + total; program starts Created)
+///         3a) wireBurnRole           — OLD token ADMIN (grant registry BURN_ROLE)
+///         3b) freezeSupply           — OLD token OPS   (setMintAllowed=false; ≠ admin — self-grant blocked)
+///         4)  configureProgram       — registry OPS (supply frozen totalSupply as snapshot + window +
+///                                      state=Active; any 0 field keeps the stored value)
+///         5)  fund                   — registry OPS (holds reward tokens)
+///         6)  registerSweepRecipients — registry ADMIN, before Step 7 (allowlist the sweep destination)
+///         7)  sweep                  — registry OPS, after the program deadline; `to` must already
+///                                      be on the {registerSweepRecipients} allowlist
 ///
-///         The whole program lifecycle (2/4/5/6) is OPS-driven; registry admin only grants OPS_ROLE.
+///         The whole program lifecycle (2/4/5/7) is OPS-driven; registry admin only grants OPS_ROLE
+///         and maintains the sweep-recipient allowlist (Step 6).
 contract PrivatizationRegistryOps is Script {
     /// @notice Step 1 — deploy behind a TransparentUpgradeableProxy. `proxyAdmin` owns the
     ///         auto-created ProxyAdmin (sole upgrade authority); `admin` gets DEFAULT_ADMIN_ROLE.
@@ -124,8 +127,30 @@ contract PrivatizationRegistryOps is Script {
         console.log("  reserved now:", PrivatizationRegistry(registry).reserved(programId, token));
     }
 
-    /// @notice Step 6 — after the program deadline, sweep unclaimed reserve to custody.
-    ///         Broadcaster must hold OPS_ROLE.
+    /// @notice Step 6 — allowlist one or more {sweepUnclaimed} destinations. Broadcaster must hold
+    ///         DEFAULT_ADMIN_ROLE. Run before Step 7 — sweep reverts NotRegisteredSweepRecipient
+    ///         otherwise.
+    function registerSweepRecipients(address registry, address[] calldata recipients) external {
+        vm.startBroadcast();
+        PrivatizationRegistry(registry).registerSweepRecipients(recipients);
+        vm.stopBroadcast();
+        console.log("Registered", recipients.length, "sweep recipient(s) on", registry);
+        for (uint256 i = 0; i < recipients.length; ++i) {
+            console.log("  ", recipients[i]);
+        }
+    }
+
+    /// @notice Remove a {sweepUnclaimed} destination from the allowlist. Broadcaster must hold
+    ///         DEFAULT_ADMIN_ROLE.
+    function deregisterSweepRecipient(address registry, address to) external {
+        vm.startBroadcast();
+        PrivatizationRegistry(registry).deregisterSweepRecipient(to);
+        vm.stopBroadcast();
+        console.log("Deregistered sweep recipient:", to);
+    }
+
+    /// @notice Step 7 — after the program deadline, sweep unclaimed reserve to an already-allowlisted
+    ///         destination (Step 6). Broadcaster must hold OPS_ROLE.
     function sweep(address registry, uint256 programId, address to) external {
         vm.startBroadcast();
         PrivatizationRegistry(registry).sweepUnclaimed(programId, to);
