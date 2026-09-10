@@ -89,6 +89,14 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///         {configureProgram} is gated on the program still being Created, not on
     ///         this, so it freezes nothing.
     mapping(uint256 => bool) public claimStarted;
+    /// @notice oldToken => true once any program has ever targeted it (via {createProgram} or a
+    ///         {configureProgram} repoint). Never cleared, even if the program using it later
+    ///         closes. A retired security is delisted exactly once; two concurrent programs
+    ///         burning the same oldToken against two independently-frozen supply snapshots would
+    ///         let it be redeemed twice over, inconsistently, as its live supply shifts between
+    ///         them — almost certainly an operator mistake (a duplicate `createProgram`) rather
+    ///         than an intentional second delisting.
+    mapping(address => bool) public oldTokenRegistered;
     uint256 public programCount;
 
     event ProgramCreated(uint256 indexed programId, address indexed oldToken);
@@ -100,6 +108,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error ZeroAddress();
     error NoLegs();
     error BadLeg();
+    /// @notice `oldToken` is already targeted by another program (see {oldTokenRegistered}).
+    error OldTokenAlreadyRegistered(address oldToken);
     error UnknownProgram();
     error InvalidStateTransition();
     error TermsLockedAfterFund();
@@ -160,6 +170,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     {
         if (oldToken == address(0)) revert ZeroAddress();
         if (legs.length == 0) revert NoLegs();
+        if (oldTokenRegistered[oldToken]) revert OldTokenAlreadyRegistered(oldToken);
+        oldTokenRegistered[oldToken] = true;
 
         programId = programCount++;
         programs[programId] =
@@ -210,7 +222,11 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
         if (program.oldToken != address(0) || program.oldSupplySnapshot != 0) {
             if (_isFunded(programId)) revert TermsLockedAfterFund();
-            if (program.oldToken != address(0)) p.oldToken = program.oldToken;
+            if (program.oldToken != address(0) && program.oldToken != p.oldToken) {
+                if (oldTokenRegistered[program.oldToken]) revert OldTokenAlreadyRegistered(program.oldToken);
+                oldTokenRegistered[program.oldToken] = true;
+                p.oldToken = program.oldToken;
+            }
             if (program.oldSupplySnapshot != 0) p.oldSupplySnapshot = program.oldSupplySnapshot;
         }
         if (program.startTime != 0) {
@@ -383,7 +399,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         super.renounceRole(role, callerConfirmation);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 5 vars (programs, _legs, reserved,
-    ///      claimStarted, programCount) + 45 = 50 slots reserved.
-    uint256[45] private __gap;
+    /// @dev Storage gap for upgrade-safe additions. 6 vars (programs, _legs, reserved,
+    ///      claimStarted, oldTokenRegistered, programCount) + 44 = 50 slots reserved.
+    uint256[44] private __gap;
 }
