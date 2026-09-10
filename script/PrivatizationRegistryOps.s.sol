@@ -25,17 +25,21 @@ import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 contract PrivatizationRegistryOps is Script {
     /// @notice Step 1 — deploy behind a TransparentUpgradeableProxy. `proxyAdmin` owns the
     ///         auto-created ProxyAdmin (sole upgrade authority); `admin` gets DEFAULT_ADMIN_ROLE.
-    function deploy(address proxyAdmin, address admin) external returns (address registry) {
+    function deploy(address proxyAdmin, address admin, address[] calldata ops) external returns (address registry) {
         require(proxyAdmin != address(0) && admin != address(0), "zero addr");
         vm.startBroadcast();
         PrivatizationRegistry impl = new PrivatizationRegistry();
-        bytes memory initData = abi.encodeWithSelector(PrivatizationRegistry.initialize.selector, admin);
+        bytes memory initData = abi.encodeWithSelector(PrivatizationRegistry.initialize.selector, admin, ops);
         registry = address(new TransparentUpgradeableProxy(address(impl), proxyAdmin, initData));
         vm.stopBroadcast();
         console.log("PrivatizationRegistry impl: ", address(impl));
         console.log("PrivatizationRegistry proxy:", registry);
         console.log("proxyAdmin (upgrade auth):  ", proxyAdmin);
         console.log("admin (DEFAULT_ADMIN_ROLE): ", admin);
+        console.log("OPS_ROLE granted at init to", ops.length, "address(es)");
+        for (uint256 i = 0; i < ops.length; ++i) {
+            console.log("  ", ops[i]);
+        }
     }
 
     /// @notice Step 2a — grant the registry BURN_ROLE on the old token (burn-only: it can burn

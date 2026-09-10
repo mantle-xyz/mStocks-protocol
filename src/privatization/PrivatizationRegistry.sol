@@ -113,6 +113,10 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     /// @notice {fund} after the program opened. Funding is part of getting a program ready,
     ///         not a way to patch one that is already claimable.
     error FundLockedOnceActive();
+    /// @notice {configureProgram} would leave `deadline` in the past, or not strictly after
+    ///         `startTime`. Checked against whichever of the two the call is actually touching,
+    ///         against the other's stored value.
+    error InvalidWindow();
     error NotActive();
     error ClaimNotStarted();
     error ClaimClosed();
@@ -129,12 +133,18 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         _disableInitializers();
     }
 
-    function initialize(address admin) external initializer {
+    /// @param ops Initial OPS_ROLE holders (may be empty — grant later via {grantRole}), matching
+    ///        the pattern {ScaledToken.initialize} already uses for its own opsRoles_.
+    function initialize(address admin, address[] calldata ops) external initializer {
         if (admin == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
         // ReentrancyGuardTransient (EIP-1153 TSTORE) uses transient storage — no initializer needed.
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
+        for (uint256 i = 0; i < ops.length; ++i) {
+            if (ops[i] == address(0)) revert ZeroAddress();
+            _grantRole(OPS_ROLE, ops[i]);
+        }
     }
 
     // ── program lifecycle ─────────────────────────────────────────────────────
@@ -203,8 +213,15 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
             if (program.oldToken != address(0)) p.oldToken = program.oldToken;
             if (program.oldSupplySnapshot != 0) p.oldSupplySnapshot = program.oldSupplySnapshot;
         }
-        if (program.startTime != 0) p.startTime = program.startTime;
-        if (program.deadline != 0) p.deadline = program.deadline;
+        if (program.startTime != 0) {
+            if (p.deadline != 0 && program.startTime >= p.deadline) revert InvalidWindow();
+            p.startTime = program.startTime;
+        }
+        if (program.deadline != 0) {
+            if (program.deadline <= block.timestamp) revert InvalidWindow();
+            if (p.startTime != 0 && program.deadline <= p.startTime) revert InvalidWindow();
+            p.deadline = program.deadline;
+        }
         if (program.state != 0) {
             if (program.state <= p.state || program.state >= uint8(State.Closed)) revert InvalidStateTransition();
             // Active means claimable, so it has to mean funded — on every leg. A holder

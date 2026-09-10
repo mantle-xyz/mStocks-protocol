@@ -63,15 +63,17 @@ contract PrivatizationRegistryTest is Test {
         // then calls createToken (unpranked = msg.sender is this test).
         factory.grantRole(factory.OPS_ROLE(), address(this));
         usdc = new MockUSD();
+        address[] memory registryOps = new address[](1);
+        registryOps[0] = address(this); // test drives lifecycle (create/configure/fund/sweep)
         registry = PrivatizationRegistry(
             address(
                 new ERC1967Proxy(
-                    address(new PrivatizationRegistry()), abi.encodeCall(PrivatizationRegistry.initialize, (admin))
+                    address(new PrivatizationRegistry()),
+                    abi.encodeCall(PrivatizationRegistry.initialize, (admin, registryOps))
                 )
             )
         );
         compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
-        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives lifecycle (create/configure/fund/sweep)
         vm.stopPrank();
 
         address[] memory issuers = new address[](1);
@@ -660,5 +662,80 @@ contract PrivatizationRegistryTest is Test {
                 state: uint8(PrivatizationRegistry.State.Active)
             })
         );
+    }
+
+    // ── configureProgram window validation ──────────────────────────────────────
+
+    function test_configureProgram_rejectsPastDeadline() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: uint64(block.timestamp), // not strictly in the future
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+    }
+
+    function test_configureProgram_rejectsDeadlineNotAfterStartTime() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp) + 2 days,
+                deadline: uint64(block.timestamp) + 1 days, // before startTime
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+    }
+
+    function test_configureProgram_rejectsStartTimeMovedPastExistingDeadline() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp),
+                deadline: uint64(block.timestamp) + 1 days,
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp) + 2 days, // now past the stored deadline
+                deadline: 0,
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+    }
+
+    function test_configureProgram_acceptsValidWindow() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp),
+                deadline: uint64(block.timestamp) + 1 days,
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+        (, uint64 startTime, uint64 deadline,,) = registry.programs(id);
+        assertEq(startTime, uint64(block.timestamp));
+        assertEq(deadline, uint64(block.timestamp) + 1 days);
     }
 }
