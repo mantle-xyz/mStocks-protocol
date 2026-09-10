@@ -738,4 +738,181 @@ contract PrivatizationRegistryTest is Test {
         assertEq(startTime, uint64(block.timestamp));
         assertEq(deadline, uint64(block.timestamp) + 1 days);
     }
+
+    // ── oldToken uniqueness ──────────────────────────────────────────────────────
+
+    /// @dev A second program cannot target an oldToken another program already targets — two
+    ///      programs redeeming the same security against two independently-frozen snapshots would
+    ///      let it be claimed against twice, inconsistently.
+    function test_createProgram_rejectsDuplicateOldToken() public {
+        registry.createProgram(address(oldToken), _legs3());
+
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(oldToken))
+        );
+        registry.createProgram(address(oldToken), _legs3());
+    }
+
+    /// @dev A closed program's oldToken stays registered — it was retired, not freed up for reuse.
+    function test_createProgram_rejectsOldTokenFromAClosedProgram() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+        registry.sweepUnclaimed(id, custody); // now Closed
+
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(oldToken))
+        );
+        registry.createProgram(address(oldToken), _legs3());
+    }
+
+    /// @dev configureProgram's oldToken repoint is subject to the same uniqueness check as creation.
+    function test_configureProgram_rejectsRepointToAlreadyRegisteredOldToken() public {
+        PrivatizationRegistry.Leg[] memory legsWithoutNewToken = new PrivatizationRegistry.Leg[](2);
+        legsWithoutNewToken[0] = PrivatizationRegistry.Leg(address(usdc), 300e6);
+        legsWithoutNewToken[1] = PrivatizationRegistry.Leg(address(cvr), 100 ether);
+        registry.createProgram(address(newToken), legsWithoutNewToken); // registers newToken
+
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(newToken))
+        );
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(newToken), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+    }
+
+    /// @dev Repointing to a brand-new oldToken registers it; repointing back to the program's own
+    ///      current oldToken is a no-op, not a self-conflict.
+    function test_configureProgram_repointToFreshOldTokenRegistersIt() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(cvr), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+        (address oldTok,,,,) = registry.programs(id);
+        assertEq(oldTok, address(cvr));
+        assertTrue(registry.oldTokenRegistered(address(cvr)));
+
+        // now a fresh program cannot also target cvr
+        vm.expectRevert(abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(cvr)));
+        registry.createProgram(address(cvr), _legs3());
+
+        // re-supplying the program's own current oldToken is not treated as a repoint at all
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(cvr), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+    }
+
+    // ── fund token validation ────────────────────────────────────────────────────
+
+    /// @dev fund() refuses a token that isn't one of the program's legs — crediting it to
+    ///      `reserved` anyway would strand it forever, since claim/sweep only iterate the legs.
+    function test_fund_rejectsTokenNotInLegs() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3()); // legs: usdc, newToken, cvr
+        _freeze(oldToken);
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK));
+
+        ScaledToken wrong = ScaledToken(
+            factory.createToken(
+                "Unrelated", "UNR", "US0000000099", admin, _issuersOf(address(this)), new address[](0), new address[](0)
+            )
+        );
+        wrong.mint(1 ether);
+        wrong.approve(address(registry), 1 ether);
+        vm.expectRevert(abi.encodeWithSelector(PrivatizationRegistry.NotALegToken.selector, address(wrong)));
+        registry.fund(id, address(wrong), 1 ether);
+    }
+
+    function _issuersOf(address issuer) internal pure returns (address[] memory issuers) {
+        issuers = new address[](1);
+        issuers[0] = issuer;
+    }
+
+    // ── revokeRole last-admin guard ──────────────────────────────────────────────
+
+    /// @dev renounceRole already blocks removing the last admin; revokeRole is a second path to
+    ///      the exact same self-removal (an admin can revoke its own role) and needs the same guard.
+    function test_AdminCannotRevokeLastAdmin() public {
+        vm.prank(admin);
+        vm.expectRevert(PrivatizationRegistry.CannotRenounceLastAdmin.selector);
+        registry.revokeRole(0x00, admin);
+    }
+
+    function test_NonLastAdminCanBeRevoked() public {
+        address secondAdmin = makeAddr("secondAdmin");
+        vm.prank(admin);
+        registry.grantRole(0x00, secondAdmin);
+
+        vm.prank(admin);
+        registry.revokeRole(0x00, secondAdmin);
+        assertFalse(registry.hasRole(0x00, secondAdmin));
+        assertTrue(registry.hasRole(0x00, admin), "sole remaining admin untouched");
+    }
+
+    // ── leg token cannot equal oldToken ─────────────────────────────────────────
+
+    /// @dev A leg paid in `oldToken` itself would have claim() burn oldToken and then try to pay
+    ///      that same leg out of a reserve that can never legitimately be funded (minting oldToken
+    ///      back defeats the point of retiring it) — permanently DOSing every claim on the program.
+    function test_createProgram_rejectsLegTokenEqualToOldToken() public {
+        PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](2);
+        legs[0] = PrivatizationRegistry.Leg(address(usdc), 300e6);
+        legs[1] = PrivatizationRegistry.Leg(address(oldToken), 100 ether); // mismatched: == oldToken
+
+        vm.expectRevert(PrivatizationRegistry.BadLeg.selector);
+        registry.createProgram(address(oldToken), legs);
+    }
+
+    // ── previewClaim considers program state ────────────────────────────────────
+
+    /// @dev previewClaim returns zeros while still Created, even once snapshot + window are set —
+    ///      claim() itself would revert (not yet Active), so previewing a payout here is misleading.
+    function test_previewClaim_zeroWhileCreated() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _freeze(oldToken);
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK)); // snapshot set, stays Created
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        for (uint256 i = 0; i < outs.length; ++i) {
+            assertEq(outs[i], 0);
+        }
+    }
+
+    /// @dev previewClaim returns zeros again once the program has closed.
+    function test_previewClaim_zeroOnceClosed() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+        registry.sweepUnclaimed(id, custody); // now Closed
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        for (uint256 i = 0; i < outs.length; ++i) {
+            assertEq(outs[i], 0);
+        }
+    }
+
+    /// @dev previewClaim returns the real pro-rata payout once Active — the one state it's meant
+    ///      to preview.
+    function test_previewClaim_nonZeroWhenActive() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        assertEq(outs[0], 300e6);
+        assertEq(outs[1], 200 ether);
+        assertEq(outs[2], 100 ether);
+    }
 }
