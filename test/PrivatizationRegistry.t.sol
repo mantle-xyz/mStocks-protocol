@@ -74,6 +74,7 @@ contract PrivatizationRegistryTest is Test {
             )
         );
         compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
+        registry.registerSweepRecipient(custody); // sweep destination used throughout these tests
         vm.stopPrank();
 
         address[] memory issuers = new address[](1);
@@ -769,7 +770,10 @@ contract PrivatizationRegistryTest is Test {
 
     /// @dev configureProgram's oldToken repoint is subject to the same uniqueness check as creation.
     function test_configureProgram_rejectsRepointToAlreadyRegisteredOldToken() public {
-        registry.createProgram(address(newToken), _legs3()); // registers newToken
+        PrivatizationRegistry.Leg[] memory legsWithoutNewToken = new PrivatizationRegistry.Leg[](2);
+        legsWithoutNewToken[0] = PrivatizationRegistry.Leg(address(usdc), 300e6);
+        legsWithoutNewToken[1] = PrivatizationRegistry.Leg(address(cvr), 100 ether);
+        registry.createProgram(address(newToken), legsWithoutNewToken); // registers newToken
 
         uint256 id = registry.createProgram(address(oldToken), _legs3());
         vm.expectRevert(
@@ -855,5 +859,127 @@ contract PrivatizationRegistryTest is Test {
         registry.revokeRole(0x00, secondAdmin);
         assertFalse(registry.hasRole(0x00, secondAdmin));
         assertTrue(registry.hasRole(0x00, admin), "sole remaining admin untouched");
+    }
+
+    // ── leg token cannot equal oldToken ─────────────────────────────────────────
+
+    /// @dev A leg paid in `oldToken` itself would have claim() burn oldToken and then try to pay
+    ///      that same leg out of a reserve that can never legitimately be funded (minting oldToken
+    ///      back defeats the point of retiring it) — permanently DOSing every claim on the program.
+    function test_createProgram_rejectsLegTokenEqualToOldToken() public {
+        PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](2);
+        legs[0] = PrivatizationRegistry.Leg(address(usdc), 300e6);
+        legs[1] = PrivatizationRegistry.Leg(address(oldToken), 100 ether); // mismatched: == oldToken
+
+        vm.expectRevert(PrivatizationRegistry.BadLeg.selector);
+        registry.createProgram(address(oldToken), legs);
+    }
+
+    // ── previewClaim considers program state ────────────────────────────────────
+
+    /// @dev previewClaim returns zeros while still Created, even once snapshot + window are set —
+    ///      claim() itself would revert (not yet Active), so previewing a payout here is misleading.
+    function test_previewClaim_zeroWhileCreated() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _freeze(oldToken);
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK)); // snapshot set, stays Created
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        for (uint256 i = 0; i < outs.length; ++i) {
+            assertEq(outs[i], 0);
+        }
+    }
+
+    /// @dev previewClaim returns zeros again once the program has closed.
+    function test_previewClaim_zeroOnceClosed() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+        registry.sweepUnclaimed(id, custody); // now Closed
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        for (uint256 i = 0; i < outs.length; ++i) {
+            assertEq(outs[i], 0);
+        }
+    }
+
+    /// @dev previewClaim returns the real pro-rata payout once Active — the one state it's meant
+    ///      to preview.
+    function test_previewClaim_nonZeroWhenActive() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+
+        uint256[] memory outs = registry.previewClaim(id, 100 ether);
+        assertEq(outs[0], 300e6);
+        assertEq(outs[1], 200 ether);
+        assertEq(outs[2], 100 ether);
+    }
+
+    // ── sweepUnclaimed recipient allowlist ───────────────────────────────────────
+
+    /// @dev A leaked/malicious OPS key can trigger a sweep, but only to an admin-approved address —
+    ///      an arbitrary `to` is refused even though OPS otherwise fully controls sweepUnclaimed.
+    function test_sweepUnclaimed_rejectsUnregisteredRecipient() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+
+        address stranger = makeAddr("stranger");
+        vm.expectRevert(PrivatizationRegistry.NotRegisteredSweepRecipient.selector);
+        registry.sweepUnclaimed(id, stranger);
+    }
+
+    function test_sweepUnclaimed_acceptsRegisteredRecipient() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+
+        registry.sweepUnclaimed(id, custody); // registered in setUp
+        assertEq(usdc.balanceOf(custody), 300e6);
+    }
+
+    /// @dev Deregistering closes the allowlist entry — a previously-valid destination is refused
+    ///      once removed.
+    function test_sweepUnclaimed_rejectsAfterDeregistration() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+
+        vm.prank(admin);
+        registry.deregisterSweepRecipient(custody);
+
+        vm.expectRevert(PrivatizationRegistry.NotRegisteredSweepRecipient.selector);
+        registry.sweepUnclaimed(id, custody);
+    }
+
+    /// @dev The zero address can never be registered, so it's never a valid sweep destination.
+    function test_registerSweepRecipient_rejectsZeroAddress() public {
+        vm.prank(admin);
+        vm.expectRevert(PrivatizationRegistry.ZeroAddress.selector);
+        registry.registerSweepRecipient(address(0));
+    }
+
+    /// @dev Managing the allowlist is admin-only — OPS cannot self-authorize a sweep destination.
+    function test_registerSweepRecipient_onlyAdmin() public {
+        vm.expectRevert(); // AccessControlUnauthorizedAccount — this test contract holds OPS, not admin
+        registry.registerSweepRecipient(makeAddr("newRecipient"));
+    }
+
+    function test_registerSweepRecipients_batch() public {
+        address r1 = makeAddr("r1");
+        address r2 = makeAddr("r2");
+        address[] memory recipients = new address[](2);
+        recipients[0] = r1;
+        recipients[1] = r2;
+
+        vm.prank(admin);
+        registry.registerSweepRecipients(recipients);
+        assertTrue(registry.isSweepRecipient(r1));
+        assertTrue(registry.isSweepRecipient(r2));
     }
 }
