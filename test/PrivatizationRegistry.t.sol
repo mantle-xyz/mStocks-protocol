@@ -63,15 +63,17 @@ contract PrivatizationRegistryTest is Test {
         // then calls createToken (unpranked = msg.sender is this test).
         factory.grantRole(factory.OPS_ROLE(), address(this));
         usdc = new MockUSD();
+        address[] memory registryOps = new address[](1);
+        registryOps[0] = address(this); // test drives lifecycle (create/configure/fund/sweep)
         registry = PrivatizationRegistry(
             address(
                 new ERC1967Proxy(
-                    address(new PrivatizationRegistry()), abi.encodeCall(PrivatizationRegistry.initialize, (admin))
+                    address(new PrivatizationRegistry()),
+                    abi.encodeCall(PrivatizationRegistry.initialize, (admin, registryOps))
                 )
             )
         );
         compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
-        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives lifecycle (create/configure/fund/sweep)
         vm.stopPrank();
 
         address[] memory issuers = new address[](1);

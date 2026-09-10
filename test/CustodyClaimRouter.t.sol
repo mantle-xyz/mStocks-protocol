@@ -63,23 +63,26 @@ contract CustodyClaimRouterTest is Test {
         // then calls createToken (unpranked = msg.sender is this test).
         factory.grantRole(factory.OPS_ROLE(), address(this));
         usdc = new MockUSD();
+        address[] memory registryOps = new address[](1);
+        registryOps[0] = address(this); // test drives registry lifecycle
         registry = PrivatizationRegistry(
             address(
                 new ERC1967Proxy(
-                    address(new PrivatizationRegistry()), abi.encodeCall(PrivatizationRegistry.initialize, (admin))
+                    address(new PrivatizationRegistry()),
+                    abi.encodeCall(PrivatizationRegistry.initialize, (admin, registryOps))
                 )
             )
         );
+        address[] memory routerOps = new address[](1);
+        routerOps[0] = ops;
         router = CustodyClaimRouter(
             address(
                 new ERC1967Proxy(
                     address(new CustodyClaimRouter()),
-                    abi.encodeCall(CustodyClaimRouter.initialize, (address(registry), admin))
+                    abi.encodeCall(CustodyClaimRouter.initialize, (address(registry), admin, routerOps))
                 )
             )
         );
-        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives registry lifecycle
-        router.grantRole(router.OPS_ROLE(), ops);
         router.registerHotWallet(hotWallet);
         vm.stopPrank();
 
