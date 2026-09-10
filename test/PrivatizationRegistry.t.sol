@@ -810,4 +810,29 @@ contract PrivatizationRegistryTest is Test {
             })
         );
     }
+
+    // ── fund token validation ────────────────────────────────────────────────────
+
+    /// @dev fund() refuses a token that isn't one of the program's legs — crediting it to
+    ///      `reserved` anyway would strand it forever, since claim/sweep only iterate the legs.
+    function test_fund_rejectsTokenNotInLegs() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3()); // legs: usdc, newToken, cvr
+        _freeze(oldToken);
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK));
+
+        ScaledToken wrong = ScaledToken(
+            factory.createToken(
+                "Unrelated", "UNR", "US0000000099", admin, _issuersOf(address(this)), new address[](0), new address[](0)
+            )
+        );
+        wrong.mint(1 ether);
+        wrong.approve(address(registry), 1 ether);
+        vm.expectRevert(abi.encodeWithSelector(PrivatizationRegistry.NotALegToken.selector, address(wrong)));
+        registry.fund(id, address(wrong), 1 ether);
+    }
+
+    function _issuersOf(address issuer) internal pure returns (address[] memory issuers) {
+        issuers = new address[](1);
+        issuers[0] = issuer;
+    }
 }
