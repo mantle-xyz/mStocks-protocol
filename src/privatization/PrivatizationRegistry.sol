@@ -38,7 +38,9 @@ import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 ///
 ///         Reward funds are accounted **per program** (`reserved[programId][token]`): a claim only
 ///         ever draws from its own program's reserve, so programs never touch each other's money,
-///         and `sweepUnclaimed` is precise and deadline-gated.
+///         and `sweepUnclaimed` is precise and deadline-gated. Its destination is further bound to
+///         an admin-maintained allowlist ({isSweepRecipient}) — a leaked or malicious OPS key can
+///         trigger the sweep, but never redirect it to an address of its own choosing.
 ///
 ///         `oldToken` / `oldSupplySnapshot` are frozen by {configureProgram} once any leg has been
 ///         funded, and the whole patch is refused once any {claim} has succeeded — see
@@ -98,12 +100,19 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///         than an intentional second delisting.
     mapping(address => bool) public oldTokenRegistered;
     uint256 public programCount;
+    /// @notice Admin-maintained allowlist of legitimate {sweepUnclaimed} destinations. A leaked or
+    ///         malicious OPS key can trigger a sweep, but — same duty separation as
+    ///         {CustodyClaimRouter}'s hot-wallet allowlist — it can only ever send the swept reserve
+    ///         to an address the admin has already approved, never to one of its own choosing.
+    mapping(address => bool) public isSweepRecipient;
 
     event ProgramCreated(uint256 indexed programId, address indexed oldToken);
     event ProgramConfigured(uint256 indexed programId, uint64 startTime, uint64 deadline, uint256 oldSupplySnapshot);
     event Funded(uint256 indexed programId, address indexed token, address indexed from, uint256 amount);
     event Claimed(uint256 indexed programId, address indexed holder, uint256 oldAmount);
     event Swept(uint256 indexed programId, address indexed to);
+    event SweepRecipientRegistered(address indexed to);
+    event SweepRecipientDeregistered(address indexed to);
 
     error ZeroAddress();
     error NoLegs();
@@ -145,6 +154,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error BurnFailed();
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
+    /// @notice {sweepUnclaimed}'s `to` is not on the admin-maintained {isSweepRecipient} allowlist.
+    error NotRegisteredSweepRecipient();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -311,6 +322,31 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         emit Funded(programId, token, msg.sender, amount);
     }
 
+    // ── sweep recipient allowlist (admin) ────────────────────────────────────────
+
+    /// @notice Add a {sweepUnclaimed} destination to the allowlist. Admin-only (more sensitive than
+    ///         triggering a sweep, hence separated from OPS_ROLE — same pattern as
+    ///         {CustodyClaimRouter.registerHotWallet}).
+    function registerSweepRecipient(address to) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (to == address(0)) revert ZeroAddress();
+        isSweepRecipient[to] = true;
+        emit SweepRecipientRegistered(to);
+    }
+
+    /// @notice Batch variant of {registerSweepRecipient}.
+    function registerSweepRecipients(address[] calldata recipients) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        for (uint256 i = 0; i < recipients.length; ++i) {
+            if (recipients[i] == address(0)) revert ZeroAddress();
+            isSweepRecipient[recipients[i]] = true;
+            emit SweepRecipientRegistered(recipients[i]);
+        }
+    }
+
+    function deregisterSweepRecipient(address to) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        isSweepRecipient[to] = false;
+        emit SweepRecipientDeregistered(to);
+    }
+
     // ── views ─────────────────────────────────────────────────────────────────
 
     function legsCount(uint256 programId) external view returns (uint256) {
@@ -378,13 +414,15 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
     /// @notice After the program deadline, sweep its remaining (unclaimed) reserve of every leg
     ///         token to a custody address and close it. OPS-only. Deadline-gated so committed funds
-    ///         cannot be pulled out from under holders who can still claim.
+    ///         cannot be pulled out from under holders who can still claim. `to` must be on the
+    ///         admin-maintained {isSweepRecipient} allowlist — a leaked or malicious OPS key can
+    ///         trigger the sweep, but never redirect it to an address of its own choosing.
     function sweepUnclaimed(uint256 programId, address to) external onlyRole(OPS_ROLE) nonReentrant {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
         if (p.state != uint8(State.Active)) revert NotActive();
         if (block.timestamp <= p.deadline) revert ClaimStillOpen();
-        if (to == address(0)) revert ZeroAddress();
+        if (!isSweepRecipient[to]) revert NotRegisteredSweepRecipient();
 
         p.state = uint8(State.Closed);
         Leg[] storage legs = _legs[programId];
@@ -438,7 +476,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         super.revokeRole(role, account);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 6 vars (programs, _legs, reserved,
-    ///      claimStarted, oldTokenRegistered, programCount) + 44 = 50 slots reserved.
-    uint256[44] private __gap;
+    /// @dev Storage gap for upgrade-safe additions. 7 vars (programs, _legs, reserved,
+    ///      claimStarted, oldTokenRegistered, programCount, isSweepRecipient) + 43 = 50 slots
+    ///      reserved.
+    uint256[43] private __gap;
 }
