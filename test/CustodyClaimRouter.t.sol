@@ -246,4 +246,20 @@ contract CustodyClaimRouterTest is Test {
         vm.expectRevert();
         router.rescue(address(oldToken), custody, 1);
     }
+
+    // ── role guards ──────────────────────────────────────────────────────────────
+
+    function test_lastAdminCannotRenounce() public {
+        vm.prank(admin);
+        vm.expectRevert(CustodyClaimRouter.CannotRenounceLastAdmin.selector);
+        router.renounceRole(0x00, admin);
+    }
+
+    /// @dev revokeRole is a second path to the same self-removal renounceRole is guarded against
+    ///      (an admin can revoke its own role just as well as renounce it) — needs the same guard.
+    function test_lastAdminCannotBeRevoked() public {
+        vm.prank(admin);
+        vm.expectRevert(CustodyClaimRouter.CannotRenounceLastAdmin.selector);
+        router.revokeRole(0x00, admin);
+    }
 }

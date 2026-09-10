@@ -961,6 +961,14 @@ contract WarrantRegistryTest is Test {
         reg.renounceRole(0x00, admin);
     }
 
+    /// @dev revokeRole is a second path to the same self-removal renounceRole is guarded against
+    ///      (an admin can revoke its own role just as well as renounce it) — needs the same guard.
+    function test_lastAdminCannotBeRevoked() public {
+        vm.prank(admin);
+        vm.expectRevert(WarrantRegistry.CannotRenounceLastAdmin.selector);
+        reg.revokeRole(0x00, admin);
+    }
+
     // ── configureProgram is frozen once anyone has claimed ──────────────────────
 
     /// @dev The hole this closes: `merkleRoot` had no lock. OPS could swap the whole holder set
