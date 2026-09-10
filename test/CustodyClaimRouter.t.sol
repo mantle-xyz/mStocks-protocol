@@ -63,23 +63,26 @@ contract CustodyClaimRouterTest is Test {
         // then calls createToken (unpranked = msg.sender is this test).
         factory.grantRole(factory.OPS_ROLE(), address(this));
         usdc = new MockUSD();
+        address[] memory registryOps = new address[](1);
+        registryOps[0] = address(this); // test drives registry lifecycle
         registry = PrivatizationRegistry(
             address(
                 new ERC1967Proxy(
-                    address(new PrivatizationRegistry()), abi.encodeCall(PrivatizationRegistry.initialize, (admin))
+                    address(new PrivatizationRegistry()),
+                    abi.encodeCall(PrivatizationRegistry.initialize, (admin, registryOps))
                 )
             )
         );
+        address[] memory routerOps = new address[](1);
+        routerOps[0] = ops;
         router = CustodyClaimRouter(
             address(
                 new ERC1967Proxy(
                     address(new CustodyClaimRouter()),
-                    abi.encodeCall(CustodyClaimRouter.initialize, (address(registry), admin))
+                    abi.encodeCall(CustodyClaimRouter.initialize, (address(registry), admin, routerOps))
                 )
             )
         );
-        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives registry lifecycle
-        router.grantRole(router.OPS_ROLE(), ops);
         router.registerHotWallet(hotWallet);
         vm.stopPrank();
 
@@ -112,13 +115,14 @@ contract CustodyClaimRouterTest is Test {
         vm.prank(tokenOps);
         oldToken.setMintAllowed(false);
 
-        // configure: OPS supplies the frozen 100e18 snapshot + window + state=Active
+        // configure: OPS supplies the frozen 100e18 snapshot + window, staying Created —
+        // the registry will not open a program until every leg is funded.
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
             oldToken: address(0),
             startTime: uint64(block.timestamp),
             deadline: uint64(block.timestamp + 7 days),
             oldSupplySnapshot: 100 ether,
-            state: uint8(PrivatizationRegistry.State.Active)
+            state: 0
         });
         registry.configureProgram(programId, cfg);
 
@@ -126,6 +130,18 @@ contract CustodyClaimRouterTest is Test {
         _fundUsd(300e6);
         _fund(newToken, 200 ether);
         _fund(cvr, 100 ether);
+
+        // ...and only then open it.
+        registry.configureProgram(
+            programId,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: 0,
+                oldSupplySnapshot: 0,
+                state: uint8(PrivatizationRegistry.State.Active)
+            })
+        );
     }
 
     function _fund(ScaledToken t, uint256 amount) internal {

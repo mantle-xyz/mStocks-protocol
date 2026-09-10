@@ -63,15 +63,17 @@ contract PrivatizationRegistryTest is Test {
         // then calls createToken (unpranked = msg.sender is this test).
         factory.grantRole(factory.OPS_ROLE(), address(this));
         usdc = new MockUSD();
+        address[] memory registryOps = new address[](1);
+        registryOps[0] = address(this); // test drives lifecycle (create/configure/fund/sweep)
         registry = PrivatizationRegistry(
             address(
                 new ERC1967Proxy(
-                    address(new PrivatizationRegistry()), abi.encodeCall(PrivatizationRegistry.initialize, (admin))
+                    address(new PrivatizationRegistry()),
+                    abi.encodeCall(PrivatizationRegistry.initialize, (admin, registryOps))
                 )
             )
         );
         compliance.grantRole(compliance.OPS_ROLE(), complianceOps);
-        registry.grantRole(registry.OPS_ROLE(), address(this)); // test drives lifecycle (create/configure/fund/sweep)
         vm.stopPrank();
 
         address[] memory issuers = new address[](1);
@@ -106,6 +108,13 @@ contract PrivatizationRegistryTest is Test {
     /// @dev Grant the registry BURN_ROLE on `t` (least privilege — burn only) and freeze its
     ///      supply (setMintAllowed is OPS-gated, so route through a tokenOps actor). Must run after
     ///      all seeding, since freeze stops minting — the frozen supply is what configure snapshots.
+    /// @dev Grants the registry BURN_ROLE without freezing mint, so a test can show what
+    ///      the freeze is protecting.
+    function _grantBurn(ScaledToken t) internal {
+        vm.prank(admin);
+        t.grantRole(BURN_ROLE, address(registry));
+    }
+
     function _freeze(ScaledToken t) internal {
         bytes32 opsRole = t.OPS_ROLE(); // cache before pranks (arg call would consume the prank)
         vm.startPrank(admin);
@@ -118,6 +127,8 @@ contract PrivatizationRegistryTest is Test {
 
     /// @dev OPS configures the window. Under the patch model the caller supplies the snapshot (the
     ///      frozen totalSupply, read here as an off-chain operator would) and sets state=Active.
+    /// @dev Configures the snapshot and window but leaves the program Created. Opening it
+    ///      is a separate step because the contract requires every leg to be funded first.
     function _configure(uint256 programId, uint64 startTime, uint64 deadline) internal {
         (address oldTok,,,,) = registry.programs(programId);
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
@@ -125,15 +136,39 @@ contract PrivatizationRegistryTest is Test {
             startTime: startTime,
             deadline: deadline,
             oldSupplySnapshot: ScaledToken(oldTok).totalSupply(),
-            state: uint8(PrivatizationRegistry.State.Active)
+            state: 0 // stay Created until every leg is funded
         });
         registry.configureProgram(programId, cfg);
     }
 
-    /// @dev freeze + configure with a default [now, now+1w] window.
+    /// @dev Flips a fully funded program to Active.
+    function _open(uint256 programId) internal {
+        registry.configureProgram(
+            programId,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: 0,
+                oldSupplySnapshot: 0,
+                state: uint8(PrivatizationRegistry.State.Active)
+            })
+        );
+    }
+
+    /// @dev freeze + configure with a default [now, now+1w] window. Still Created.
     function _activate(uint256 programId, ScaledToken old) internal {
         _freeze(old);
         _configure(programId, uint64(block.timestamp), uint64(block.timestamp + WEEK));
+    }
+
+    /// @dev The whole opening sequence for a `_legs3()` basket: configure, fund all three
+    ///      legs to their totals, open.
+    function _activateAndFundLegs3(uint256 programId, ScaledToken old) internal {
+        _activate(programId, old);
+        _fundUsd(programId, 300e6);
+        _fund(programId, newToken, 200 ether);
+        _fund(programId, cvr, 100 ether);
+        _open(programId);
     }
 
     function _legs3() internal view returns (PrivatizationRegistry.Leg[] memory legs) {
@@ -157,10 +192,7 @@ contract PrivatizationRegistryTest is Test {
         _seed(oldToken, alice, 100 ether); // alice holds the whole 100e18 supply
 
         uint256 id = registry.createProgram(address(oldToken), _legs3());
-        _activate(id, oldToken); // snapshot = 100e18
-        _fundUsd(id, 300e6);
-        _fund(id, newToken, 200 ether);
-        _fund(id, cvr, 100 ether);
+        _activateAndFundLegs3(id, oldToken); // snapshot = 100e18
 
         uint256[] memory outs = registry.previewClaim(id, 100 ether);
         assertEq(outs[0], 300e6);
@@ -189,10 +221,7 @@ contract PrivatizationRegistryTest is Test {
         _seed(oldToken, bob, 40 ether); // total supply 100e18
 
         uint256 id = registry.createProgram(address(oldToken), _legs3());
-        _activate(id, oldToken); // snapshot = 100e18 (fixed)
-        _fundUsd(id, 300e6);
-        _fund(id, newToken, 200 ether);
-        _fund(id, cvr, 100 ether);
+        _activateAndFundLegs3(id, oldToken); // snapshot = 100e18 (fixed)
 
         vm.startPrank(alice);
         oldToken.approve(address(registry), 60 ether);
@@ -226,9 +255,23 @@ contract PrivatizationRegistryTest is Test {
         uint256 p0 = registry.createProgram(address(oldToken), legs);
         uint256 p1 = registry.createProgram(address(newToken), legs);
         _activate(p0, oldToken); // snapshot oldToken supply = 100e18
-
         _fundUsd(p0, 500e6);
-        _fundUsd(p1, 999e6); // sibling program's money (p1 stays Created — never claimed)
+        _open(p0);
+
+        // p1's money. It needs its own snapshot before it can be funded at all now, and it
+        // is left Created deliberately: the point is that p0's claim cannot reach it.
+        _freeze(newToken);
+        registry.configureProgram(
+            p1,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp),
+                deadline: uint64(block.timestamp + WEEK),
+                oldSupplySnapshot: 1 ether, // newToken has no supply here; any non-zero denominator
+                state: 0
+            })
+        );
+        _fundUsd(p1, 999e6);
 
         vm.startPrank(alice);
         oldToken.approve(address(registry), 100 ether);
@@ -240,14 +283,60 @@ contract PrivatizationRegistryTest is Test {
         assertEq(registry.reserved(p1, address(usdc)), 999e6, "sibling program's reserve untouched");
     }
 
-    function test_claim_insufficientReservedReverts() public {
+    /// oldToken and the legs are fixed at creation, but oldSupplySnapshot — the claim
+    /// denominator — is not, and funding locks it. Without this guard a caller could fund
+    /// straight after creating and strand the snapshot at zero: previewClaim returns zeros
+    /// and every claim reverts on the division, while the reserves sit there.
+    function test_fund_beforeSnapshotIsSetReverts() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+
+        usdc.mint(address(this), 300e6);
+        usdc.approve(address(registry), 300e6);
+        vm.expectRevert(PrivatizationRegistry.SupplySnapshotNotSet.selector);
+        registry.fund(id, address(usdc), 300e6);
+
+        assertEq(registry.reserved(id, address(usdc)), 0, "nothing was taken");
+
+        // In the right order it goes through.
+        _freeze(oldToken);
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK));
+        _fundUsd(id, 300e6);
+        assertEq(registry.reserved(id, address(usdc)), 300e6);
+    }
+
+    /// Under-funding can no longer produce InsufficientReserved: opening a program requires
+    /// every leg's reserve to cover its total, and payouts are `amount * total / snapshot`
+    /// over a supply that cannot exceed the snapshot — so the reserve is sufficient by
+    /// construction.
+    ///
+    /// It survives for one case, and this is what the freeze step exists to prevent: if the
+    /// old token can still be minted after the snapshot is taken, total supply outgrows the
+    /// denominator, the program promises more than `total`, and whoever claims last is left
+    /// short. Here the token is deliberately not frozen.
+    function test_claim_insufficientReservedWhenSupplyOutgrowsTheSnapshot() public {
         _seed(oldToken, alice, 100 ether);
         PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](1);
         legs[0] = PrivatizationRegistry.Leg(address(usdc), 500e6);
         uint256 id = registry.createProgram(address(oldToken), legs);
-        _activate(id, oldToken);
-        _fundUsd(id, 100e6); // underfunded: owes the full 500e6 to the sole holder
 
+        _grantBurn(oldToken); // burn permitted, mint NOT frozen
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK)); // snapshot = 100e18
+        _fundUsd(id, 500e6);
+        _open(id); // fully funded against the snapshot
+
+        // Supply doubles after the snapshot was taken.
+        _seed(oldToken, bob, 100 ether);
+
+        // bob claims first and the denominator still says he owns all of it.
+        vm.startPrank(bob);
+        oldToken.approve(address(registry), 100 ether);
+        registry.claim(id, 100 ether);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(bob), 500e6, "bob drained the whole leg");
+        assertEq(registry.reserved(id, address(usdc)), 0);
+
+        // alice is owed the same 500e6 and there is nothing left.
         vm.startPrank(alice);
         oldToken.approve(address(registry), 100 ether);
         vm.expectRevert(PrivatizationRegistry.InsufficientReserved.selector);
@@ -255,13 +344,76 @@ contract PrivatizationRegistryTest is Test {
         vm.stopPrank();
     }
 
+    /// Funding is a Created-state action. Active asserts that every leg's reserve covers its
+    /// total, and that assertion would mean nothing if the reserves could still move —
+    /// including upward, since a later top-up implies it was wrong when made.
+    function test_fund_lockedOnceActive() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+
+        usdc.mint(address(this), 1e6);
+        usdc.approve(address(registry), 1e6);
+        vm.expectRevert(PrivatizationRegistry.FundLockedOnceActive.selector);
+        registry.fund(id, address(usdc), 1e6);
+        assertEq(registry.reserved(id, address(usdc)), 300e6, "unchanged");
+    }
+
+    /// And after sweeping, which the same condition covers.
+    function test_fund_lockedOnceClosed() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+        registry.sweepUnclaimed(id, custody);
+
+        usdc.mint(address(this), 1e6);
+        usdc.approve(address(registry), 1e6);
+        vm.expectRevert(PrivatizationRegistry.FundLockedOnceActive.selector);
+        registry.fund(id, address(usdc), 1e6);
+    }
+
+    /// The check that makes the above unreachable through the normal path. A basket short on
+    /// any leg pays out on none of them, since claim() delivers every leg or reverts, so the
+    /// bound is per leg rather than "something was funded".
+    function test_configureProgram_activeRequiresEveryLegFunded() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _freeze(oldToken);
+        _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.LegNotFullyFunded.selector, address(usdc), 0, 300e6)
+        );
+        _open(id);
+
+        _fundUsd(id, 300e6);
+        _fund(id, newToken, 200 ether);
+        // cvr leg still empty — two of three is not enough.
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.LegNotFullyFunded.selector, address(cvr), 0, 100 ether)
+        );
+        _open(id);
+
+        // Short by one wei on the last leg is still short.
+        _fund(id, cvr, 100 ether - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                PrivatizationRegistry.LegNotFullyFunded.selector, address(cvr), 100 ether - 1, 100 ether
+            )
+        );
+        _open(id);
+
+        _fund(id, cvr, 1);
+        _open(id);
+        (,,,, uint8 state) = registry.programs(id);
+        assertEq(state, uint8(PrivatizationRegistry.State.Active));
+    }
+
     function test_claim_blockedHolderRevertsWhole() public {
         _seed(oldToken, bob, 100 ether);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
-        _activate(id, oldToken);
-        _fundUsd(id, 300e6);
-        _fund(id, newToken, 200 ether);
-        _fund(id, cvr, 100 ether);
+        _activateAndFundLegs3(id, oldToken);
         _blockOnNew(bob);
 
         vm.startPrank(bob);
@@ -280,6 +432,7 @@ contract PrivatizationRegistryTest is Test {
         _freeze(oldToken);
         _configure(id, uint64(block.timestamp), uint64(block.timestamp + 1 days));
         _fundUsd(id, 500e6);
+        _open(id);
 
         vm.expectRevert(PrivatizationRegistry.ClaimStillOpen.selector);
         registry.sweepUnclaimed(id, custody);
@@ -309,6 +462,7 @@ contract PrivatizationRegistryTest is Test {
         _activate(id, cvr); // freeze the CVR + snapshot its supply
         _fundUsd(id, 400e6);
         _fund(id, newToken, 100 ether);
+        _open(id);
 
         vm.startPrank(alice);
         cvr.approve(address(registry), 100 ether);
@@ -332,14 +486,15 @@ contract PrivatizationRegistryTest is Test {
         uint256 id = registry.createProgram(address(oldToken), _legs3());
         _freeze(oldToken);
 
-        // First configure: open the window with an explicit snapshot + Active.
+        // First configure: set the window and snapshot, staying Created — patching is only
+        // allowed there now, so this is where "zero means keep" has to hold.
         uint64 start = uint64(block.timestamp);
         PrivatizationRegistry.Program memory cfg = PrivatizationRegistry.Program({
             oldToken: address(0),
             startTime: start,
             deadline: uint64(block.timestamp + WEEK),
             oldSupplySnapshot: 100 ether,
-            state: uint8(PrivatizationRegistry.State.Active)
+            state: 0
         });
         registry.configureProgram(id, cfg);
 
@@ -355,7 +510,7 @@ contract PrivatizationRegistryTest is Test {
         assertEq(st, start, "startTime kept");
         assertEq(dl, newDeadline, "deadline overwritten");
         assertEq(snap, 100 ether, "snapshot kept");
-        assertEq(state, uint8(PrivatizationRegistry.State.Active), "state kept");
+        assertEq(state, uint8(PrivatizationRegistry.State.Created), "state kept: a zero patch does not open it");
     }
 
     /// @dev A claim before the window opens reverts.
@@ -367,6 +522,7 @@ contract PrivatizationRegistryTest is Test {
         _fundUsd(id, 300e6);
         _fund(id, newToken, 200 ether);
         _fund(id, cvr, 100 ether);
+        _open(id);
 
         vm.startPrank(alice);
         oldToken.approve(address(registry), 100 ether);
@@ -426,10 +582,7 @@ contract PrivatizationRegistryTest is Test {
     function test_configureProgram_lockedAfterClaimStarted() public {
         _seed(oldToken, alice, 100 ether);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
-        _activate(id, oldToken);
-        _fundUsd(id, 300e6);
-        _fund(id, newToken, 200 ether);
-        _fund(id, cvr, 100 ether);
+        _activateAndFundLegs3(id, oldToken);
 
         vm.startPrank(alice);
         oldToken.approve(address(registry), 50 ether);
@@ -438,7 +591,7 @@ contract PrivatizationRegistryTest is Test {
 
         assertTrue(registry.claimStarted(id));
 
-        vm.expectRevert(PrivatizationRegistry.ConfigureLockedAfterClaim.selector);
+        vm.expectRevert(PrivatizationRegistry.ConfigureLockedOnceActive.selector);
         registry.configureProgram(
             id,
             PrivatizationRegistry.Program({
@@ -487,11 +640,18 @@ contract PrivatizationRegistryTest is Test {
     function test_configureProgram_cannotReopenClosedProgram() public {
         _seed(oldToken, alice, 100 ether);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _freeze(oldToken);
         _configure(id, uint64(block.timestamp), uint64(block.timestamp + 1 days));
+        _fundUsd(id, 300e6);
+        _fund(id, newToken, 200 ether);
+        _fund(id, cvr, 100 ether);
+        _open(id);
         vm.warp(block.timestamp + 2 days);
         registry.sweepUnclaimed(id, custody); // now Closed
 
-        vm.expectRevert(PrivatizationRegistry.InvalidStateTransition.selector);
+        // Closed is not Created, so the configure lock covers it — which also answers
+        // whether a swept program's snapshot could still be rewritten. It cannot.
+        vm.expectRevert(PrivatizationRegistry.ConfigureLockedOnceActive.selector);
         registry.configureProgram(
             id,
             PrivatizationRegistry.Program({
@@ -502,5 +662,80 @@ contract PrivatizationRegistryTest is Test {
                 state: uint8(PrivatizationRegistry.State.Active)
             })
         );
+    }
+
+    // ── configureProgram window validation ──────────────────────────────────────
+
+    function test_configureProgram_rejectsPastDeadline() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: uint64(block.timestamp), // not strictly in the future
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+    }
+
+    function test_configureProgram_rejectsDeadlineNotAfterStartTime() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp) + 2 days,
+                deadline: uint64(block.timestamp) + 1 days, // before startTime
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+    }
+
+    function test_configureProgram_rejectsStartTimeMovedPastExistingDeadline() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp),
+                deadline: uint64(block.timestamp) + 1 days,
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp) + 2 days, // now past the stored deadline
+                deadline: 0,
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+    }
+
+    function test_configureProgram_acceptsValidWindow() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: uint64(block.timestamp),
+                deadline: uint64(block.timestamp) + 1 days,
+                oldSupplySnapshot: 0,
+                state: 0
+            })
+        );
+        (, uint64 startTime, uint64 deadline,,) = registry.programs(id);
+        assertEq(startTime, uint64(block.timestamp));
+        assertEq(deadline, uint64(block.timestamp) + 1 days);
     }
 }
