@@ -835,4 +835,25 @@ contract PrivatizationRegistryTest is Test {
         issuers = new address[](1);
         issuers[0] = issuer;
     }
+
+    // ── revokeRole last-admin guard ──────────────────────────────────────────────
+
+    /// @dev renounceRole already blocks removing the last admin; revokeRole is a second path to
+    ///      the exact same self-removal (an admin can revoke its own role) and needs the same guard.
+    function test_AdminCannotRevokeLastAdmin() public {
+        vm.prank(admin);
+        vm.expectRevert(PrivatizationRegistry.CannotRenounceLastAdmin.selector);
+        registry.revokeRole(0x00, admin);
+    }
+
+    function test_NonLastAdminCanBeRevoked() public {
+        address secondAdmin = makeAddr("secondAdmin");
+        vm.prank(admin);
+        registry.grantRole(0x00, secondAdmin);
+
+        vm.prank(admin);
+        registry.revokeRole(0x00, secondAdmin);
+        assertFalse(registry.hasRole(0x00, secondAdmin));
+        assertTrue(registry.hasRole(0x00, admin), "sole remaining admin untouched");
+    }
 }
