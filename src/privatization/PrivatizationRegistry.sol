@@ -89,6 +89,14 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///         {configureProgram} is gated on the program still being Created, not on
     ///         this, so it freezes nothing.
     mapping(uint256 => bool) public claimStarted;
+    /// @notice oldToken => true once any program has ever targeted it (via {createProgram} or a
+    ///         {configureProgram} repoint). Never cleared, even if the program using it later
+    ///         closes. A retired security is delisted exactly once; two concurrent programs
+    ///         burning the same oldToken against two independently-frozen supply snapshots would
+    ///         let it be redeemed twice over, inconsistently, as its live supply shifts between
+    ///         them — almost certainly an operator mistake (a duplicate `createProgram`) rather
+    ///         than an intentional second delisting.
+    mapping(address => bool) public oldTokenRegistered;
     uint256 public programCount;
 
     event ProgramCreated(uint256 indexed programId, address indexed oldToken);
@@ -99,7 +107,13 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
     error ZeroAddress();
     error NoLegs();
+    /// @notice A leg has a zero token/total, or its token equals `oldToken` — the latter would let
+    ///         {claim} burn `oldToken` and then try to pay a leg in the very token it just burned,
+    ///         out of a reserve that can never be funded (minting it back defeats the whole point
+    ///         of retiring it), permanently DOSing every claim on the program.
     error BadLeg();
+    /// @notice `oldToken` is already targeted by another program (see {oldTokenRegistered}).
+    error OldTokenAlreadyRegistered(address oldToken);
     error UnknownProgram();
     error InvalidStateTransition();
     error TermsLockedAfterFund();
@@ -110,6 +124,10 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error SupplySnapshotNotSet();
     /// @notice A program cannot become Active until every leg's reserve covers its `total`.
     error LegNotFullyFunded(address token, uint256 reserved, uint256 total);
+    /// @notice {fund} was called with a token that is not one of `programId`'s legs. Crediting it
+    ///         to `reserved` anyway would strand it forever — {claim} and {sweepUnclaimed} only
+    ///         ever iterate over the program's legs.
+    error NotALegToken(address token);
     /// @notice {fund} after the program opened. Funding is part of getting a program ready,
     ///         not a way to patch one that is already claimable.
     error FundLockedOnceActive();
@@ -160,12 +178,14 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     {
         if (oldToken == address(0)) revert ZeroAddress();
         if (legs.length == 0) revert NoLegs();
+        if (oldTokenRegistered[oldToken]) revert OldTokenAlreadyRegistered(oldToken);
+        oldTokenRegistered[oldToken] = true;
 
         programId = programCount++;
         programs[programId] =
             Program({oldToken: oldToken, startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: uint8(State.Created)});
         for (uint256 i = 0; i < legs.length; ++i) {
-            if (legs[i].token == address(0) || legs[i].total == 0) revert BadLeg();
+            if (legs[i].token == address(0) || legs[i].total == 0 || legs[i].token == oldToken) revert BadLeg();
             _legs[programId].push(legs[i]);
         }
         emit ProgramCreated(programId, oldToken);
@@ -210,7 +230,11 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
         if (program.oldToken != address(0) || program.oldSupplySnapshot != 0) {
             if (_isFunded(programId)) revert TermsLockedAfterFund();
-            if (program.oldToken != address(0)) p.oldToken = program.oldToken;
+            if (program.oldToken != address(0) && program.oldToken != p.oldToken) {
+                if (oldTokenRegistered[program.oldToken]) revert OldTokenAlreadyRegistered(program.oldToken);
+                oldTokenRegistered[program.oldToken] = true;
+                p.oldToken = program.oldToken;
+            }
             if (program.oldSupplySnapshot != 0) p.oldSupplySnapshot = program.oldSupplySnapshot;
         }
         if (program.startTime != 0) {
@@ -251,6 +275,18 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         return false;
     }
 
+    /// @dev True if `token` is one of `programId`'s legs. Used to reject {fund} deposits of a token
+    ///      that isn't part of the basket — a wrong-token transfer would otherwise get credited to
+    ///      `reserved` and then never be read by {claim} or {sweepUnclaimed}, both of which only
+    ///      ever iterate over the program's legs, stranding it permanently.
+    function _isLegToken(uint256 programId, address token) internal view returns (bool) {
+        Leg[] storage legs = _legs[programId];
+        for (uint256 i = 0; i < legs.length; ++i) {
+            if (legs[i].token == token) return true;
+        }
+        return false;
+    }
+
     /// @notice Fund + reserve `amount` of `token` for `programId`. OPS-only, accounted so a claim
     ///         can never dip into another program's (or unrelated) balance. Caller must `approve`
     ///         this registry for `amount` first. Allowed while the program exists and is not closed.
@@ -262,6 +298,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         // afterwards. Closed falls under the same condition.
         if (s != uint8(State.Created)) revert FundLockedOnceActive();
         if (token == address(0)) revert ZeroAddress();
+        if (!_isLegToken(programId, token)) revert NotALegToken(token);
         // oldToken and the legs are fixed at creation, but oldSupplySnapshot — the claim
         // denominator — is not, and funding locks it. Without this a caller could fund
         // straight after creating, stranding the snapshot at zero: previewClaim would
@@ -285,12 +322,15 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     }
 
     /// @notice Per-leg consideration for surrendering `oldAmount` (raw), in leg order. Returns zeros
-    ///         until the program is configured (snapshot == 0).
+    ///         unless the program is currently `Active` (configured, funded, and open) — `Created`
+    ///         has no committed reserve to preview against yet, and `Closed` no longer accepts
+    ///         claims at all, so a snapshot-only check would keep previewing a payout that {claim}
+    ///         would immediately revert on.
     function previewClaim(uint256 programId, uint256 oldAmount) public view returns (uint256[] memory outs) {
         Leg[] storage legs = _legs[programId];
         outs = new uint256[](legs.length);
+        if (programs[programId].state != uint8(State.Active)) return outs;
         uint256 snapshot = programs[programId].oldSupplySnapshot;
-        if (snapshot == 0) return outs;
         for (uint256 i = 0; i < legs.length; ++i) {
             outs[i] = Math.mulDiv(oldAmount, legs[i].total, snapshot);
         }
@@ -383,7 +423,22 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         super.renounceRole(role, callerConfirmation);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 5 vars (programs, _legs, reserved,
-    ///      claimStarted, programCount) + 45 = 50 slots reserved.
-    uint256[45] private __gap;
+    /// @notice Blocks revoking the final DEFAULT_ADMIN_ROLE holder — {renounceRole} is guarded
+    ///         against this, but `revokeRole` is a second path to the exact same self-removal (an
+    ///         admin can revoke its own role via `revokeRole` just as well as `renounceRole`), so it
+    ///         needs the identical guard.
+    function revokeRole(bytes32 role, address account)
+        public
+        virtual
+        override(AccessControlUpgradeable, IAccessControl)
+    {
+        if (role == DEFAULT_ADMIN_ROLE && getRoleMemberCount(DEFAULT_ADMIN_ROLE) <= 1) {
+            revert CannotRenounceLastAdmin();
+        }
+        super.revokeRole(role, account);
+    }
+
+    /// @dev Storage gap for upgrade-safe additions. 6 vars (programs, _legs, reserved,
+    ///      claimStarted, oldTokenRegistered, programCount) + 44 = 50 slots reserved.
+    uint256[44] private __gap;
 }
