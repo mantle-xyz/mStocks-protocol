@@ -25,6 +25,9 @@ SCRIPTS=(
   QAMetadata
   QAOperatorWallet
   QANewFeatures
+  QABurnRole
+  QAPrivatization
+  QACustodyClaimRouter
 )
 
 PASS=0

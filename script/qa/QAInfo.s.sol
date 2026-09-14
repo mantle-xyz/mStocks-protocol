@@ -52,23 +52,21 @@ contract QAInfo is BaseQAScript {
     function test_INFO02() public {
         _logCase("QA-INFO-02", unicode"角色成员查询");
 
-        _step("[Step 1] DEFAULT_ADMIN_ROLE member count and member");
+        _step("[Step 1] DEFAULT_ADMIN_ROLE member count and admin is member");
         uint256 adminCount = token.getRoleMemberCount(DEFAULT_ADMIN_ROLE_HASH);
         require(adminCount >= 1, "admin count must >= 1");
         _step(string.concat("  PASS: DEFAULT_ADMIN_ROLE count = ", vm.toString(adminCount)));
 
-        address adminMember = token.getRoleMember(DEFAULT_ADMIN_ROLE_HASH, 0);
-        _assertEq(adminMember, admin, "admin member[0]");
-        _step(string.concat("  PASS: admin member[0] = ", vm.toString(admin)));
+        _assertEq(token.hasRole(DEFAULT_ADMIN_ROLE_HASH, admin), true, "admin has DEFAULT_ADMIN_ROLE");
+        _step(string.concat("  PASS: admin has DEFAULT_ADMIN_ROLE: ", vm.toString(admin)));
 
-        _step("[Step 2] ISSUER_ROLE member - should be TokenIssuer");
+        _step("[Step 2] ISSUER_ROLE member - should include TokenIssuer");
         uint256 issuerCount = token.getRoleMemberCount(ISSUER_ROLE);
         require(issuerCount >= 1, "issuer count must >= 1");
         _step(string.concat("  PASS: ISSUER_ROLE count = ", vm.toString(issuerCount)));
 
-        address issuerMember = token.getRoleMember(ISSUER_ROLE, 0);
-        _assertEq(issuerMember, address(vault), "issuer member[0]");
-        _step(string.concat("  PASS: issuer member[0] = TokenIssuer"));
+        _assertEq(token.hasRole(ISSUER_ROLE, address(vault)), true, "vault has ISSUER_ROLE");
+        _step(string.concat("  PASS: TokenIssuer has ISSUER_ROLE"));
 
         _step("[Step 3] OPS_ROLE member");
         uint256 opsCount = token.getRoleMemberCount(TOKEN_MULTIPLIER_ROLE);

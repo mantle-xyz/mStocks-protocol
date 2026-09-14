@@ -7,6 +7,8 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
 import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
 import {ScaledTokenFactory} from "../../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledTokenBeaconDeployer} from "../../src/scaledToken/ScaledTokenBeaconDeployer.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
 
@@ -58,7 +60,7 @@ contract DeployQA is Test {
         _step("  PauseRegistry deployed");
 
         _step("[Step 3] deployFactory");
-        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        ScaledTokenFactory f = _deployFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
         assertTrue(address(f) != address(0));
         _step("  Factory deployed");
 
@@ -89,7 +91,7 @@ contract DeployQA is Test {
         vm.startPrank(deployer);
         ComplianceRegistry c = new ComplianceRegistry(deployer);
         PauseRegistry pm = new PauseRegistry(deployer);
-        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        ScaledTokenFactory f = _deployFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
         f.grantRole(f.OPS_ROLE(), factoryOps);
         vm.stopPrank();
 
@@ -120,7 +122,7 @@ contract DeployQA is Test {
         vm.startPrank(deployer);
         ComplianceRegistry c = new ComplianceRegistry(deployer);
         PauseRegistry pm = new PauseRegistry(deployer);
-        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        ScaledTokenFactory f = _deployFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
         f.grantRole(f.OPS_ROLE(), factoryOps);
         vm.stopPrank();
 
@@ -172,7 +174,7 @@ contract DeployQA is Test {
         PauseRegistry pm = new PauseRegistry(deployer);
         pm.grantRole(pm.PAUSE_ROLE(), pmOps);
         pm.grantRole(pm.UNPAUSE_ROLE(), pmOps);
-        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        ScaledTokenFactory f = _deployFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
         f.grantRole(f.OPS_ROLE(), factoryOps);
         vm.stopPrank();
 
@@ -233,7 +235,7 @@ contract DeployQA is Test {
         vm.startPrank(deployer);
         ComplianceRegistry c = new ComplianceRegistry(deployer);
         PauseRegistry pm = new PauseRegistry(deployer);
-        ScaledTokenFactory f = new ScaledTokenFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
+        ScaledTokenFactory f = _deployFactory(address(c), address(pm), deployer, proxyAdmin, MIN_NOTICE);
         f.grantRole(f.OPS_ROLE(), factoryOps);
         vm.stopPrank();
 
@@ -256,5 +258,16 @@ contract DeployQA is Test {
         _step("  PASS: wallet holds ISSUER_ROLE on token");
 
         _logPass();
+    }
+
+    function _deployFactory(address _c, address _pm, address _owner, address _pa, uint256 _notice)
+        internal
+        returns (ScaledTokenFactory)
+    {
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory data = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector, _c, _pm, _owner, _pa, _notice
+        );
+        return ScaledTokenFactory(payable(address(new TransparentUpgradeableProxy(address(impl), _pa, data))));
     }
 }

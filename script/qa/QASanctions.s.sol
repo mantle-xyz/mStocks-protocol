@@ -225,7 +225,7 @@ contract QASanctions is BaseQAScript {
 
         _step("[Step 1] deploy tokenB via Factory");
         _requireNotPaused();
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address tokenBAddr = factory.createToken("Sanction Corp", "SANB", "SAN001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB: ", vm.toString(tokenBAddr)));

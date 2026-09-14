@@ -3,31 +3,31 @@ proxyAdmin = "0xD115186f654d1B8330f606909a1c56A2ed5CD25D"
 
 [factory]
 
-finalAdmin = "0x0000000000000000000000000000000000000000"
-opsRole = ["0x0000000000000000000000000000000000000000"]        # OPS_ROLE on Factory — createToken / renameSymbol / renameAssetCode
+finalAdmin = "0xD115186f654d1B8330f606909a1c56A2ed5CD25D"
+opsRole = ["0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]        # OPS_ROLE on Factory — createToken / renameSymbol / renameAssetCode
 
-minMultiplierNotice = 300
+minMultiplierNotice = 600
 
 [compliance]
-finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
+finalAdmin = "0xD115186f654d1B8330f606909a1c56A2ed5CD25D"  # REQUIRED for handover (non-zero)
 opsRole = ["0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]        # OPS_ROLE on ComplianceRegistry  — manage blocklist + sanctions
 
 [pauseRegistry]
-finalAdmin = "0x0000000000000000000000000000000000000000"  # REQUIRED for handover (non-zero)
-pauseRole = ["0x0000000000000000000000000000000000000000"]      # PAUSE_ROLE on PauseRegistry     — pause tokens / global
-unpauseRole = ["0x0000000000000000000000000000000000000000"]    # UNPAUSE_ROLE on PauseRegistry   — unpause tokens / global
+finalAdmin = "0xD115186f654d1B8330f606909a1c56A2ed5CD25D"  # REQUIRED for handover (non-zero)
+pauseRole = ["0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]      # PAUSE_ROLE on PauseRegistry     — pause tokens / global
+unpauseRole = ["0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]    # UNPAUSE_ROLE on PauseRegistry   — unpause tokens / global
 
 [tokenIssuer]
-finalAdmin = "0x0000000000000000000000000000000000000000"
+finalAdmin = "0xD115186f654d1B8330f606909a1c56A2ed5CD25D"
 opsRole = ["0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]
-approvedRecipients = ["0xa703a09be85d25F67c77f7ECCa1ee04c49151Fe6"]
+approvedRecipients = ["0xa703a09be85d25F67c77f7ECCa1ee04c49151Fe6", "0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]
 
 [token]
-name = "Apple Inc."
-symbol = "AAPL"
-identifier = "US0378331005"
-finalAdmin = "0x0000000000000000000000000000000000000000"
-opsRole = ["0x0000000000000000000000000000000000000000"]         # OPS_ROLE on the token — updateName/Symbol/AssetCode + setMint/BurnAllowed
+name = "QA Test Stock"
+symbol = "QATST"
+identifier = "QA0000000001"
+finalAdmin = "0xD115186f654d1B8330f606909a1c56A2ed5CD25D"
+opsRole = ["0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]         # OPS_ROLE on the token — updateName/Symbol/AssetCode + setMint/BurnAllowed
 issuers = []
 multiplierSchedulers = ["0xE354ad7e1B52F92863e0caDDB6A3c45012c6702b"]
 

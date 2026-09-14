@@ -113,7 +113,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 1] deploy tokenB for isolated multiplier test");
         string memory sym02 = _uniqueSymbol("SP");
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address tokenBAddr = factory.createToken("Split Corp", sym02, "SPT001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym02));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
@@ -131,7 +131,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 3] operator schedules 2x multiplier (t+300s)");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(2e18, block.timestamp + 600);
+        tokenB.setUIMultiplier(2e18, block.timestamp + 900);
 
         _step("[Step 4] verify pending state");
         _assertEq(tokenB.newUIMultiplier(), 2e18, "newUIMultiplier");
@@ -182,7 +182,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 4] cleanup: reset multiplier to 1e18");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(1e18, block.timestamp + 600);
+        tokenB.setUIMultiplier(1e18, block.timestamp + 900);
 
         _logPass();
     }
@@ -193,7 +193,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 1] deploy tokenB for isolated multiplier transfer test");
         string memory sym03 = _uniqueSymbol("XF");
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address tokenBAddr = factory.createToken("Xfer Corp", sym03, "XFR001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym03));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
@@ -211,7 +211,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 3] schedule 2x multiplier (t+300s)");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(2e18, block.timestamp + 600);
+        tokenB.setUIMultiplier(2e18, block.timestamp + 900);
         _assertEq(tokenB.hasPendingMultiplier(), true, "hasPending");
 
         _step("[Step 4] userA transfers 200e18 underlying to userB (pending phase)");
@@ -270,7 +270,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 5] cleanup: reset multiplier to 1e18");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(1e18, block.timestamp + 600);
+        tokenB.setUIMultiplier(1e18, block.timestamp + 900);
 
         _logPass();
     }
@@ -406,7 +406,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 2] operator schedules 2x multiplier (t+300s)");
         vm.broadcast(walletOpsPk);
-        token.setUIMultiplier(2e18, block.timestamp + 600);
+        token.setUIMultiplier(2e18, block.timestamp + 900);
         _assertEq(token.newUIMultiplier(), 2e18, "pending 2e18");
 
         _step("[Step 3] verify allowance unchanged (underlying amount)");
@@ -415,7 +415,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 4] cleanup: reset multiplier");
         vm.broadcast(walletOpsPk);
-        token.setUIMultiplier(1e18, block.timestamp + 600);
+        token.setUIMultiplier(1e18, block.timestamp + 900);
 
         _logPass();
     }
@@ -426,7 +426,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 1] deploy tokenB for isolated test");
         string memory sym08 = _uniqueSymbol("E8");
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address tokenBAddr = factory.createToken("E2E Corp", sym08, "E2E001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym08));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
@@ -600,7 +600,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 1] deploy tokenB, grant ISSUER, mint, distribute");
         string memory sym13 = _uniqueSymbol("RV");
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address tokenBAddr = factory.createToken("Rev2 Corp", sym13, "RV2001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym13));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
@@ -646,7 +646,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 1] deploy tokenB, grant roles");
         string memory sym14 = _uniqueSymbol("SC");
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address tokenBAddr = factory.createToken("Sched Corp", sym14, "SCH001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         _step(string.concat("  tokenB symbol: ", sym14));
@@ -665,7 +665,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 3] walletOps schedules 2x multiplier (t+300s)");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(2e18, block.timestamp + 600);
+        tokenB.setUIMultiplier(2e18, block.timestamp + 900);
         _assertEq(tokenB.newUIMultiplier(), 2e18, "pending 2e18");
 
         _step("[Step 4] admin revokes OPS_ROLE from walletOps");
@@ -718,7 +718,7 @@ contract QAE2E is BaseQAScript {
         vm.broadcast(adminPk);
         tokenB.grantRole(TOKEN_MULTIPLIER_ROLE, walletOps);
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(1e18, block.timestamp + 600);
+        tokenB.setUIMultiplier(1e18, block.timestamp + 900);
         vm.broadcast(adminPk);
         tokenB.revokeRole(TOKEN_MULTIPLIER_ROLE, walletOps);
 
@@ -987,7 +987,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 1] deploy tokenB for isolated multiplier test");
         string memory sym23 = _uniqueSymbol("ML");
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address tokenBAddr = factory.createToken("Mul Corp", sym23, "MUL001", admin, new address[](0), new address[](0), new address[](0));
         _step(string.concat("  tokenB symbol: ", sym23));
         ScaledToken tokenB = ScaledToken(tokenBAddr);
@@ -1008,7 +1008,7 @@ contract QAE2E is BaseQAScript {
         _step("  PASS: before activation, balanceOfUI == balanceOf");
 
         _step("[Step 4] operator schedules 2x multiplier (t+300s)");
-        uint256 effectiveAt = block.timestamp + 600;
+        uint256 effectiveAt = block.timestamp + 900;
         vm.broadcast(walletOpsPk);
         tokenB.setUIMultiplier(2e18, effectiveAt);
         _assertEq(tokenB.hasPendingMultiplier(), true, "hasPending");
@@ -1055,7 +1055,7 @@ contract QAE2E is BaseQAScript {
 
         _step("[Step 4] cleanup: reset multiplier to 1e18");
         vm.broadcast(walletOpsPk);
-        tokenB.setUIMultiplier(1e18, block.timestamp + 600);
+        tokenB.setUIMultiplier(1e18, block.timestamp + 900);
 
         _logPass();
     }

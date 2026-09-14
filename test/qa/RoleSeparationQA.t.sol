@@ -201,7 +201,7 @@ contract RoleSeparationQA is BaseQA {
         _step("[Step 1] deploy fresh factory, do NOT grant OPS_ROLE to admin");
         address freshAdmin = makeAddr("freshAdmin");
         vm.startPrank(freshAdmin);
-        ScaledTokenFactory f2 = new ScaledTokenFactory(
+        ScaledTokenFactory f2 = _deployFactory(
             address(compliance), address(pauseManager), freshAdmin, proxyAdmin, MIN_MULTIPLIER_NOTICE
         );
 
@@ -226,7 +226,7 @@ contract RoleSeparationQA is BaseQA {
         address freshAdmin = makeAddr("freshAdmin");
         address factoryOps = makeAddr("factoryOps");
         vm.startPrank(freshAdmin);
-        ScaledTokenFactory f2 = new ScaledTokenFactory(
+        ScaledTokenFactory f2 = _deployFactory(
             address(compliance), address(pauseManager), freshAdmin, proxyAdmin, MIN_MULTIPLIER_NOTICE
         );
         f2.grantRole(f2.OPS_ROLE(), factoryOps);
@@ -256,7 +256,7 @@ contract RoleSeparationQA is BaseQA {
         address freshAdmin = makeAddr("freshAdmin");
         address factoryOps = makeAddr("factoryOps");
         vm.startPrank(freshAdmin);
-        ScaledTokenFactory f2 = new ScaledTokenFactory(
+        ScaledTokenFactory f2 = _deployFactory(
             address(compliance), address(pauseManager), freshAdmin, proxyAdmin, MIN_MULTIPLIER_NOTICE
         );
         f2.grantRole(f2.OPS_ROLE(), factoryOps);

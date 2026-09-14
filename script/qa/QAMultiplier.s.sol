@@ -21,7 +21,7 @@ contract QAMultiplier is BaseQAScript {
         test_MUL10_verify();
         // MUL-10 需要分阶段执行，不在 run() 中:
         //   forge script ... --sig "test_MUL10_schedule()" --broadcast
-        //   sleep 70
+        //   sleep 960   (effectiveAt = t+900, 多等 60s 余量)
         //   forge script ... --sig "test_MUL10_verify()" --broadcast
     }
 
@@ -31,7 +31,7 @@ contract QAMultiplier is BaseQAScript {
 
     function _resetPendingMultiplier() internal {
         vm.broadcast(walletOpsPk);
-        token.setUIMultiplier(1e18, block.timestamp + 600);
+        token.setUIMultiplier(1e18, block.timestamp + 900);
     }
 
     // ── QA-MUL-01: admin 不能调度乘数 ──
@@ -247,15 +247,15 @@ contract QAMultiplier is BaseQAScript {
         _step("[Step 1] precondition: multiplier == 1e18");
         _assertEq(token.uiMultiplier(), 1e18, "uiMultiplier == 1e18");
 
-        _step("[Step 2] operator schedules 2e18 at t+300s");
-        uint256 effectiveTime = block.timestamp + 600;
+        _step("[Step 2] operator schedules 2e18 at t+900s");
+        uint256 effectiveTime = block.timestamp + 900;
         vm.broadcast(walletOpsPk);
         token.setUIMultiplier(2e18, effectiveTime);
 
         _assertEq(token.newUIMultiplier(), 2e18, "newUIMultiplier");
         _assertEq(token.hasPendingMultiplier(), true, "hasPendingMultiplier");
         _step(string.concat("  PASS: scheduled 2e18 at ", vm.toString(effectiveTime)));
-        _step("  >>> shell: sleep 300 then run test_MUL10_verify()");
+        _step("  >>> shell: sleep 960 then run test_MUL10_verify()");
 
         _logPass();
     }
@@ -289,7 +289,7 @@ contract QAMultiplier is BaseQAScript {
 
         _step("[Step 5] cleanup: schedule 1e18 to restore");
         vm.broadcast(walletOpsPk);
-        token.setUIMultiplier(1e18, block.timestamp + 600);
+        token.setUIMultiplier(1e18, block.timestamp + 900);
         _step("  PASS: scheduled 1e18 restore");
 
         _logPass();

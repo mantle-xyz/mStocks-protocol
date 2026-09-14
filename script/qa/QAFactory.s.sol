@@ -28,9 +28,9 @@ contract QAFactory is BaseQAScript {
         uint256 countBefore = factory.tokenCount();
         _step(string.concat("  count before: ", vm.toString(countBefore)));
 
-        _step("[Step 2] admin deploys new token");
+        _step("[Step 2] factoryOps deploys new token");
         string memory sym = _uniqueSymbol("FT");
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address newToken = factory.createToken("Test Corp", sym, "FT001", admin, new address[](0), new address[](0), new address[](0));
         _assertGt(uint160(newToken), 0, "newToken != address(0)");
         _step(string.concat("  newToken: ", vm.toString(newToken)));
@@ -50,13 +50,13 @@ contract QAFactory is BaseQAScript {
         address existing = factory.tokenBySymbol("AAPL");
         _assertGt(uint160(existing), 0, "AAPL exists");
 
-        _step("[Step 2] admin tries createToken with same symbol AAPL");
+        _step("[Step 2] factoryOps tries createToken with same symbol AAPL");
         _expectRevertFrom(
-            admin,
+            factoryOps,
             address(factory),
             abi.encodeWithSelector(
                 factory.createToken.selector,
-                "Dup Corp", "AAPL", "DUP001", admin, new address[](0), new address[](0)
+                "Dup Corp", "AAPL", "DUP001", admin, new address[](0), new address[](0), new address[](0)
             ),
             ScaledTokenFactory.TokenSymbolAlreadyExists.selector
         );
@@ -69,13 +69,13 @@ contract QAFactory is BaseQAScript {
     function test_FT03() public {
         _logCase("QA-FT-03", unicode"无效 symbol 回滚");
 
-        _step("[Step 1] admin tries createToken with invalid symbol 'AAPL!'");
+        _step("[Step 1] factoryOps tries createToken with invalid symbol 'AAPL!'");
         _expectRevertFrom(
-            admin,
+            factoryOps,
             address(factory),
             abi.encodeWithSelector(
                 factory.createToken.selector,
-                "Bad Corp", "AAPL!", "BAD001", admin, new address[](0), new address[](0)
+                "Bad Corp", "AAPL!", "BAD001", admin, new address[](0), new address[](0), new address[](0)
             ),
             ScaledTokenFactory.InvalidSymbol.selector
         );
@@ -107,11 +107,11 @@ contract QAFactory is BaseQAScript {
         string memory s1 = _uniqueSymbol("T1");
         string memory s2 = _uniqueSymbol("T2");
         string memory s3 = _uniqueSymbol("T3");
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address t1 = factory.createToken("Corp One", s1, "T001", admin, new address[](0), new address[](0), new address[](0));
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address t2 = factory.createToken("Corp Two", s2, "T002", admin, new address[](0), new address[](0), new address[](0));
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         address t3 = factory.createToken("Corp Three", s3, "T003", admin, new address[](0), new address[](0), new address[](0));
 
         _step("[Step 3] verify count");
@@ -134,18 +134,20 @@ contract QAFactory is BaseQAScript {
         _step("[Step 1] deploy tokenB with dynamic symbol");
         string memory oldSym = _uniqueSymbol("SA");
         string memory newSym = _uniqueSymbol("SB");
-        vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Sym Corp", oldSym, "SYM001", admin, new address[](0), new address[](0), new address[](0));
+        address[] memory opsArr = new address[](1);
+        opsArr[0] = tokenOps;
+        vm.broadcast(factoryOpsPk);
+        address tokenBAddr = factory.createToken("Sym Corp", oldSym, "SYM001", admin, new address[](0), new address[](0), opsArr);
         ScaledToken tokenB = ScaledToken(tokenBAddr);
         _assertEq(factory.tokenBySymbol(oldSym), tokenBAddr, "oldSym mapped");
 
-        _step(string.concat("[Step 2] admin sets token symbol to '", newSym, "'"));
-        vm.broadcast(adminPk);
+        _step(string.concat("[Step 2] tokenOps sets token symbol to '", newSym, "'"));
+        vm.broadcast(tokenOpsPk);
         tokenB.updateSymbol(newSym);
         _assertEq(tokenB.symbol(), newSym, "token symbol updated");
 
-        _step("[Step 3] admin calls factory.renameSymbol");
-        vm.broadcast(adminPk);
+        _step("[Step 3] factoryOps calls factory.renameSymbol");
+        vm.broadcast(factoryOpsPk);
         factory.renameSymbol(tokenBAddr, oldSym, newSym);
         _assertEq(factory.tokenBySymbol(oldSym), address(0), "oldSym cleared");
         _assertEq(factory.tokenBySymbol(newSym), tokenBAddr, "newSym mapped");
@@ -163,12 +165,14 @@ contract QAFactory is BaseQAScript {
         string memory newSym = string.concat("NW", ts);
 
         _step(string.concat("[Step 1] deploy tokenB with symbol '", oldSym, "'"));
-        vm.broadcast(adminPk);
-        address tokenBAddr = factory.createToken("Old Corp", oldSym, "OLD001", admin, new address[](0), new address[](0), new address[](0));
+        address[] memory opsArr = new address[](1);
+        opsArr[0] = tokenOps;
+        vm.broadcast(factoryOpsPk);
+        address tokenBAddr = factory.createToken("Old Corp", oldSym, "OLD001", admin, new address[](0), new address[](0), opsArr);
         ScaledToken tokenB = ScaledToken(tokenBAddr);
 
         _step(string.concat("[Step 2] only set token symbol to '", newSym, "', don't call factory.renameSymbol"));
-        vm.broadcast(adminPk);
+        vm.broadcast(tokenOpsPk);
         tokenB.updateSymbol(newSym);
         _assertEq(tokenB.symbol(), newSym, "token symbol changed");
 
@@ -180,12 +184,12 @@ contract QAFactory is BaseQAScript {
         _logPass();
     }
 
-    // ── QA-FT-08: 非 admin 不能部署 ──
+    // ── QA-FT-08: 非 OPS_ROLE 不能部署 ──
     function test_FT08() public {
-        _logCase("QA-FT-08", unicode"非 admin 不能部署");
+        _logCase("QA-FT-08", unicode"非 OPS_ROLE 不能部署");
 
-        _step("[Step 1] precondition: userA has no role on factory");
-        _assertEq(factory.hasRole(DEFAULT_ADMIN_ROLE_HASH, userA), false, "userA no admin");
+        _step("[Step 1] precondition: userA has no OPS_ROLE on factory");
+        _assertEq(factory.hasRole(FACTORY_OPS_ROLE, userA), false, "userA no OPS_ROLE");
 
         _step("[Step 2] userA tries createToken");
         _expectRevertFrom(
@@ -193,7 +197,7 @@ contract QAFactory is BaseQAScript {
             address(factory),
             abi.encodeWithSelector(
                 factory.createToken.selector,
-                "User Corp", "USRA", "USR001", userA, new address[](0), new address[](0)
+                "User Corp", "USRA", "USR001", userA, new address[](0), new address[](0), new address[](0)
             ),
             IAccessControl.AccessControlUnauthorizedAccount.selector
         );

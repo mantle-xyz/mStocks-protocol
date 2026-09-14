@@ -152,7 +152,7 @@ contract QABlocklist is BaseQAScript {
 
         _step("[Step 1] deploy tokenB via Factory");
         _requireNotPaused();
-        vm.broadcast(adminPk);
+        vm.broadcast(factoryOpsPk);
         string memory sym = _uniqueSymbol("BK");
         address tokenBAddr = factory.createToken("Block Corp", sym, "BLK001", admin, new address[](0), new address[](0), new address[](0));
         ScaledToken tokenB = ScaledToken(tokenBAddr);

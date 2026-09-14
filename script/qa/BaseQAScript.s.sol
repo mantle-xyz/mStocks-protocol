@@ -29,6 +29,12 @@ abstract contract BaseQAScript is Script {
     address internal walletOps;
     uint256 internal walletOpsPk;
 
+    address internal tokenOps;
+    uint256 internal tokenOpsPk;
+
+    address internal factoryOps;
+    uint256 internal factoryOpsPk;
+
     address internal hotWallet;
     uint256 internal hotWalletPk;
 
@@ -42,6 +48,8 @@ abstract contract BaseQAScript is Script {
     bytes32 internal ISSUER_ROLE;
     bytes32 internal TOKEN_MULTIPLIER_ROLE;
     bytes32 internal DEFAULT_ADMIN_ROLE_HASH;
+    bytes32 internal TOKEN_OPS_ROLE;
+    bytes32 internal FACTORY_OPS_ROLE;
     bytes32 internal COMPLIANCE_OPS_ROLE;
     bytes32 internal PAUSE_MANAGER_PAUSE_ROLE;
     bytes32 internal PAUSE_MANAGER_UNPAUSE_ROLE;
@@ -76,6 +84,12 @@ abstract contract BaseQAScript is Script {
         walletOpsPk = vm.envUint("ISSUER_VAULT_OPS_PK");
         walletOps = vm.addr(walletOpsPk);
 
+        tokenOpsPk = vm.envUint("TOKEN_OPS_PK");
+        tokenOps = vm.addr(tokenOpsPk);
+
+        factoryOpsPk = vm.envUint("FACTORY_OPS_PK");
+        factoryOps = vm.addr(factoryOpsPk);
+
         // hot wallet
         hotWalletPk = vm.envUint("HOT_WALLET_PK");
         hotWallet = vm.addr(hotWalletPk);
@@ -91,6 +105,8 @@ abstract contract BaseQAScript is Script {
         ISSUER_ROLE = token.ISSUER_ROLE();
         TOKEN_MULTIPLIER_ROLE = token.MULTIPLIER_SCHEDULER_ROLE();
         DEFAULT_ADMIN_ROLE_HASH = 0x00;
+        TOKEN_OPS_ROLE = token.OPS_ROLE();
+        FACTORY_OPS_ROLE = factory.OPS_ROLE();
         COMPLIANCE_OPS_ROLE = compliance.OPS_ROLE();
         PAUSE_MANAGER_PAUSE_ROLE = pauseManager.PAUSE_ROLE();
         PAUSE_MANAGER_UNPAUSE_ROLE = pauseManager.UNPAUSE_ROLE();

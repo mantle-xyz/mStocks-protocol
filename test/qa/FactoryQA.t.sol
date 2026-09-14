@@ -6,6 +6,8 @@ import {BaseQA} from "./BaseQA.t.sol";
 import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
 import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledTokenBeaconDeployer} from "../../src/scaledToken/ScaledTokenBeaconDeployer.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
@@ -36,9 +38,13 @@ contract FactoryQA is BaseQA {
     function test_FTINIT02_ZeroCompliance() public {
         _logCase("FT-INIT-02", unicode"零地址 compliance");
 
-        _step("[Step 1] new Factory(address(0), pm, admin, proxyAdmin)");
+        _step("[Step 1] initialize(address(0), pm, admin, proxyAdmin)");
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory data = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector, address(0), address(pauseManager), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE
+        );
         vm.expectRevert(ScaledTokenFactory.InvalidComplianceContract.selector);
-        new ScaledTokenFactory(address(0), address(pauseManager), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE);
+        new TransparentUpgradeableProxy(address(impl), proxyAdmin, data);
         _step("  PASS: reverted InvalidComplianceContract()");
 
         _logPass();
@@ -48,9 +54,13 @@ contract FactoryQA is BaseQA {
     function test_FTINIT03_ZeroPauseManager() public {
         _logCase("FT-INIT-03", unicode"零地址 pauseManager");
 
-        _step("[Step 1] new Factory(compliance, address(0), admin, proxyAdmin)");
+        _step("[Step 1] initialize(compliance, address(0), admin, proxyAdmin)");
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory data = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector, address(compliance), address(0), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE
+        );
         vm.expectRevert(ScaledTokenFactory.InvalidPauseManagerContract.selector);
-        new ScaledTokenFactory(address(compliance), address(0), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE);
+        new TransparentUpgradeableProxy(address(impl), proxyAdmin, data);
         _step("  PASS: reverted InvalidPauseManagerContract()");
 
         _logPass();
@@ -60,9 +70,13 @@ contract FactoryQA is BaseQA {
     function test_FTINIT04_ZeroOwner() public {
         _logCase("FT-INIT-04", unicode"零地址 owner");
 
-        _step("[Step 1] new Factory(c, pm, address(0), proxyAdmin)");
+        _step("[Step 1] initialize(c, pm, address(0), proxyAdmin)");
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory data = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector, address(compliance), address(pauseManager), address(0), proxyAdmin, MIN_MULTIPLIER_NOTICE
+        );
         vm.expectRevert(ScaledTokenFactory.ZeroAddress.selector);
-        new ScaledTokenFactory(address(compliance), address(pauseManager), address(0), proxyAdmin, MIN_MULTIPLIER_NOTICE);
+        new TransparentUpgradeableProxy(address(impl), proxyAdmin, data);
         _step("  PASS: reverted ZeroAddress()");
 
         _logPass();
@@ -72,9 +86,13 @@ contract FactoryQA is BaseQA {
     function test_FTINIT05_ZeroProxyAdmin() public {
         _logCase("FT-INIT-05", unicode"零地址 proxyAdmin");
 
-        _step("[Step 1] new Factory(c, pm, admin, address(0))");
+        _step("[Step 1] initialize(c, pm, admin, address(0))");
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory data = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector, address(compliance), address(pauseManager), admin, address(0), MIN_MULTIPLIER_NOTICE
+        );
         vm.expectRevert(ScaledTokenFactory.ZeroAddress.selector);
-        new ScaledTokenFactory(address(compliance), address(pauseManager), admin, address(0), MIN_MULTIPLIER_NOTICE);
+        new TransparentUpgradeableProxy(address(impl), proxyAdmin, data);
         _step("  PASS: reverted ZeroAddress()");
 
         _logPass();
@@ -84,10 +102,14 @@ contract FactoryQA is BaseQA {
     function test_FTINIT06_InvalidComplianceContract() public {
         _logCase("FT-INIT-06", unicode"无效 compliance 合约");
 
-        _step("[Step 1] new Factory(dummyContract, pm, admin, proxyAdmin)");
+        _step("[Step 1] initialize(dummyContract, pm, admin, proxyAdmin)");
         address dummy = address(new DummyContract());
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory data = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector, dummy, address(pauseManager), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE
+        );
         vm.expectRevert(ScaledTokenFactory.InvalidComplianceContract.selector);
-        new ScaledTokenFactory(dummy, address(pauseManager), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE);
+        new TransparentUpgradeableProxy(address(impl), proxyAdmin, data);
         _step("  PASS: reverted InvalidComplianceContract()");
 
         _logPass();
@@ -97,10 +119,14 @@ contract FactoryQA is BaseQA {
     function test_FTINIT07_InvalidPauseManagerContract() public {
         _logCase("FT-INIT-07", unicode"无效 pauseManager 合约");
 
-        _step("[Step 1] new Factory(compliance, dummyContract, admin, proxyAdmin)");
+        _step("[Step 1] initialize(compliance, dummyContract, admin, proxyAdmin)");
         address dummy = address(new DummyContract());
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory data = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector, address(compliance), dummy, admin, proxyAdmin, MIN_MULTIPLIER_NOTICE
+        );
         vm.expectRevert(ScaledTokenFactory.InvalidPauseManagerContract.selector);
-        new ScaledTokenFactory(address(compliance), dummy, admin, proxyAdmin, MIN_MULTIPLIER_NOTICE);
+        new TransparentUpgradeableProxy(address(impl), proxyAdmin, data);
         _step("  PASS: reverted InvalidPauseManagerContract()");
 
         _logPass();

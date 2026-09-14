@@ -123,8 +123,8 @@ contract QAMint is BaseQAScript {
         _step("[Step 1] precondition: mintEnabled == true");
         _assertEq(token.mintAllowed(), true, "mintEnabled before");
 
-        _step("[Step 2] admin disables mint");
-        vm.broadcast(adminPk);
+        _step("[Step 2] tokenOps disables mint");
+        vm.broadcast(tokenOpsPk);
         token.setMintAllowed(false);
         _assertEq(token.mintAllowed(), false, "mintEnabled after disable");
 
@@ -138,7 +138,7 @@ contract QAMint is BaseQAScript {
         _step("  PASS: reverted MintNotAllowed()");
 
         _step("[Step 4] cleanup: re-enable mint");
-        vm.broadcast(adminPk);
+        vm.broadcast(tokenOpsPk);
         token.setMintAllowed(true);
         _assertEq(token.mintAllowed(), true, "mintEnabled restored");
         _step("  PASS: mintEnabled restored");
@@ -150,12 +150,12 @@ contract QAMint is BaseQAScript {
     function test_MINT06() public {
         _logCase("QA-MINT-06", unicode"mint 开关重新开启后铸造成功");
 
-        _step("[Step 1] admin disables then re-enables mint");
-        vm.broadcast(adminPk);
+        _step("[Step 1] tokenOps disables then re-enables mint");
+        vm.broadcast(tokenOpsPk);
         token.setMintAllowed(false);
         _assertEq(token.mintAllowed(), false, "disabled");
 
-        vm.broadcast(adminPk);
+        vm.broadcast(tokenOpsPk);
         token.setMintAllowed(true);
         _assertEq(token.mintAllowed(), true, "re-enabled");
 
@@ -272,8 +272,8 @@ contract QAMint is BaseQAScript {
         vm.broadcast(hotWalletPk);
         token.approve(address(vault), type(uint256).max);
 
-        _step("[Step 2] admin disables burn");
-        vm.broadcast(adminPk);
+        _step("[Step 2] tokenOps disables burn");
+        vm.broadcast(tokenOpsPk);
         token.setBurnAllowed(false);
         _assertEq(token.burnAllowed(), false, "burnEnabled after disable");
 
@@ -287,7 +287,7 @@ contract QAMint is BaseQAScript {
         _step("  PASS: reverted BurnNotAllowed()");
 
         _step("[Step 4] cleanup: re-enable burn");
-        vm.broadcast(adminPk);
+        vm.broadcast(tokenOpsPk);
         token.setBurnAllowed(true);
         _assertEq(token.burnAllowed(), true, "burnEnabled restored");
         _step("  PASS: burnEnabled restored");
@@ -295,12 +295,12 @@ contract QAMint is BaseQAScript {
         _logPass();
     }
 
-    // ── QA-BURN-04: 非 admin 不能切换开关 ──
+    // ── QA-BURN-04: 非 OPS_ROLE 不能切换开关 ──
     function test_BURN04() public {
-        _logCase("QA-BURN-04", unicode"非 admin 不能切换开关");
+        _logCase("QA-BURN-04", unicode"非 OPS_ROLE 不能切换开关");
 
-        _step("[Step 1] precondition: userA has no DEFAULT_ADMIN_ROLE");
-        _assertEq(token.hasRole(DEFAULT_ADMIN_ROLE_HASH, userA), false, "userA no admin");
+        _step("[Step 1] precondition: userA has no OPS_ROLE");
+        _assertEq(token.hasRole(TOKEN_OPS_ROLE, userA), false, "userA no OPS_ROLE");
 
         _step("[Step 2] userA calls setMintAllowed(false)");
         _expectRevertFrom(

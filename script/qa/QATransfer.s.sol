@@ -152,8 +152,8 @@ contract QATransfer is BaseQAScript {
         _requireNotPaused();
         _mintAndDistribute(userA, 100e18);
 
-        _step("[Step 2] admin disables mint");
-        vm.broadcast(adminPk);
+        _step("[Step 2] tokenOps disables mint");
+        vm.broadcast(tokenOpsPk);
         token.setMintAllowed(false);
         _assertEq(token.mintAllowed(), false, "mintEnabled disabled");
 
@@ -169,7 +169,7 @@ contract QATransfer is BaseQAScript {
         _step("  PASS: transfer succeeded with mint disabled");
 
         _step("[Step 4] cleanup: re-enable mint");
-        vm.broadcast(adminPk);
+        vm.broadcast(tokenOpsPk);
         token.setMintAllowed(true);
         _assertEq(token.mintAllowed(), true, "mintEnabled restored");
         _step("  PASS: mintEnabled restored");

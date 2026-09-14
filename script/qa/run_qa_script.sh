@@ -37,21 +37,52 @@ fi
 
 LOGFILE="$LOGDIR/${TEST_NAME}.log"
 
-echo ">>> Running $TEST_NAME ($FILE)"
+# Detect target contract: find the contract that contains the test function.
+# Walk backwards from the function definition to the nearest "contract ... {" line.
+CONTRACT_NAME=$(awk "/contract .* is /{name=\$2} /function ${TEST_NAME}\(/{print name; exit}" "$FILE")
+TC_FLAG=""
+if [[ -n "$CONTRACT_NAME" ]]; then
+    TC_FLAG="--tc $CONTRACT_NAME"
+fi
+
+echo ">>> Running $TEST_NAME ($FILE${CONTRACT_NAME:+ :: $CONTRACT_NAME})"
 echo ">>> Log: $LOGFILE"
 
 if $READONLY; then
-    forge script "$FILE" \
+    forge script "$FILE" $TC_FLAG \
       --sig "${TEST_NAME}()" \
       --rpc-url "$RPC_URL" \
       -v 2>&1 | tee "$LOGFILE"
 else
-    forge script "$FILE" \
+    set +e
+    forge script "$FILE" $TC_FLAG \
       --sig "${TEST_NAME}()" \
       --rpc-url "$RPC_URL" \
       --private-key "$ADMIN_PK" \
-      --broadcast --slow \
+      --broadcast --slow --timeout 120 \
       -vv 2>&1 | tee "$LOGFILE"
+    RC=$?
+    set -e
+
+    # Auto-resume on broadcast failure (proxyd backend lag: nonce desync or stale state)
+    if [[ $RC -ne 0 ]] && grep -q "Failed to send transaction" "$LOGFILE"; then
+        for i in 1 2 3; do
+            echo ">>> Broadcast failed (proxyd lag), waiting 15s then resume (attempt $i/3)..."
+            sleep 15
+            set +e
+            forge script "$FILE" $TC_FLAG \
+              --sig "${TEST_NAME}()" \
+              --rpc-url "$RPC_URL" \
+              --private-key "$ADMIN_PK" \
+              --broadcast --timeout 120 --resume \
+              -vv 2>&1 | tee -a "$LOGFILE"
+            RC=$?
+            set -e
+            [[ $RC -eq 0 ]] && break
+        done
+    fi
+
+    [[ $RC -ne 0 ]] && echo ">>> WARNING: broadcast incomplete (exit code $RC)" >&2
 fi
 
 SCRIPT_NAME=$(basename "$FILE" .s.sol)

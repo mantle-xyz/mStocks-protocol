@@ -19,25 +19,27 @@ contract QAMetadata is BaseQAScript {
         _logCase("QA-META-01", unicode"元数据变更");
 
         _step("[Step 1] deploy tokenB for metadata test");
-        vm.broadcast(adminPk);
+        address[] memory opsArr = new address[](1);
+        opsArr[0] = tokenOps;
+        vm.broadcast(factoryOpsPk);
         string memory sym = _uniqueSymbol("MT");
-        address tokenBAddr = factory.createToken("Meta Corp", sym, "META001", admin, new address[](0), new address[](0), new address[](0));
+        address tokenBAddr = factory.createToken("Meta Corp", sym, "META001", admin, new address[](0), new address[](0), opsArr);
         ScaledToken tokenB = ScaledToken(tokenBAddr);
 
-        _step("[Step 2] admin sets name");
-        vm.broadcast(adminPk);
+        _step("[Step 2] tokenOps sets name");
+        vm.broadcast(tokenOpsPk);
         tokenB.updateName("New Name");
         _assertEq(tokenB.name(), "New Name", "name");
         _step("  PASS: name == 'New Name'");
 
-        _step("[Step 3] admin sets symbol");
-        vm.broadcast(adminPk);
+        _step("[Step 3] tokenOps sets symbol");
+        vm.broadcast(tokenOpsPk);
         tokenB.updateSymbol("NEWM");
         _assertEq(tokenB.symbol(), "NEWM", "symbol");
         _step("  PASS: symbol == 'NEWM'");
 
-        _step("[Step 4] admin sets identifier");
-        vm.broadcast(adminPk);
+        _step("[Step 4] tokenOps sets identifier");
+        vm.broadcast(tokenOpsPk);
         tokenB.updateAssetCode("NEW999");
         _assertEq(tokenB.assetCode(), "NEW999", "identifier");
         _step("  PASS: identifier == 'NEW999'");
@@ -49,9 +51,9 @@ contract QAMetadata is BaseQAScript {
     function test_META02() public {
         _logCase("QA-META-02", unicode"空串回滚");
 
-        _step("[Step 1] admin tries updateName('')");
+        _step("[Step 1] tokenOps tries updateName('')");
         _expectRevertFrom(
-            admin,
+            tokenOps,
             address(token),
             abi.encodeWithSelector(token.updateName.selector, ""),
             ScaledToken.EmptyString.selector
@@ -61,12 +63,12 @@ contract QAMetadata is BaseQAScript {
         _logPass();
     }
 
-    // ── QA-META-03: 非 admin 不能改 ──
+    // ── QA-META-03: 非 OPS_ROLE 不能改 ──
     function test_META03() public {
-        _logCase("QA-META-03", unicode"非 admin 不能改");
+        _logCase("QA-META-03", unicode"非 OPS_ROLE 不能改元数据");
 
-        _step("[Step 1] precondition: userA has no DEFAULT_ADMIN_ROLE");
-        _assertEq(token.hasRole(DEFAULT_ADMIN_ROLE_HASH, userA), false, "userA no admin");
+        _step("[Step 1] precondition: userA has no OPS_ROLE");
+        _assertEq(token.hasRole(TOKEN_OPS_ROLE, userA), false, "userA no OPS_ROLE");
 
         _step("[Step 2] userA tries updateName");
         _expectRevertFrom(

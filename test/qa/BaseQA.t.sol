@@ -6,6 +6,8 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ScaledToken} from "../../src/scaledToken/ScaledToken.sol";
 import {ScaledTokenFactory} from "../../src/scaledToken/ScaledTokenFactory.sol";
+import {ScaledTokenBeaconDeployer} from "../../src/scaledToken/ScaledTokenBeaconDeployer.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {ComplianceRegistry} from "../../src/complianceRegistry/ComplianceRegistry.sol";
 import {PauseRegistry} from "../../src/pauseRegistry/PauseRegistry.sol";
 import {TokenIssuer} from "../../src/tokenIssuer/TokenIssuer.sol";
@@ -74,7 +76,7 @@ abstract contract BaseQA is Test {
 
         compliance = new ComplianceRegistry(admin);
         pauseManager = new PauseRegistry(admin);
-        factory = new ScaledTokenFactory(address(compliance), address(pauseManager), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE);
+        factory = _deployFactory(address(compliance), address(pauseManager), admin, proxyAdmin, MIN_MULTIPLIER_NOTICE);
         factory.grantRole(factory.OPS_ROLE(), address(this));
         vm.stopPrank();
 
@@ -115,6 +117,27 @@ abstract contract BaseQA is Test {
         TOKEN_OPS_ROLE = token.OPS_ROLE();
         FACTORY_OPS_ROLE = factory.OPS_ROLE();
         WALLET_OPS_ROLE = vault.OPS_ROLE();
+    }
+
+    function _deployFactory(
+        address _compliance,
+        address _pauseManager,
+        address _owner,
+        address _proxyAdmin,
+        uint256 _minMultiplierNotice
+    ) internal returns (ScaledTokenFactory) {
+        ScaledTokenFactory impl = new ScaledTokenFactory(new ScaledTokenBeaconDeployer());
+        bytes memory initData = abi.encodeWithSelector(
+            ScaledTokenFactory.initialize.selector,
+            _compliance,
+            _pauseManager,
+            _owner,
+            _proxyAdmin,
+            _minMultiplierNotice
+        );
+        return ScaledTokenFactory(
+            payable(address(new TransparentUpgradeableProxy(address(impl), _proxyAdmin, initData)))
+        );
     }
 
     function _mintAndTransfer(address recipient, uint256 amount) internal {
