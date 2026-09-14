@@ -20,16 +20,15 @@ import {CustodyClaimRouter} from "../src/privatization/CustodyClaimRouter.sol";
 ///         4) claimFor           — OPS (after a hot wallet has transferred old tokens into router)
 ///         5) rescue             — router admin (recover stray / unclaimed assets)
 contract CustodyClaimRouterOps is Script {
+    bytes32 private constant DEFAULT_ADMIN_ROLE = bytes32(0);
+
     /// @notice Step 1 — deploy the router behind a TransparentUpgradeableProxy, bound to `registry`,
-    ///         and try to register `hotWallets` in the same broadcast. `proxyAdmin` owns the
-    ///         auto-created ProxyAdmin (sole upgrade authority); `admin` gets DEFAULT_ADMIN_ROLE
-    ///         (maintains the hot-wallet allowlist and can rescue) — `admin` is caller-supplied here
-    ///         (unlike {Deploy._deployTokenIssuer}, which hardcodes the broadcaster as a *temporary*
-    ///         admin later handed off via TransferAdmin.s.sol), so the broadcaster only actually
-    ///         holds DEFAULT_ADMIN_ROLE if the caller passed `admin == broadcaster`. Registration is
-    ///         skipped with a log (not a revert) when it doesn't — run {registerHotWallets}
-    ///         separately, broadcast by whoever `admin` actually is. Pass an empty `hotWallets`
-    ///         array to always skip.
+    ///         register `hotWallets`, then hand DEFAULT_ADMIN_ROLE from the temporary deployer admin
+    ///         to `admin`, all in the same script broadcast. `proxyAdmin` owns the auto-created
+    ///         ProxyAdmin (sole upgrade authority); `admin` is the final router admin (maintains the
+    ///         hot-wallet allowlist and can rescue). This mirrors Deploy.s.sol's deployer-first admin
+    ///         model while avoiding a separate timelock operation just to seed the initial hot-wallet
+    ///         allowlist.
     function deploy(
         address proxyAdmin,
         address registry,
@@ -38,37 +37,48 @@ contract CustodyClaimRouterOps is Script {
         address[] calldata hotWallets
     ) external returns (address router) {
         require(proxyAdmin != address(0) && registry != address(0) && admin != address(0), "zero addr");
+        address broadcaster = _broadcaster();
+
         vm.startBroadcast();
         CustodyClaimRouter impl = new CustodyClaimRouter();
-        bytes memory initData = abi.encodeWithSelector(CustodyClaimRouter.initialize.selector, registry, admin, ops);
+        bytes memory initData =
+            abi.encodeWithSelector(CustodyClaimRouter.initialize.selector, registry, broadcaster, ops);
         router = address(new TransparentUpgradeableProxy(address(impl), proxyAdmin, initData));
-        bool registeredAtDeploy;
+
         if (hotWallets.length > 0) {
-            if (IAccessControl(router).hasRole(bytes32(0), _broadcaster())) {
-                CustodyClaimRouter(router).registerHotWallets(hotWallets);
-                registeredAtDeploy = true;
-            }
+            CustodyClaimRouter(router).registerHotWallets(hotWallets);
+        }
+
+        IAccessControl access = IAccessControl(router);
+        if (admin != broadcaster) {
+            access.grantRole(DEFAULT_ADMIN_ROLE, admin);
+            require(access.hasRole(DEFAULT_ADMIN_ROLE, admin), "final admin not granted");
+            access.revokeRole(DEFAULT_ADMIN_ROLE, broadcaster);
         }
         vm.stopBroadcast();
+
+        require(access.hasRole(DEFAULT_ADMIN_ROLE, admin), "final admin missing");
+        if (admin != broadcaster) {
+            require(!access.hasRole(DEFAULT_ADMIN_ROLE, broadcaster), "temporary admin remains");
+        }
+
         console.log("CustodyClaimRouter impl:   ", address(impl));
         console.log("CustodyClaimRouter proxy:  ", router);
         console.log("  proxyAdmin (upgrade auth):", proxyAdmin);
         console.log("  registry:                ", registry);
-        console.log("  admin (DEFAULT_ADMIN):   ", admin);
+        console.log("  temporary admin:         ", broadcaster);
+        console.log("  final admin:             ", admin);
         console.log("  OPS_ROLE granted at init to", ops.length, "address(es)");
         for (uint256 i = 0; i < ops.length; ++i) {
             console.log("    ", ops[i]);
         }
         if (hotWallets.length == 0) {
             console.log("  No hot wallets passed; register later via registerHotWallets.");
-        } else if (registeredAtDeploy) {
+        } else {
             console.log("  Hot wallets registered at deploy:", hotWallets.length);
             for (uint256 i = 0; i < hotWallets.length; ++i) {
                 console.log("    ", hotWallets[i]);
             }
-        } else {
-            console.log("  Skipped hot wallet registration: broadcaster != admin.");
-            console.log("  Run registerHotWallets(address,address[]) separately, broadcast by admin.");
         }
         console.log("  NOTE: whitelist this router on the ComplianceRegistry before use.");
     }
