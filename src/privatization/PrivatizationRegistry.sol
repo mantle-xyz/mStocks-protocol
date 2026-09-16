@@ -131,7 +131,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///         the snapshot, so this order would leave the claim denominator at zero
     ///         permanently and every claim reverting.
     error SupplySnapshotNotSet();
-    /// @notice A program cannot become Active until every leg's reserve covers its `total`.
+    /// @notice A program cannot become Active until each token's reserve covers the sum
+    ///         of all leg totals denominated in that token.
     error LegNotFullyFunded(address token, uint256 reserved, uint256 total);
     /// @notice {fund} was called with a token that is not one of `programId`'s legs. Crediting it
     ///         to `reserved` anyway would strand it forever — {claim} and {sweepUnclaimed} only
@@ -266,8 +267,14 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
             if (program.state == uint8(State.Active)) {
                 Leg[] storage legs = _legs[programId];
                 for (uint256 i = 0; i < legs.length; ++i) {
-                    uint256 r = reserved[programId][legs[i].token];
-                    if (r < legs[i].total) revert LegNotFullyFunded(legs[i].token, r, legs[i].total);
+                    address token = legs[i].token;
+                    uint256 required;
+                    // Reserve is keyed by token, not by leg. Duplicate-token legs share it.
+                    for (uint256 j = 0; j < legs.length; ++j) {
+                        if (legs[j].token == token) required += legs[j].total;
+                    }
+                    uint256 r = reserved[programId][token];
+                    if (r < required) revert LegNotFullyFunded(token, r, required);
                 }
             }
             p.state = program.state;
