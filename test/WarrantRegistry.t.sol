@@ -423,7 +423,6 @@ contract WarrantRegistryTest is Test {
         assertFalse(reg.isClaimed(id, 0), "a rejected claim must not consume the index");
         assertEq(reg.warrant(id, alice), 0, "nothing recorded");
         assertEq(reg.settleReserve(id), 500e6, "reserve untouched");
-        assertFalse(reg.claimStarted(id), "a rejected claim must not lock configureProgram");
 
         address[] memory who = new address[](1);
         who[0] = alice;
@@ -974,8 +973,8 @@ contract WarrantRegistryTest is Test {
     /// @dev The hole this closes: `merkleRoot` had no lock. OPS could swap the whole holder set
     ///      after the program was funded AND after holders had begun claiming — redirecting
     ///      committed funds to an address absent from the original root, while `state` stayed
-    ///      `Active` and nothing on chain marked that it had happened. {PrivatizationRegistry}
-    ///      guarded the same thing with `claimStarted`; this contract did not.
+    ///      `Active` and nothing on chain marked that it had happened. Both registries now
+    ///      lock configuration as soon as the program is Active.
     function test_configureProgram_rootCannotBeSwappedAfterAClaim() public {
         // Tree B puts mallory at alice's index 0 with alice's share.
         bytes32 rootB = _hashPair(_leaf(0, mallory, 0.6e18), _leaf(1, bob, 0.3e18));
@@ -984,7 +983,7 @@ contract WarrantRegistryTest is Test {
 
         vm.prank(bob);
         reg.claim(id, 1, bob, 0.3e18, _proofBob());
-        assertTrue(reg.claimStarted(id), "a successful claim must set claimStarted");
+        assertTrue(reg.isClaimed(id, 1), "the claimed leaf remains recorded");
 
         vm.prank(ops);
         vm.expectRevert(WarrantRegistry.ConfigureLockedOnceActive.selector);
@@ -1078,6 +1077,25 @@ contract WarrantRegistryTest is Test {
 
     // ── gaps closed from the self-test doc ─────────────────────────────────────
 
+    function testFuzz_claim_preservesDeprecatedClaimStartedSlot(bool previouslyClaimed) public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        // The legacy mapping occupied slot 5; existing entries must remain untouched.
+        bytes32 slot = keccak256(abi.encode(id, uint256(5)));
+        bytes32 legacyValue = bytes32(uint256(previouslyClaimed ? 1 : 0));
+        vm.store(address(reg), slot, legacyValue);
+        vm.record();
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        (, bytes32[] memory writes) = vm.accesses(address(reg));
+        for (uint256 i = 0; i < writes.length; ++i) {
+            assertTrue(writes[i] != slot, "claim must not write the deprecated mapping");
+        }
+        assertEq(vm.load(address(reg), slot), legacyValue);
+        assertTrue(reg.isClaimed(id, 0));
+        assertEq(usd.balanceOf(alice), 300e6);
+        (bool ok,) = address(reg).staticcall(abi.encodeWithSignature("claimStarted(uint256)", id));
+        assertFalse(ok, "deprecated getter removed");
+    }
+
     /// @dev A program that exists but was never configured has no root and no window, so it must
     ///      not be claimable. Guards against `Created` being mistaken for claimable.
     function test_claim_beforeConfigureReverts() public {
@@ -1122,7 +1140,6 @@ contract WarrantRegistryTest is Test {
         reg.claim(id, 0, alice, 1, proof);
 
         assertFalse(reg.isClaimed(id, 0), "a reverted claim must not consume the index");
-        assertFalse(reg.claimStarted(id), "a reverted claim must not freeze configureProgram");
     }
 
     /// @dev sweepUnclaimed must reject the zero address — the reserve would otherwise be burned.

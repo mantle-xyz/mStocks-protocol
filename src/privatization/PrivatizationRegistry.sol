@@ -87,10 +87,10 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     mapping(uint256 => Leg[]) internal _legs;
     /// @notice programId => reward token => amount still reserved to back claims.
     mapping(uint256 => mapping(address => uint256)) public reserved;
-    /// @notice programId => whether at least one {claim} has succeeded. Informational:
-    ///         {configureProgram} is gated on the program still being Created, not on
-    ///         this, so it freezes nothing.
-    mapping(uint256 => bool) public claimStarted;
+    /// @dev Deprecated: configureProgram locks at Active. Preserve this mapping's slot
+    ///      and historical entries for proxy storage compatibility; never read or write it.
+    /// @custom:oz-renamed-from claimStarted
+    mapping(uint256 => bool) private __deprecatedClaimStarted;
     /// @notice oldToken => true once any program has ever targeted it (via {createProgram} or a
     ///         {configureProgram} repoint). Never cleared, even if the program using it later
     ///         closes. A retired security is delisted exactly once; two concurrent programs
@@ -406,9 +406,6 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         }
         if (!delivered) revert NothingToDeliver(); // guard a dust claim that burns for nothing
 
-        // Informational only now: configureProgram locks at Active, and claiming requires
-        // Active, so this can no longer be the thing that freezes anything.
-        claimStarted[programId] = true;
         emit Claimed(programId, msg.sender, amount);
     }
 

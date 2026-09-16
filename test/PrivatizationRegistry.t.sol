@@ -590,8 +590,6 @@ contract PrivatizationRegistryTest is Test {
         registry.claim(id, 50 ether);
         vm.stopPrank();
 
-        assertTrue(registry.claimStarted(id));
-
         vm.expectRevert(PrivatizationRegistry.ConfigureLockedOnceActive.selector);
         registry.configureProgram(
             id,
@@ -873,6 +871,29 @@ contract PrivatizationRegistryTest is Test {
 
         vm.expectRevert(PrivatizationRegistry.BadLeg.selector);
         registry.createProgram(address(oldToken), legs);
+    }
+
+    function testFuzz_claim_preservesDeprecatedClaimStartedSlot(bool previouslyClaimed) public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        // The legacy mapping occupied slot 3; existing entries must remain untouched.
+        bytes32 slot = keccak256(abi.encode(id, uint256(3)));
+        bytes32 legacyValue = bytes32(uint256(previouslyClaimed ? 1 : 0));
+        vm.store(address(registry), slot, legacyValue);
+        vm.prank(alice);
+        oldToken.approve(address(registry), 100 ether);
+        vm.record();
+        vm.prank(alice);
+        registry.claim(id, 100 ether);
+        (, bytes32[] memory writes) = vm.accesses(address(registry));
+        for (uint256 i = 0; i < writes.length; ++i) {
+            assertTrue(writes[i] != slot, "claim must not write the deprecated mapping");
+        }
+        assertEq(vm.load(address(registry), slot), legacyValue);
+        assertEq(usdc.balanceOf(alice), 300e6);
+        (bool ok,) = address(registry).staticcall(abi.encodeWithSignature("claimStarted(uint256)", id));
+        assertFalse(ok, "deprecated getter removed");
     }
 
     // ── previewClaim considers program state ────────────────────────────────────
