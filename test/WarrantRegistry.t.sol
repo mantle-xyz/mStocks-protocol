@@ -51,6 +51,8 @@ contract WarrantRegistryTest is Test {
                 )
             )
         );
+        vm.prank(admin);
+        reg.registerSweepRecipient(custody);
     }
 
     // ── merkle helpers: 2-leaf tree over (index, account, amount) ────────────────
@@ -937,6 +939,78 @@ contract WarrantRegistryTest is Test {
         vm.prank(admin);
         vm.expectRevert();
         reg.fund(id, 1e6);
+    }
+
+    function test_sweepUnclaimed_rejectsUnregisteredRecipient() public {
+        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        vm.warp(block.timestamp + 8 days);
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.NotRegisteredSweepRecipient.selector);
+        reg.sweepUnclaimed(id, mallory);
+        assertEq(reg.settleReserve(id), 1000e6);
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Active));
+    }
+
+    function test_sweepUnclaimed_rejectsRevokedRecipient() public {
+        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        vm.warp(block.timestamp + 8 days);
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true, address(reg));
+        emit WarrantRegistry.SweepRecipientDeregistered(custody);
+        reg.deregisterSweepRecipient(custody);
+        assertFalse(reg.isSweepRecipient(custody));
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.NotRegisteredSweepRecipient.selector);
+        reg.sweepUnclaimed(id, custody);
+    }
+
+    function test_registerSweepRecipient_emitsEvent() public {
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true, address(reg));
+        emit WarrantRegistry.SweepRecipientRegistered(alice);
+        reg.registerSweepRecipient(alice);
+        assertTrue(reg.isSweepRecipient(alice));
+    }
+
+    function test_registerSweepRecipient_rejectsZeroAddress() public {
+        vm.prank(admin);
+        vm.expectRevert(WarrantRegistry.ZeroAddress.selector);
+        reg.registerSweepRecipient(address(0));
+    }
+
+    function test_sweepAllowlist_onlyAdmin() public {
+        address[] memory recipients = new address[](1);
+        recipients[0] = mallory;
+        vm.startPrank(ops);
+        vm.expectRevert();
+        reg.registerSweepRecipient(mallory);
+        vm.expectRevert();
+        reg.registerSweepRecipients(recipients);
+        vm.expectRevert();
+        reg.deregisterSweepRecipient(custody);
+        vm.stopPrank();
+        assertFalse(reg.isSweepRecipient(mallory));
+        assertTrue(reg.isSweepRecipient(custody));
+    }
+
+    function test_registerSweepRecipients_batch() public {
+        address[] memory recipients = new address[](2);
+        recipients[0] = alice;
+        recipients[1] = bob;
+        vm.prank(admin);
+        reg.registerSweepRecipients(recipients);
+        assertTrue(reg.isSweepRecipient(alice));
+        assertTrue(reg.isSweepRecipient(bob));
+    }
+
+    function test_registerSweepRecipients_zeroAddressRevertsWholeBatch() public {
+        address[] memory recipients = new address[](2);
+        recipients[0] = alice;
+        recipients[1] = address(0);
+        vm.prank(admin);
+        vm.expectRevert(WarrantRegistry.ZeroAddress.selector);
+        reg.registerSweepRecipients(recipients);
+        assertFalse(reg.isSweepRecipient(alice));
     }
 
     function test_sweepUnclaimed_onlyOps() public {
