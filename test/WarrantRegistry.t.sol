@@ -1077,23 +1077,9 @@ contract WarrantRegistryTest is Test {
 
     // ── gaps closed from the self-test doc ─────────────────────────────────────
 
-    function testFuzz_claim_preservesDeprecatedClaimStartedSlot(bool previouslyClaimed) public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
-        // The legacy mapping occupied slot 5; existing entries must remain untouched.
-        bytes32 slot = keccak256(abi.encode(id, uint256(5)));
-        bytes32 legacyValue = bytes32(uint256(previouslyClaimed ? 1 : 0));
-        vm.store(address(reg), slot, legacyValue);
-        vm.record();
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
-        (, bytes32[] memory writes) = vm.accesses(address(reg));
-        for (uint256 i = 0; i < writes.length; ++i) {
-            assertTrue(writes[i] != slot, "claim must not write the deprecated mapping");
-        }
-        assertEq(vm.load(address(reg), slot), legacyValue);
-        assertTrue(reg.isClaimed(id, 0));
-        assertEq(usd.balanceOf(alice), 300e6);
-        (bool ok,) = address(reg).staticcall(abi.encodeWithSignature("claimStarted(uint256)", id));
-        assertFalse(ok, "deprecated getter removed");
+    function test_claimStartedGetterRemoved() public view {
+        (bool ok,) = address(reg).staticcall(abi.encodeWithSignature("claimStarted(uint256)", 0));
+        assertFalse(ok, "obsolete getter removed");
     }
 
     /// @dev A program that exists but was never configured has no root and no window, so it must

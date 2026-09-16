@@ -87,10 +87,6 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     mapping(uint256 => Leg[]) internal _legs;
     /// @notice programId => reward token => amount still reserved to back claims.
     mapping(uint256 => mapping(address => uint256)) public reserved;
-    /// @dev Deprecated: configureProgram locks at Active. Preserve this mapping's slot
-    ///      and historical entries for proxy storage compatibility; never read or write it.
-    /// @custom:oz-renamed-from claimStarted
-    mapping(uint256 => bool) private __deprecatedClaimStarted;
     /// @notice oldToken => true once any program has ever targeted it (via {createProgram} or a
     ///         {configureProgram} repoint). Never cleared, even if the program using it later
     ///         closes. A retired security is delisted exactly once; two concurrent programs
@@ -473,8 +469,6 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         super.revokeRole(role, account);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 7 vars (programs, _legs, reserved,
-    ///      claimStarted, oldTokenRegistered, programCount, isSweepRecipient) + 43 = 50 slots
-    ///      reserved.
+    /// @dev Reserved slots for future state additions.
     uint256[43] private __gap;
 }

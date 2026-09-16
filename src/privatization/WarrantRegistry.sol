@@ -94,10 +94,6 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
 
     mapping(uint256 => BitMaps.BitMap) private _claimed; // programId => merkle index bitmap
     uint256 public programCount;
-    /// @dev Deprecated: configureProgram locks at Active. Preserve this mapping's slot
-    ///      and historical entries for proxy storage compatibility; never read or write it.
-    /// @custom:oz-renamed-from claimStarted
-    mapping(uint256 => bool) private __deprecatedClaimStarted;
 
     event ProgramCreated(uint256 indexed programId, address indexed token, address settlementToken);
     event ProgramConfigured(
@@ -445,7 +441,6 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         super.revokeRole(role, account);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 5 vars (programs, warrant, settleReserve,
-    ///      _claimed, claimStarted) + programCount + 44 = 50 slots reserved.
+    /// @dev Reserved slots for future state additions.
     uint256[44] private __gap;
 }
