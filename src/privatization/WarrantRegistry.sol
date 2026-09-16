@@ -265,6 +265,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         }
         if (program.state != 0) {
             if (program.state <= p.state || program.state >= uint8(State.Closed)) revert InvalidStateTransition();
+            if (program.state == uint8(State.Active) && p.deadline <= block.timestamp) revert InvalidWindow();
             // Active means claimable, so it has to mean funded. A holder whose claim
             // reverts InsufficientReserved cannot tell an under-funded program from a
             // broken one, and the operator only finds out from the complaint.

@@ -667,6 +667,49 @@ contract PrivatizationRegistryTest is Test {
 
     // ── configureProgram window validation ──────────────────────────────────────
 
+    function test_configureProgram_activationRejectsExpiredWindow() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activate(id, oldToken);
+        _fundUsd(id, 300e6);
+        _fund(id, newToken, 200 ether);
+        _fund(id, cvr, 100 ether);
+        vm.warp(block.timestamp + 2 * WEEK);
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        _open(id);
+        (,,,, uint8 state) = registry.programs(id);
+        assertEq(state, uint8(PrivatizationRegistry.State.Created));
+        assertEq(registry.reserved(id, address(usdc)), 300e6);
+
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(0),
+                startTime: 0,
+                deadline: uint64(block.timestamp + WEEK),
+                oldSupplySnapshot: 0,
+                state: uint8(PrivatizationRegistry.State.Active)
+            })
+        );
+        (,,,, state) = registry.programs(id);
+        assertEq(state, uint8(PrivatizationRegistry.State.Active));
+    }
+
+    function test_configureProgram_activationRejectsDeadlineAtCurrentTime() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activate(id, oldToken);
+        vm.warp(block.timestamp + WEEK);
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        _open(id);
+    }
+
+    function test_configureProgram_activationRejectsUnsetDeadline() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);
+        _open(id);
+    }
+
     function test_configureProgram_rejectsPastDeadline() public {
         uint256 id = registry.createProgram(address(oldToken), _legs3());
         vm.expectRevert(PrivatizationRegistry.InvalidWindow.selector);

@@ -230,22 +230,42 @@ contract WarrantRegistryTest is Test {
         assertEq(storedDeadline, startTime + 3 days);
     }
 
-    function test_configureProgram_expiredWindowCanStillActivateAndSweep() public {
+    function test_configureProgram_activationRejectsExpiredWindow() public {
         uint256 id = _createConfiguredProgram(_root(), 500e6, 1 days);
         _fund(id, 500e6);
         vm.warp(block.timestamp + 2 days);
 
-        // Zero time fields keep the stored window; activation does not revalidate it.
+        // Zero time fields keep the stored window, which must be rechecked on activation.
         vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
         reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
-        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Active));
-        vm.expectRevert(WarrantRegistry.ClaimClosed.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Created));
+        assertEq(reg.settleReserve(id), 500e6);
 
+        WarrantRegistry.Program memory patch = _patch(WarrantRegistry.State.Active);
+        patch.deadline = uint64(block.timestamp + 1 days);
         vm.prank(ops);
-        reg.sweepUnclaimed(id, custody);
-        assertEq(usd.balanceOf(custody), 500e6);
-        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Closed));
+        reg.configureProgram(id, patch);
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Active));
+    }
+
+    function test_configureProgram_activationRejectsDeadlineAtCurrentTime() public {
+        uint256 id = _createConfiguredProgram(_root(), 500e6, 1 days);
+        _fund(id, 500e6);
+        vm.warp(block.timestamp + 1 days);
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
+    }
+
+    function test_configureProgram_activationRejectsUnsetDeadline() public {
+        vm.startPrank(ops);
+        uint256 id = reg.createProgram(oldStock, address(0));
+        WarrantRegistry.Program memory patch = _patch(WarrantRegistry.State.Active);
+        patch.merkleRoot = _root();
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        reg.configureProgram(id, patch);
+        vm.stopPrank();
     }
 
     // ── warrant: single-step claim = record + settle ────────────────────────────
