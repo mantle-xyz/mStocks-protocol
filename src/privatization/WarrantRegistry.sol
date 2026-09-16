@@ -441,6 +441,9 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         emit Swept(programId, to, reserve);
     }
 
+    /// @notice Admin-approved sweep destinations. Appended using one former gap slot.
+    mapping(address => bool) public isSweepRecipient;
+
     // ── role guards (repo convention) ───────────────────────────────────────────
 
     /// @notice Disallows self-grant — admin must delegate OPS_ROLE to a separate account.
@@ -480,9 +483,6 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         super.revokeRole(role, account);
     }
 
-    /// @notice Admin-approved sweep destinations. Appended using one former gap slot.
-    mapping(address => bool) public isSweepRecipient;
-
-    /// @dev Existing 6 slots + isSweepRecipient + 43 gap slots = 50 slots reserved.
+    /// @dev Reserved slots for future state additions.
     uint256[43] private __gap;
 }
