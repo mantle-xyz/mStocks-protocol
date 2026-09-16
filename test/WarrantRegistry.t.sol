@@ -787,6 +787,62 @@ contract WarrantRegistryTest is Test {
         reg.claim(id, 0, alice, 0.6e18, _proofAlice());
     }
 
+    function test_configureProgram_activationRejectsEmptyRootAfterFunding() public {
+        uint256 id = _createConfiguredProgram(bytes32(0), 500e6, 7 days);
+        _fund(id, 500e6);
+        vm.prank(ops);
+        vm.expectRevert(WarrantRegistry.MerkleRootNotSet.selector);
+        reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Created));
+        assertEq(reg.settleReserve(id), 500e6);
+    }
+
+    function test_configureProgram_recordOnlyActivationAlsoRequiresRoot() public {
+        vm.startPrank(ops);
+        uint256 id = reg.createProgram(oldStock, address(0));
+        WarrantRegistry.Program memory patch = _patch(WarrantRegistry.State.Active);
+        patch.deadline = uint64(block.timestamp + 7 days);
+        vm.expectRevert(WarrantRegistry.MerkleRootNotSet.selector);
+        reg.configureProgram(id, patch);
+        patch.merkleRoot = _root();
+        reg.configureProgram(id, patch);
+        vm.stopPrank();
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Active));
+    }
+
+    function test_configureProgram_acceptsRootInActivationPatch() public {
+        uint256 id = _createConfiguredProgram(bytes32(0), 500e6, 7 days);
+        _fund(id, 500e6);
+        WarrantRegistry.Program memory patch = _patch(WarrantRegistry.State.Active);
+        patch.merkleRoot = _root();
+        vm.prank(ops);
+        reg.configureProgram(id, patch);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertEq(usd.balanceOf(alice), 300e6);
+    }
+
+    function test_configureProgram_fundedRootRemainsCorrectableUntilActive() public {
+        uint256 id = _createConfiguredProgram(_root(), 500e6, 7 days);
+        _fund(id, 500e6);
+        bytes32 correctedRoot = _hashPair(_leaf(0, alice, 0.4e18), _leaf(1, bob, 0.6e18));
+        WarrantRegistry.Program memory patch = _patch(WarrantRegistry.State.None);
+        patch.merkleRoot = correctedRoot;
+        vm.startPrank(ops);
+        reg.configureProgram(id, patch);
+        reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
+        patch.merkleRoot = _root();
+        vm.expectRevert(WarrantRegistry.ConfigureLockedOnceActive.selector);
+        reg.configureProgram(id, patch);
+        vm.stopPrank();
+
+        vm.expectRevert(WarrantRegistry.InvalidProof.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        bytes32[] memory proof = new bytes32[](1);
+        proof[0] = _leaf(1, bob, 0.6e18);
+        reg.claim(id, 0, alice, 0.4e18, proof);
+        assertEq(usd.balanceOf(alice), 200e6);
+    }
+
     // ── state-machine guards ─────────────────────────────────────────────────────
 
     function _emptyPatch(uint8 state) internal pure returns (WarrantRegistry.Program memory) {
