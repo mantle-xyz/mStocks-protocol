@@ -157,6 +157,97 @@ contract WarrantRegistryTest is Test {
         });
     }
 
+    // ── configureProgram window validation ──────────────────────────────────────
+
+    function _configureWindow(uint256 id, uint64 startTime, uint64 deadline) internal {
+        WarrantRegistry.Program memory patch = _patch(WarrantRegistry.State.None);
+        patch.startTime = startTime;
+        patch.deadline = deadline;
+        vm.prank(ops);
+        reg.configureProgram(id, patch);
+    }
+
+    function test_configureProgram_rejectsPastDeadline() public {
+        vm.warp(10 days);
+        vm.prank(ops);
+        uint256 id = reg.createProgram(oldStock, address(usd));
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        _configureWindow(id, 0, uint64(block.timestamp - 1));
+    }
+
+    function test_configureProgram_rejectsDeadlineAtCurrentTime() public {
+        vm.prank(ops);
+        uint256 id = reg.createProgram(oldStock, address(usd));
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        _configureWindow(id, 0, uint64(block.timestamp));
+    }
+
+    function test_configureProgram_rejectsDeadlineBeforeStartTime() public {
+        vm.prank(ops);
+        uint256 id = reg.createProgram(oldStock, address(usd));
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        _configureWindow(id, uint64(block.timestamp + 2 days), uint64(block.timestamp + 1 days));
+    }
+
+    function test_configureProgram_rejectsDeadlineEqualToStartTime() public {
+        vm.prank(ops);
+        uint256 id = reg.createProgram(oldStock, address(usd));
+        uint64 startTime = uint64(block.timestamp + 1 days);
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        _configureWindow(id, startTime, startTime);
+    }
+
+    function test_configureProgram_rejectsDeadlineBeforeStoredStartTime() public {
+        vm.prank(ops);
+        uint256 id = reg.createProgram(oldStock, address(usd));
+        _configureWindow(id, uint64(block.timestamp + 2 days), 0);
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        _configureWindow(id, 0, uint64(block.timestamp + 1 days));
+    }
+
+    function test_configureProgram_rejectsStartTimeAtOrPastStoredDeadline() public {
+        uint256 id = _createConfiguredProgram(_root(), 500e6, 1 days);
+        uint64 deadline = uint64(block.timestamp + 1 days);
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        _configureWindow(id, deadline, 0);
+        vm.expectRevert(WarrantRegistry.InvalidWindow.selector);
+        _configureWindow(id, deadline + 1, 0);
+    }
+
+    function test_configureProgram_acceptsValidWindowAndPartialUpdates() public {
+        vm.prank(ops);
+        uint256 id = reg.createProgram(oldStock, address(usd));
+        uint64 startTime = uint64(block.timestamp);
+        _configureWindow(id, startTime, startTime + 1 days);
+        (,,,, uint64 storedStart, uint64 storedDeadline,) = reg.programs(id);
+        assertEq(storedStart, startTime);
+        assertEq(storedDeadline, startTime + 1 days);
+
+        _configureWindow(id, 0, startTime + 3 days);
+        _configureWindow(id, startTime + 2 days, 0);
+        (,,,, storedStart, storedDeadline,) = reg.programs(id);
+        assertEq(storedStart, startTime + 2 days);
+        assertEq(storedDeadline, startTime + 3 days);
+    }
+
+    function test_configureProgram_expiredWindowCanStillActivateAndSweep() public {
+        uint256 id = _createConfiguredProgram(_root(), 500e6, 1 days);
+        _fund(id, 500e6);
+        vm.warp(block.timestamp + 2 days);
+
+        // Zero time fields keep the stored window; activation does not revalidate it.
+        vm.prank(ops);
+        reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Active));
+        vm.expectRevert(WarrantRegistry.ClaimClosed.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+
+        vm.prank(ops);
+        reg.sweepUnclaimed(id, custody);
+        assertEq(usd.balanceOf(custody), 500e6);
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Closed));
+    }
+
     // ── warrant: single-step claim = record + settle ────────────────────────────
 
     function test_claim_recordsAndSettles() public {
