@@ -41,6 +41,20 @@ contract WarrantRegistryOps is Script {
         }
     }
 
+    /// @notice Pause claims globally. Broadcaster must hold OPS_ROLE.
+    function pause(address registry) external {
+        vm.startBroadcast();
+        WarrantRegistry(registry).pause();
+        vm.stopBroadcast();
+    }
+
+    /// @notice Resume claims. Broadcaster must hold OPS_ROLE.
+    function unpause(address registry) external {
+        vm.startBroadcast();
+        WarrantRegistry(registry).unpause();
+        vm.stopBroadcast();
+    }
+
     /// @notice Register a program. `settlementToken` may be 0 (set later via configureProgram, or
     ///         leave 0 for a leverage record anchor). Broadcaster must hold OPS_ROLE.
     function createProgram(address registry, address token, address settlementToken)

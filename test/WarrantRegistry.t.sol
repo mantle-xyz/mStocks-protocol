@@ -2,6 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {WarrantRegistry} from "../src/privatization/WarrantRegistry.sol";
 import {ComplianceRegistry} from "../src/complianceRegistry/ComplianceRegistry.sol";
@@ -51,6 +53,101 @@ contract WarrantRegistryTest is Test {
                 )
             )
         );
+    }
+
+    // ── claim-only pause ───────────────────────────────────────────────────────
+
+    function test_pause_initiallyUnpaused() public view {
+        assertFalse(reg.paused());
+    }
+
+    function test_pauseAndUnpause_onlyOps() public {
+        bytes32 role = reg.OPS_ROLE();
+        address[2] memory unauthorized = [admin, mallory];
+        for (uint256 i = 0; i < unauthorized.length; ++i) {
+            vm.startPrank(unauthorized[i]);
+            vm.expectRevert(
+                abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, unauthorized[i], role)
+            );
+            reg.pause();
+            vm.expectRevert(
+                abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, unauthorized[i], role)
+            );
+            reg.unpause();
+            vm.stopPrank();
+        }
+    }
+
+    function test_pauseAndUnpause_emitEventsAndRejectRepeatedCalls() public {
+        vm.startPrank(ops);
+        vm.expectEmit(false, false, false, true, address(reg));
+        emit PausableUpgradeable.Paused(ops);
+        reg.pause();
+        assertTrue(reg.paused());
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        reg.pause();
+        vm.expectEmit(false, false, false, true, address(reg));
+        emit PausableUpgradeable.Unpaused(ops);
+        reg.unpause();
+        assertFalse(reg.paused());
+        vm.expectRevert(PausableUpgradeable.ExpectedPause.selector);
+        reg.unpause();
+        vm.stopPrank();
+    }
+
+    function test_pause_claimDoesNotConsumeEntitlementAndCanResume() public {
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        vm.prank(ops);
+        reg.pause();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertFalse(reg.isClaimed(id, 0));
+        assertEq(reg.warrant(id, alice), 0);
+        assertEq(reg.settleReserve(id), 500e6);
+        assertEq(usd.balanceOf(alice), 0);
+
+        vm.prank(ops);
+        reg.unpause();
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        assertTrue(reg.isClaimed(id, 0));
+        assertEq(usd.balanceOf(alice), 300e6);
+    }
+
+    function test_pause_appliesToAllPrograms() public {
+        uint256 first = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 second = _createActiveProgram(_root(), 500e6, 7 days);
+        vm.prank(ops);
+        reg.pause();
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        reg.claim(first, 0, alice, 0.6e18, _proofAlice());
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        reg.claim(second, 0, alice, 0.6e18, _proofAlice());
+    }
+
+    function test_pause_preservesConfigurationFundingAndSweep() public {
+        vm.prank(ops);
+        reg.pause();
+        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        assertTrue(reg.paused());
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Active));
+        assertEq(reg.settleReserve(id), 500e6);
+        vm.warp(block.timestamp + 8 days);
+        vm.prank(ops);
+        reg.sweepUnclaimed(id, custody);
+        assertEq(usd.balanceOf(custody), 500e6);
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Closed));
+        assertTrue(reg.paused());
+    }
+
+    function test_pause_roleManagementRemainsAvailable() public {
+        vm.prank(ops);
+        reg.pause();
+        bytes32 role = reg.OPS_ROLE();
+        vm.prank(admin);
+        reg.grantRole(role, bob);
+        vm.prank(bob);
+        reg.unpause();
+        assertFalse(reg.paused());
     }
 
     // ── merkle helpers: 2-leaf tree over (index, account, amount) ────────────────
