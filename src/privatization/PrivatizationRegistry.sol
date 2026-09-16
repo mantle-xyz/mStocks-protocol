@@ -469,6 +469,6 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         super.revokeRole(role, account);
     }
 
-    /// @dev Reserved slots for future state additions.
-    uint256[43] private __gap;
+    /// @dev Six state slots + 44 reserved slots = 50 slots total.
+    uint256[44] private __gap;
 }

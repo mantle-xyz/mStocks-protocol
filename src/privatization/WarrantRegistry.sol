@@ -441,6 +441,6 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         super.revokeRole(role, account);
     }
 
-    /// @dev Reserved slots for future state additions.
-    uint256[44] private __gap;
+    /// @dev Five state slots + 45 reserved slots = 50 slots total.
+    uint256[45] private __gap;
 }
