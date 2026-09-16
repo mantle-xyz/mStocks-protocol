@@ -917,6 +917,49 @@ contract PrivatizationRegistryTest is Test {
         assertEq(outs[2], 100 ether);
     }
 
+    function test_sweepUnclaimed_emptyReservesCloseWithoutEvent() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.startPrank(alice);
+        oldToken.approve(address(registry), 100 ether);
+        registry.claim(id, 100 ether);
+        vm.stopPrank();
+        assertEq(registry.reserved(id, address(usdc)), 0);
+        assertEq(registry.reserved(id, address(newToken)), 0);
+        assertEq(registry.reserved(id, address(cvr)), 0);
+        vm.warp(block.timestamp + 2 * WEEK);
+
+        vm.recordLogs();
+        registry.sweepUnclaimed(id, custody);
+        assertEq(vm.getRecordedLogs().length, 0, "no transfers or Swept event");
+        (,,,, uint8 state) = registry.programs(id);
+        assertEq(state, uint8(PrivatizationRegistry.State.Closed));
+    }
+
+    function test_sweepUnclaimed_oneRemainingLegEmitsEvent() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activate(id, oldToken);
+        _fundUsd(id, 301e6); // one extra USDC remains after the full claim
+        _fund(id, newToken, 200 ether);
+        _fund(id, cvr, 100 ether);
+        _open(id);
+        vm.startPrank(alice);
+        oldToken.approve(address(registry), 100 ether);
+        registry.claim(id, 100 ether);
+        vm.stopPrank();
+        assertEq(registry.reserved(id, address(newToken)), 0);
+        assertEq(registry.reserved(id, address(cvr)), 0);
+        vm.warp(block.timestamp + 2 * WEEK);
+
+        vm.expectEmit(true, true, false, true, address(registry));
+        emit PrivatizationRegistry.Swept(id, custody);
+        registry.sweepUnclaimed(id, custody);
+        assertEq(usdc.balanceOf(custody), 1e6);
+        assertEq(registry.reserved(id, address(usdc)), 0);
+    }
+
     // ── sweepUnclaimed recipient allowlist ───────────────────────────────────────
 
     /// @dev A leaked/malicious OPS key can trigger a sweep, but only to an admin-approved address —

@@ -409,8 +409,8 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         if (reserve != 0) {
             settleReserve[programId] = 0;
             IERC20(p.settlementToken).safeTransfer(to, reserve);
+            emit Swept(programId, to, reserve);
         }
-        emit Swept(programId, to, reserve);
     }
 
     // ── role guards (repo convention) ───────────────────────────────────────────

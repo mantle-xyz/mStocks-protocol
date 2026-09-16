@@ -426,15 +426,17 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
         p.state = uint8(State.Closed);
         Leg[] storage legs = _legs[programId];
+        bool swept;
         for (uint256 i = 0; i < legs.length; ++i) {
             address token = legs[i].token;
             uint256 r = reserved[programId][token];
             if (r != 0) {
                 reserved[programId][token] = 0; // token may repeat across legs; second pass is a no-op
                 IERC20(token).safeTransfer(to, r);
+                swept = true;
             }
         }
-        emit Swept(programId, to);
+        if (swept) emit Swept(programId, to);
     }
 
     // ── role guards (repo convention) ───────────────────────────────────────────
