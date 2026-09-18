@@ -53,11 +53,15 @@ contract WarrantRegistryTest is Test {
         );
     }
 
-    // ── merkle helpers: 2-leaf tree over (index, account, amount) ────────────────
+    // ── merkle helpers: 2-leaf tree over (chainid, registry, programId, index, account,
+    // amount) — the domain prefix binds each proof to one program on one deployment.
     // amount is the account's normalized share (base RATE_SCALE = 1e18).
 
-    function _leaf(uint256 index, address account, uint256 amount) internal pure returns (bytes32) {
-        return keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
+    function _leaf(uint256 programId, uint256 index, address account, uint256 amount) internal view returns (bytes32) {
+        return
+            keccak256(
+                bytes.concat(keccak256(abi.encode(block.chainid, address(reg), programId, index, account, amount)))
+            );
     }
 
     function _hashPair(bytes32 a, bytes32 b) internal pure returns (bytes32) {
@@ -65,36 +69,36 @@ contract WarrantRegistryTest is Test {
     }
 
     /// alice=index0 share 0.6e18 (60%), bob=index1 share 0.3e18 (30%).
-    function _root() internal view returns (bytes32) {
-        return _hashPair(_leaf(0, alice, 0.6e18), _leaf(1, bob, 0.3e18));
+    function _root(uint256 programId) internal view returns (bytes32) {
+        return _hashPair(_leaf(programId, 0, alice, 0.6e18), _leaf(programId, 1, bob, 0.3e18));
     }
 
-    function _proofAlice() internal view returns (bytes32[] memory p) {
+    function _proofAlice(uint256 programId) internal view returns (bytes32[] memory p) {
         p = new bytes32[](1);
-        p[0] = _leaf(1, bob, 0.3e18);
+        p[0] = _leaf(programId, 1, bob, 0.3e18);
     }
 
-    function _proofBob() internal view returns (bytes32[] memory p) {
+    function _proofBob(uint256 programId) internal view returns (bytes32[] memory p) {
         p = new bytes32[](1);
-        p[0] = _leaf(0, alice, 0.6e18);
+        p[0] = _leaf(programId, 0, alice, 0.6e18);
     }
 
     /// A tree whose amounts sum to 1.3e18 — above RATE_SCALE. Snapshots are meant to sum
     /// to exactly RATE_SCALE; one that sums higher promises more than `settleTotal` can
     /// pay, and it is the only way InsufficientReserved is still reachable now that going
     /// Active requires the reserve to cover settleTotal.
-    function _overSumRoot() internal view returns (bytes32) {
-        return _hashPair(_leaf(0, alice, 0.8e18), _leaf(1, bob, 0.5e18));
+    function _overSumRoot(uint256 programId) internal view returns (bytes32) {
+        return _hashPair(_leaf(programId, 0, alice, 0.8e18), _leaf(programId, 1, bob, 0.5e18));
     }
 
-    function _overSumProofAlice() internal view returns (bytes32[] memory p) {
+    function _overSumProofAlice(uint256 programId) internal view returns (bytes32[] memory p) {
         p = new bytes32[](1);
-        p[0] = _leaf(1, bob, 0.5e18);
+        p[0] = _leaf(programId, 1, bob, 0.5e18);
     }
 
-    function _overSumProofBob() internal view returns (bytes32[] memory p) {
+    function _overSumProofBob(uint256 programId) internal view returns (bytes32[] memory p) {
         p = new bytes32[](1);
-        p[0] = _leaf(0, alice, 0.8e18);
+        p[0] = _leaf(programId, 0, alice, 0.8e18);
     }
 
     function _fund(uint256 id, uint256 amount) internal {
@@ -160,12 +164,12 @@ contract WarrantRegistryTest is Test {
     // ── warrant: single-step claim = record + settle ────────────────────────────
 
     function test_claim_recordsAndSettles() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days); // alice 60% -> 300e6, bob 30% -> 150e6
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days); // alice 60% -> 300e6, bob 30% -> 150e6
 
         assertEq(reg.previewClaim(id, 0.6e18), 300e6);
 
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
 
         assertEq(reg.warrant(id, alice), 0.6e18, "on-chain queryable warrant amount");
         assertEq(usd.balanceOf(alice), 300e6, "settled in U");
@@ -209,7 +213,7 @@ contract WarrantRegistryTest is Test {
         reg.fund(id, 1);
 
         // Because it was refused, the terms are still settable and the program is fine.
-        uint256 funded = _createConfiguredProgram(_root(), 500e6, 7 days);
+        uint256 funded = _createConfiguredProgram(_root(reg.programCount()), 500e6, 7 days);
         _fund(funded, 500e6);
         vm.prank(ops);
         reg.configureProgram(funded, _patch(WarrantRegistry.State.Active));
@@ -221,7 +225,7 @@ contract WarrantRegistryTest is Test {
     /// program owes, and that assertion would mean nothing if the reserve could still move
     /// — including upward, since a later top-up implies the assertion was wrong when made.
     function test_fund_lockedOnceActive() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
 
         usd.mint(ops, 1e6);
         vm.startPrank(ops);
@@ -234,7 +238,7 @@ contract WarrantRegistryTest is Test {
 
     /// And after sweeping, which the same condition covers.
     function test_fund_lockedOnceClosed() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 1 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 1 days);
         vm.warp(block.timestamp + 2 days);
         vm.prank(ops);
         reg.sweepUnclaimed(id, custody);
@@ -250,7 +254,7 @@ contract WarrantRegistryTest is Test {
     /// Active means claimable, so it has to mean funded. Otherwise holders discover the
     /// shortfall as InsufficientReserved and cannot tell it from a bug.
     function test_configureProgram_activeRequiresFullFunding() public {
-        uint256 id = _createConfiguredProgram(_root(), 500e6, 7 days);
+        uint256 id = _createConfiguredProgram(_root(reg.programCount()), 500e6, 7 days);
 
         vm.prank(ops);
         vm.expectRevert(abi.encodeWithSelector(WarrantRegistry.NotFullyFunded.selector, 0, 500e6));
@@ -271,7 +275,7 @@ contract WarrantRegistryTest is Test {
     /// Over-funding is allowed: a tree summing above RATE_SCALE needs proportionally more
     /// than settleTotal, and this contract cannot know the sum, so the check is a floor.
     function test_configureProgram_activeAcceptsOverFunding() public {
-        uint256 id = _createConfiguredProgram(_root(), 500e6, 7 days);
+        uint256 id = _createConfiguredProgram(_root(reg.programCount()), 500e6, 7 days);
         _fund(id, 650e6);
         vm.prank(ops);
         reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
@@ -287,7 +291,7 @@ contract WarrantRegistryTest is Test {
             id,
             WarrantRegistry.Program({
                 token: address(0),
-                merkleRoot: _root(),
+                merkleRoot: _root(id),
                 settlementToken: address(0),
                 settleTotal: 0,
                 startTime: uint64(block.timestamp),
@@ -301,7 +305,7 @@ contract WarrantRegistryTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.NotConvertibleYet.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     /// The gap the funding check could not cover on its own: a record-only program is
@@ -315,7 +319,7 @@ contract WarrantRegistryTest is Test {
             id,
             WarrantRegistry.Program({
                 token: address(0),
-                merkleRoot: _root(),
+                merkleRoot: _root(id),
                 settlementToken: address(0),
                 settleTotal: 0,
                 startTime: uint64(block.timestamp),
@@ -369,43 +373,43 @@ contract WarrantRegistryTest is Test {
     /// generic failure, because "blocked for this token" and "globally sanctioned" are
     /// resolved by different desks.
     function test_claim_blockedAccountReverts() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
         _blockAlice();
 
         vm.prank(alice);
         vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     function test_claim_sanctionedAccountReverts() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
         _sanctionAlice();
 
         vm.prank(alice);
         vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     /// The check is on `account`, not the caller. claim() accepts a proof on anyone's
     /// behalf and pays `account`, so checking the caller would let a clean relayer collect
     /// for a blocked one — which is the whole of the bypass.
     function test_claim_blockedAccountCannotBeClaimedForByACleanRelayer() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
         _blockAlice();
 
         // bob is not blocked and is a legitimate claimer of his own leaf.
         vm.prank(bob);
         vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     /// Blocking one account must not close the program for everyone else.
     function test_claim_blockOnOneAccountDoesNotAffectAnother() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
         _blockAlice();
 
         vm.prank(bob);
-        reg.claim(id, 1, bob, 0.3e18, _proofBob());
+        reg.claim(id, 1, bob, 0.3e18, _proofBob(id));
         assertEq(usd.balanceOf(bob), 150e6);
     }
 
@@ -413,12 +417,12 @@ contract WarrantRegistryTest is Test {
     /// unconsumed so the same leaf still settles once compliance clears. If the revert
     /// landed after `_claimed.set`, the entitlement would be destroyed by a hold.
     function test_claim_blockedThenUnblockedStillSettles() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
         _blockAlice();
 
         vm.prank(alice);
         vm.expectRevert(ComplianceRegistry.UserBlocked.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
 
         assertFalse(reg.isClaimed(id, 0), "a rejected claim must not consume the index");
         assertEq(reg.warrant(id, alice), 0, "nothing recorded");
@@ -431,7 +435,7 @@ contract WarrantRegistryTest is Test {
         comp.unblockUsers(oldStock, who);
 
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
         assertEq(usd.balanceOf(alice), 300e6);
         assertTrue(reg.isClaimed(id, 0));
     }
@@ -440,7 +444,7 @@ contract WarrantRegistryTest is Test {
     /// keyed (token, user), and passing the wrong token here would either block accounts
     /// that are clear or clear accounts that are blocked.
     function test_claim_blockOnADifferentTokenDoesNotApply() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
 
         address[] memory who = new address[](1);
         who[0] = alice;
@@ -448,7 +452,7 @@ contract WarrantRegistryTest is Test {
         comp.blockUsers(address(usd), who); // blocked for the settlement asset, not the stock
 
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
         assertEq(usd.balanceOf(alice), 300e6);
     }
 
@@ -464,7 +468,7 @@ contract WarrantRegistryTest is Test {
             id,
             WarrantRegistry.Program({
                 token: address(0),
-                merkleRoot: _root(),
+                merkleRoot: _root(id),
                 settlementToken: address(0),
                 settleTotal: 500e6,
                 startTime: uint64(block.timestamp),
@@ -479,19 +483,19 @@ contract WarrantRegistryTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(WarrantRegistry.ComplianceUnavailable.selector, address(plain)));
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     /// Same, for a token whose registry address is zero — what an uninitialized token
     /// proxy looks like from the outside. `compliance()` returns rather than reverts here,
     /// so it is a distinct branch from the case above.
     function test_claim_tokenWithAZeroComplianceRegistryFailsClosed() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
         stock.setCompliance(IComplianceRegistry(address(0)));
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(WarrantRegistry.ComplianceUnavailable.selector, oldStock));
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     /// Failing closed on an unreadable registry can strand a program: once Active the
@@ -510,7 +514,7 @@ contract WarrantRegistryTest is Test {
             id,
             WarrantRegistry.Program({
                 token: address(0),
-                merkleRoot: _root(),
+                merkleRoot: _root(id),
                 settlementToken: address(0),
                 settleTotal: 500e6,
                 startTime: uint64(block.timestamp),
@@ -525,7 +529,7 @@ contract WarrantRegistryTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(WarrantRegistry.ComplianceUnavailable.selector, address(plain)));
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
 
         // Repointing the token is no longer available.
         vm.prank(ops);
@@ -554,18 +558,18 @@ contract WarrantRegistryTest is Test {
     /// Sanctions are cleared by an epoch bump rather than per-entry deletes, so this
     /// checks the claim path sees the bump.
     function test_claim_clearingSanctionsReopensTheClaim() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
         _sanctionAlice();
 
         vm.prank(alice);
         vm.expectRevert(ComplianceRegistry.UserSanctioned.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
 
         vm.prank(ops);
         comp.clearSanctions();
 
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
         assertEq(usd.balanceOf(alice), 300e6);
     }
 
@@ -578,7 +582,7 @@ contract WarrantRegistryTest is Test {
             id,
             WarrantRegistry.Program({
                 token: address(0),
-                merkleRoot: _root(),
+                merkleRoot: _root(id),
                 settlementToken: address(0),
                 settleTotal: 0,
                 startTime: uint64(block.timestamp),
@@ -590,7 +594,7 @@ contract WarrantRegistryTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.NotConvertibleYet.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
         assertFalse(reg.isClaimed(id, 0), "index not consumed on failed claim");
 
         // Milestone resolves — but the terms can no longer be added in place. Turning a
@@ -614,16 +618,16 @@ contract WarrantRegistryTest is Test {
         // So it stays record-only, and the claim keeps failing the same way.
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.NotConvertibleYet.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
         assertFalse(reg.isClaimed(id, 0));
 
         // The route is a second program over the same root. The record anchor stays where
         // it is, and the payable program is configured, funded and opened in the normal
         // order — which is the point of the lock: the terms a holder sees are the terms
         // the program opened with.
-        uint256 payable_ = _createActiveProgram(_root(), 500e6, 30 days);
+        uint256 payable_ = _createActiveProgram(_root(reg.programCount()), 500e6, 30 days);
         vm.prank(alice);
-        reg.claim(payable_, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(payable_, 0, alice, 0.6e18, _proofAlice(payable_));
         assertEq(reg.warrant(payable_, alice), 0.6e18);
         assertEq(usd.balanceOf(alice), 300e6);
         assertEq(reg.warrant(id, alice), 0, "the record-only program recorded nothing");
@@ -639,18 +643,18 @@ contract WarrantRegistryTest is Test {
     /// mean nothing if the reserve could still move. So the reconciliation has to happen
     /// before opening. Nothing on chain can do it — the sum is not visible to the contract.
     function test_claim_treeSummingAboveRateScaleStrandsTheLastClaimant() public {
-        uint256 id = _createActiveProgram(_overSumRoot(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_overSumRoot(reg.programCount()), 500e6, 7 days);
         assertEq(reg.settleReserve(id), 500e6, "Active implies the reserve covers settleTotal");
         assertEq(reg.previewClaim(id, 0.8e18), 400e6);
         assertEq(reg.previewClaim(id, 0.5e18), 250e6); // 400 + 250 = 650e6 > 500e6
 
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.8e18, _overSumProofAlice());
+        reg.claim(id, 0, alice, 0.8e18, _overSumProofAlice(id));
         assertEq(reg.settleReserve(id), 100e6);
 
         vm.prank(bob);
         vm.expectRevert(WarrantRegistry.InsufficientReserved.selector);
-        reg.claim(id, 1, bob, 0.5e18, _overSumProofBob());
+        reg.claim(id, 1, bob, 0.5e18, _overSumProofBob(id));
         assertFalse(reg.isClaimed(id, 1), "a rejected claim must not consume the index");
 
         // No topping up: the program is Active.
@@ -674,7 +678,7 @@ contract WarrantRegistryTest is Test {
     /// happen while the program is Created — Σ previewClaim over the leaves against
     /// settleReserve.
     function test_fund_reconcilingBeforeOpeningPaysEveryone() public {
-        uint256 id = _createConfiguredProgram(_overSumRoot(), 500e6, 7 days);
+        uint256 id = _createConfiguredProgram(_overSumRoot(reg.programCount()), 500e6, 7 days);
 
         // 0.8e18 + 0.5e18 = 1.3e18 of RATE_SCALE, so the program owes 1.3 * settleTotal.
         assertEq(reg.previewClaim(id, 0.8e18) + reg.previewClaim(id, 0.5e18), 650e6);
@@ -683,30 +687,30 @@ contract WarrantRegistryTest is Test {
         reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
 
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.8e18, _overSumProofAlice());
+        reg.claim(id, 0, alice, 0.8e18, _overSumProofAlice(id));
         vm.prank(bob);
-        reg.claim(id, 1, bob, 0.5e18, _overSumProofBob());
+        reg.claim(id, 1, bob, 0.5e18, _overSumProofBob(id));
         assertEq(usd.balanceOf(alice), 400e6);
         assertEq(usd.balanceOf(bob), 250e6);
         assertEq(reg.settleReserve(id), 0, "exactly consumed");
     }
 
     function test_claim_doubleClaimReverts() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
 
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.AlreadyClaimed.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     function test_claim_invalidProofReverts() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
 
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.InvalidProof.selector);
-        reg.claim(id, 0, alice, 0.9e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.9e18, _proofAlice(id));
     }
 
     function test_claim_beforeStartTimeReverts() public {
@@ -716,7 +720,7 @@ contract WarrantRegistryTest is Test {
             id,
             WarrantRegistry.Program({
                 token: address(0),
-                merkleRoot: _root(),
+                merkleRoot: _root(id),
                 settlementToken: address(0),
                 settleTotal: 500e6,
                 startTime: uint64(block.timestamp) + 1 days,
@@ -731,15 +735,15 @@ contract WarrantRegistryTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.ClaimNotStarted.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     function test_claim_afterDeadlineReverts_and_sweep() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 1 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 1 days);
 
         // alice claims within window; bob never does.
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
         assertEq(reg.settleReserve(id), 200e6);
 
         vm.prank(ops);
@@ -749,7 +753,7 @@ contract WarrantRegistryTest is Test {
         vm.warp(block.timestamp + 2 days);
         vm.prank(bob);
         vm.expectRevert(WarrantRegistry.ClaimClosed.selector);
-        reg.claim(id, 1, bob, 0.3e18, _proofBob());
+        reg.claim(id, 1, bob, 0.3e18, _proofBob(id));
 
         vm.prank(ops);
         reg.sweepUnclaimed(id, custody);
@@ -766,7 +770,7 @@ contract WarrantRegistryTest is Test {
             id,
             WarrantRegistry.Program({
                 token: address(0),
-                merkleRoot: _root(),
+                merkleRoot: _root(id),
                 settlementToken: address(0),
                 settleTotal: 0,
                 startTime: uint64(block.timestamp),
@@ -777,14 +781,14 @@ contract WarrantRegistryTest is Test {
         vm.stopPrank();
 
         (, bytes32 root, address settlementToken,,,,) = reg.programs(id);
-        assertEq(root, _root(), "credit-line root anchored on-chain");
+        assertEq(root, _root(id), "credit-line root anchored on-chain");
         assertEq(settlementToken, address(0), "no settlement - record only");
         assertEq(reg.warrant(id, alice), 0, "nobody claims leverage record");
 
         // No claim path: claiming reverts (not convertible), consistent with leverage having no claim.
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.NotConvertibleYet.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     // ── state-machine guards ─────────────────────────────────────────────────────
@@ -804,7 +808,7 @@ contract WarrantRegistryTest is Test {
     /// The configure lock now fires before the state machine does, so an Active program
     /// refuses the patch outright rather than reaching the transition check.
     function test_configureProgram_cannotRegressState() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 7 days); // now Active
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days); // now Active
 
         vm.prank(ops);
         vm.expectRevert(WarrantRegistry.ConfigureLockedOnceActive.selector);
@@ -832,7 +836,7 @@ contract WarrantRegistryTest is Test {
     }
 
     function test_configureProgram_cannotReopenClosedProgram() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 1 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 1 days);
         vm.warp(block.timestamp + 2 days);
         vm.prank(ops);
         reg.sweepUnclaimed(id, custody); // now Closed
@@ -851,7 +855,7 @@ contract WarrantRegistryTest is Test {
     /// so this lock is only observable in the window where configuring is still allowed —
     /// configure terms, fund, then try to move them.
     function test_configureProgram_settlementTermsLockedAfterFund() public {
-        uint256 id = _createConfiguredProgram(_root(), 500e6, 7 days);
+        uint256 id = _createConfiguredProgram(_root(reg.programCount()), 500e6, 7 days);
         _fund(id, 100e6); // any non-zero reserve locks the terms
 
         vm.prank(ops);
@@ -921,7 +925,7 @@ contract WarrantRegistryTest is Test {
             id,
             WarrantRegistry.Program({
                 token: address(0),
-                merkleRoot: _root(),
+                merkleRoot: _root(id),
                 settlementToken: address(0),
                 settleTotal: 0,
                 startTime: 0,
@@ -940,7 +944,7 @@ contract WarrantRegistryTest is Test {
     }
 
     function test_sweepUnclaimed_onlyOps() public {
-        uint256 id = _createActiveProgram(_root(), 500e6, 1 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 1 days);
         vm.warp(block.timestamp + 2 days);
 
         vm.prank(admin);
@@ -984,12 +988,13 @@ contract WarrantRegistryTest is Test {
     ///      guarded the same thing with `claimStarted`; this contract did not.
     function test_configureProgram_rootCannotBeSwappedAfterAClaim() public {
         // Tree B puts mallory at alice's index 0 with alice's share.
-        bytes32 rootB = _hashPair(_leaf(0, mallory, 0.6e18), _leaf(1, bob, 0.3e18));
+        uint256 nextId = reg.programCount();
+        bytes32 rootB = _hashPair(_leaf(nextId, 0, mallory, 0.6e18), _leaf(nextId, 1, bob, 0.3e18));
 
-        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 1000e6, 7 days);
 
         vm.prank(bob);
-        reg.claim(id, 1, bob, 0.3e18, _proofBob());
+        reg.claim(id, 1, bob, 0.3e18, _proofBob(id));
         assertTrue(reg.claimStarted(id), "a successful claim must set claimStarted");
 
         vm.prank(ops);
@@ -1008,11 +1013,11 @@ contract WarrantRegistryTest is Test {
         );
 
         (, bytes32 storedRoot,,,,,) = reg.programs(id);
-        assertEq(storedRoot, _root(), "root must still be the one holders were told about");
+        assertEq(storedRoot, _root(id), "root must still be the one holders were told about");
 
         // And alice, entitled under the original root, can still claim.
         vm.prank(alice);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
         assertEq(usd.balanceOf(alice), 600e6);
     }
 
@@ -1027,7 +1032,7 @@ contract WarrantRegistryTest is Test {
     /// exception for "extend only" is another branch to get wrong, and a window set
     /// generously at the start needs no exception.
     function test_configureProgram_deadlineIsFixedOnceActive() public {
-        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 1000e6, 7 days);
 
         // Extending: refused, even though it could only help holders.
         vm.prank(ops);
@@ -1064,7 +1069,7 @@ contract WarrantRegistryTest is Test {
 
         // And the window still works as configured.
         vm.prank(bob);
-        reg.claim(id, 1, bob, 0.3e18, _proofBob());
+        reg.claim(id, 1, bob, 0.3e18, _proofBob(id));
 
         vm.prank(ops);
         vm.expectRevert(WarrantRegistry.ConfigureLockedOnceActive.selector);
@@ -1092,18 +1097,18 @@ contract WarrantRegistryTest is Test {
 
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.NotActive.selector);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
     }
 
     /// @dev Anyone may submit a valid proof on an account's behalf; both the payout and the
     ///      on-chain record must accrue to `account`, never to the submitter. The contract's own
     ///      doc comment promises this, so it needs a test.
     function test_claim_onBehalfOfAnotherAccount() public {
-        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 1000e6, 7 days);
 
         address relayer = makeAddr("relayer");
         vm.prank(relayer);
-        reg.claim(id, 0, alice, 0.6e18, _proofAlice());
+        reg.claim(id, 0, alice, 0.6e18, _proofAlice(id));
 
         assertEq(usd.balanceOf(alice), 600e6, "payout goes to the account, not the submitter");
         assertEq(usd.balanceOf(relayer), 0, "submitter receives nothing");
@@ -1117,11 +1122,12 @@ contract WarrantRegistryTest is Test {
     ///      zero against a small settleTotal.
     function test_claim_dustShareRoundingToZeroReverts() public {
         // alice's share is 1 wei of RATE_SCALE; with settleTotal 100 the payout floors to 0.
-        bytes32 root = _hashPair(_leaf(0, alice, 1), _leaf(1, bob, 0.3e18));
+        uint256 nextId = reg.programCount();
+        bytes32 root = _hashPair(_leaf(nextId, 0, alice, 1), _leaf(nextId, 1, bob, 0.3e18));
         uint256 id = _createActiveProgram(root, 100, 7 days);
 
         bytes32[] memory proof = new bytes32[](1);
-        proof[0] = _leaf(1, bob, 0.3e18);
+        proof[0] = _leaf(id, 1, bob, 0.3e18);
 
         vm.prank(alice);
         vm.expectRevert(WarrantRegistry.NothingToSettle.selector);
@@ -1131,9 +1137,27 @@ contract WarrantRegistryTest is Test {
         assertFalse(reg.claimStarted(id), "a reverted claim must not freeze configureProgram");
     }
 
+    /// @dev Domain separation: each leaf binds (chainid, registry, programId), so a proof minted
+    ///      for one program is dead on any other — even one whose stored root is a verbatim copy
+    ///      (operator copy-paste) of the first program's root.
+    function test_claim_proofBoundToProgramDomain() public {
+        uint256 idA = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
+        // program B reuses program A's root VERBATIM — bound to A's programId, not B's
+        uint256 idB = _createActiveProgram(_root(idA), 500e6, 7 days);
+
+        vm.prank(alice);
+        vm.expectRevert(WarrantRegistry.InvalidProof.selector);
+        reg.claim(idB, 0, alice, 0.6e18, _proofAlice(idA));
+
+        // the same proof still works where it belongs
+        vm.prank(alice);
+        reg.claim(idA, 0, alice, 0.6e18, _proofAlice(idA));
+        assertEq(usd.balanceOf(alice), 300e6);
+    }
+
     /// @dev sweepUnclaimed must reject the zero address — the reserve would otherwise be burned.
     function test_sweepUnclaimed_rejectsZeroAddress() public {
-        uint256 id = _createActiveProgram(_root(), 1000e6, 7 days);
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 1000e6, 7 days);
         vm.warp(block.timestamp + 8 days);
 
         vm.prank(ops);

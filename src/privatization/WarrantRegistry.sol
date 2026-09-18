@@ -60,8 +60,11 @@ interface IComplianceGuardedToken {
 ///         Upgradeable: deployed behind a TransparentUpgradeableProxy (like {TokenIssuer}); upgrade
 ///         authority lives on the auto-created ProxyAdmin, separate from DEFAULT_ADMIN_ROLE.
 ///
-///         Merkle leaf = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount)))),
-///         matching OZ's `StandardMerkleTree` with encoding `["uint256","address","uint256"]`.
+///         Merkle leaf = keccak256(bytes.concat(keccak256(abi.encode(
+///         block.chainid, registry, programId, index, account, amount)))), matching OZ's
+///         `StandardMerkleTree` with encoding
+///         `["uint256","address","uint256","uint256","address","uint256"]` — the chainid /
+///         registry / programId prefix binds every proof to one distribution on one deployment.
 contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
     using BitMaps for BitMaps.BitMap;
@@ -336,7 +339,12 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         if (block.timestamp > p.deadline) revert ClaimClosed();
         if (_claimed[programId].get(index)) revert AlreadyClaimed();
 
-        bytes32 leaf = keccak256(bytes.concat(keccak256(abi.encode(index, account, amount))));
+        // Domain-separated: chainid + registry + programId bind the proof to this exact
+        // distribution, so a proof minted for one program/deployment/chain cannot be replayed
+        // against another that reuses the same holder set.
+        bytes32 leaf = keccak256(
+            bytes.concat(keccak256(abi.encode(block.chainid, address(this), programId, index, account, amount)))
+        );
         if (!MerkleProof.verify(proof, p.merkleRoot, leaf)) revert InvalidProof();
 
         // Checked after the proof so an unauthenticated caller cannot use this entry point
