@@ -19,9 +19,14 @@ import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 ///
 ///         One contract manages many delisting **programs**. In each program a retired mStocks
 ///         security (`oldToken`) is swapped for a basket of standardized reward tokens (USDC, new
-///         mStocks, a CVR-mStock, …), one {Leg} each. Each leg carries a **`total`** — the whole
-///         amount of that reward token to be distributed — and a holder surrendering `amount` of
-///         the old token receives a **pro-rata** slice:
+///         mStocks, a CVR-mStock, …), one {Leg} per token by convention. Duplicate-token legs are
+///         uncommon but legitimate — the same token can serve two economically distinct purposes
+///         in one basket (e.g. base consideration and a separately accounted premium), each kept
+///         as its own leg so the split stays visible in the program terms — and the accounting is
+///         written defensively for them (`reserved` is keyed by token, shared across duplicate
+///         legs). Each leg carries a **`total`** — the whole amount of that reward token to be
+///         distributed — and a holder surrendering `amount` of the old token receives a
+///         **pro-rata** slice:
 ///
 ///             out_i = amount * leg.total / oldSupplySnapshot
 ///
