@@ -421,6 +421,9 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         virtual
         override(AccessControlUpgradeable, IAccessControl)
     {
+        // address(0) can never transact, but granting it a role still inflates
+        // getRoleMemberCount — which the last-admin guards below count on.
+        if (account == address(0)) revert ZeroAddress();
         if (account == _msgSender()) revert SelfGrantNotAllowed();
         super.grantRole(role, account);
     }

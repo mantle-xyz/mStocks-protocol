@@ -904,6 +904,14 @@ contract PrivatizationRegistryTest is Test {
 
     /// @dev renounceRole already blocks removing the last admin; revokeRole is a second path to
     ///      the exact same self-removal (an admin can revoke its own role) and needs the same guard.
+    /// @dev grantRole rejects address(0): it can never transact, but would still inflate the
+    ///      member count the last-admin guards rely on.
+    function test_grantRole_rejectsZeroAddress() public {
+        vm.prank(admin);
+        vm.expectRevert(PrivatizationRegistry.ZeroAddress.selector);
+        registry.grantRole(0x00, address(0));
+    }
+
     function test_AdminCannotRevokeLastAdmin() public {
         vm.prank(admin);
         vm.expectRevert(PrivatizationRegistry.CannotRenounceLastAdmin.selector);

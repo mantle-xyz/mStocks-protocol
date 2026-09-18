@@ -257,6 +257,12 @@ contract CustodyClaimRouterTest is Test {
 
     /// @dev revokeRole is a second path to the same self-removal renounceRole is guarded against
     ///      (an admin can revoke its own role just as well as renounce it) — needs the same guard.
+    function test_grantRole_rejectsZeroAddress() public {
+        vm.prank(admin);
+        vm.expectRevert(CustodyClaimRouter.ZeroAddress.selector);
+        router.grantRole(0x00, address(0));
+    }
+
     function test_lastAdminCannotBeRevoked() public {
         vm.prank(admin);
         vm.expectRevert(CustodyClaimRouter.CannotRenounceLastAdmin.selector);
