@@ -91,13 +91,14 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///         {configureProgram} is gated on the program still being Created, not on
     ///         this, so it freezes nothing.
     mapping(uint256 => bool) public claimStarted;
-    /// @notice oldToken => true once any program has ever targeted it (via {createProgram} or a
-    ///         {configureProgram} repoint). Never cleared, even if the program using it later
-    ///         closes. A retired security is delisted exactly once; two concurrent programs
-    ///         burning the same oldToken against two independently-frozen supply snapshots would
-    ///         let it be redeemed twice over, inconsistently, as its live supply shifts between
-    ///         them — almost certainly an operator mistake (a duplicate `createProgram`) rather
-    ///         than an intentional second delisting.
+    /// @notice oldToken => true while a program currently targets it (set by {createProgram} or a
+    ///         {configureProgram} repoint, cleared for the replaced token when a repoint moves a
+    ///         program off it). Never cleared once the program leaves Created — a retired security
+    ///         is delisted exactly once; two concurrent programs burning the same oldToken against
+    ///         two independently-frozen supply snapshots would let it be redeemed twice over,
+    ///         inconsistently, as its live supply shifts between them. A repointed-away token is
+    ///         different: no claim can have happened against it (repoint requires Created and
+    ///         unfunded), so it was never actually delisted and stays available for a real program.
     mapping(address => bool) public oldTokenRegistered;
     uint256 public programCount;
     /// @notice Admin-maintained allowlist of legitimate {sweepUnclaimed} destinations. A leaked or
@@ -243,6 +244,11 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
             if (_isFunded(programId)) revert TermsLockedAfterFund();
             if (program.oldToken != address(0) && program.oldToken != p.oldToken) {
                 if (oldTokenRegistered[program.oldToken]) revert OldTokenAlreadyRegistered(program.oldToken);
+                // The replaced token was never actually delisted — this branch is only reachable
+                // while Created and unfunded, so no claim can have burned it. Free it for a real
+                // program (or a repoint back); without this a mis-repoint locks the ORIGINAL,
+                // correct token out of the registry forever.
+                oldTokenRegistered[p.oldToken] = false;
                 oldTokenRegistered[program.oldToken] = true;
                 p.oldToken = program.oldToken;
             }

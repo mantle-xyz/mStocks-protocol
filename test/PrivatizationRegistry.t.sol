@@ -815,6 +815,66 @@ contract PrivatizationRegistryTest is Test {
         );
     }
 
+    /// @dev A repoint frees the replaced token: it was never actually delisted (repoint is only
+    ///      reachable while Created and unfunded, so nothing was ever burned against it), so it
+    ///      must stay available — for a fresh program, or for repointing this program back.
+    function test_configureProgram_repointFreesTheReplacedOldToken() public {
+        uint256 id = registry.createProgram(address(oldToken), _legs3ExCvr());
+        assertTrue(registry.oldTokenRegistered(address(oldToken)));
+
+        // mis-repoint: oldToken -> cvr
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(cvr), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+        assertFalse(registry.oldTokenRegistered(address(oldToken)), "replaced token freed");
+        assertTrue(registry.oldTokenRegistered(address(cvr)));
+
+        // the correction channel can correct its own error: repoint straight back
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(oldToken), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+        (address oldTok,,,,) = registry.programs(id);
+        assertEq(oldTok, address(oldToken), "repointed back to the original");
+        assertTrue(registry.oldTokenRegistered(address(oldToken)));
+        assertFalse(registry.oldTokenRegistered(address(cvr)), "abandoned repoint target freed too");
+
+        // ...and the freed intermediate token can start a real program of its own
+        uint256 id2 = registry.createProgram(address(cvr), _legs3ExCvr());
+        (address oldTok2,,,,) = registry.programs(id2);
+        assertEq(oldTok2, address(cvr));
+    }
+
+    /// @dev The freeing only applies to a repointed-away token. A token whose program actually ran
+    ///      to completion stays registered forever — Closed programs are not configurable, so no
+    ///      path can ever clear their oldToken.
+    function test_configureProgram_closedProgramOldTokenStaysRegistered() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activateAndFundLegs3(id, oldToken);
+        vm.warp(block.timestamp + 2 * WEEK);
+        registry.sweepUnclaimed(id, custody); // now Closed
+
+        assertTrue(registry.oldTokenRegistered(address(oldToken)));
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(oldToken))
+        );
+        registry.createProgram(address(oldToken), _legs3ExCvr());
+    }
+
+    /// @dev Legs basket without cvr, for tests that repoint a program's oldToken to cvr (a leg
+    ///      token equal to oldToken is rejected at create).
+    function _legs3ExCvr() internal view returns (PrivatizationRegistry.Leg[] memory legs) {
+        legs = new PrivatizationRegistry.Leg[](2);
+        legs[0] = PrivatizationRegistry.Leg(address(usdc), 300e6);
+        legs[1] = PrivatizationRegistry.Leg(address(newToken), 200 ether);
+    }
+
     // ── fund token validation ────────────────────────────────────────────────────
 
     /// @dev fund() refuses a token that isn't one of the program's legs — crediting it to
