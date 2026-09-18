@@ -66,6 +66,10 @@ contract CustodyClaimRouter is Initializable, AccessControlEnumerableUpgradeable
     error ZeroAmount();
     error NotRegisteredHotWallet();
     error UnknownProgram();
+    /// @notice The program exists but is not Active. The registry's own claim would revert
+    ///         anyway; rejecting at the router boundary skips the balance-snapshot work and
+    ///         surfaces a precise error instead of a nested registry revert.
+    error ProgramNotActive(uint8 state);
     error NothingForwarded();
     error SelfGrantNotAllowed();
     error CannotRenounceLastAdmin();
@@ -125,6 +129,7 @@ contract CustodyClaimRouter is Initializable, AccessControlEnumerableUpgradeable
 
         (address oldToken,,,, uint8 state) = registry.programs(programId);
         if (state == 0) revert UnknownProgram(); // State.None — program id never created
+        if (state != uint8(PrivatizationRegistry.State.Active)) revert ProgramNotActive(state);
 
         // Snapshot each DISTINCT reward-leg token's balance before the claim, so we can forward
         // exactly what arrives (self-correcting against dust legs / repeated tokens).

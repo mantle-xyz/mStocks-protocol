@@ -210,6 +210,24 @@ contract CustodyClaimRouterTest is Test {
         router.claimFor(programId, hotWallet, 100 ether);
     }
 
+    /// @dev claimFor rejects a program that exists but is not Active at the router boundary,
+    ///      before doing any balance-snapshot work, instead of relying on the nested registry
+    ///      revert.
+    function test_claimFor_rejectsNonActiveProgram() public {
+        // a second program that stays Created (never configured/funded/opened)
+        PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](1);
+        legs[0] = PrivatizationRegistry.Leg(address(usdc), 100e6);
+        uint256 createdId = registry.createProgram(address(newToken), legs);
+
+        vm.prank(ops);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CustodyClaimRouter.ProgramNotActive.selector, uint8(PrivatizationRegistry.State.Created)
+            )
+        );
+        router.claimFor(createdId, hotWallet, 1 ether);
+    }
+
     /// @dev Registering hot wallets is admin-only; a leaked OPS key cannot self-authorize a payee.
     function test_registerHotWallet_onlyAdmin() public {
         vm.prank(ops);
