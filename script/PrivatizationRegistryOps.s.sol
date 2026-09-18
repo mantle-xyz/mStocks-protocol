@@ -16,9 +16,11 @@ import {ScaledToken} from "../src/scaledToken/ScaledToken.sol";
 ///         2)  createProgram          — registry OPS (legs = token + total; program starts Created)
 ///         3a) wireBurnRole           — OLD token ADMIN (grant registry BURN_ROLE)
 ///         3b) freezeSupply           — OLD token OPS   (setMintAllowed=false; ≠ admin — self-grant blocked)
-///         4)  configureProgram       — registry OPS (supply frozen totalSupply as snapshot + window +
-///                                      state=Active; any 0 field keeps the stored value)
-///         5)  fund                   — registry OPS (holds reward tokens)
+///         4)  configureProgram       — registry OPS (supply frozen totalSupply as snapshot + window;
+///                                      leave state 0 — any 0 field keeps the stored value)
+///         5)  fund                   — registry OPS (holds reward tokens; Created-only)
+///         5b) configureProgram       — registry OPS (state=Active; refused until every leg's
+///                                      reserve covers its total)
 ///         6)  registerSweepRecipients — registry ADMIN, before Step 7 (allowlist the sweep destination)
 ///         7)  sweep                  — registry OPS, after the program deadline; `to` must already
 ///                                      be on the {registerSweepRecipients} allowlist

@@ -11,9 +11,11 @@ import {WarrantRegistry} from "../src/privatization/WarrantRegistry.sol";
 ///         leverage records, Part II). Deployed behind a TransparentUpgradeableProxy, like TokenIssuer.
 ///
 ///         Warrant flow: deploy → createProgram(token, settlementToken) → configureProgram(root +
-///         settleTotal + window + state=Active) → fund → users claim (off-chain proofs against the
-///         root). If settlement resolves later: createProgram with settlementToken=0, then
-///         configureProgram again once ready (any 0 field in the patch keeps the stored value).
+///         settleTotal + window, state left 0) → fund up to settleTotal (Created-only) →
+///         configureProgram(state=Active; refused until the reserve covers settleTotal) → users
+///         claim (off-chain proofs against the root). If settlement terms are not ready, keep the
+///         program Created — funding and configuration both close at activation (any 0 field in a
+///         patch keeps the stored value).
 ///
 ///         Leverage: deploy + createProgram(token, 0) + configureProgram(root + window +
 ///         state=Active, settlementToken/settleTotal left 0) to anchor the credit-line root

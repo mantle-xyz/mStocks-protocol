@@ -32,9 +32,10 @@ import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 ///         over-distribute.
 ///
 ///         Lifecycle (state machine): `Created` → (operator `setMintAllowed(false)` off-registry)
-///         → `Active` (configureProgram: OPS supplies the frozen-supply snapshot + [startTime,
-///         deadline] window + sets state=Active) → funded → claimed within the window → `Closed`
-///         (sweepUnclaimed after deadline).
+///         → configured (configureProgram: OPS supplies the frozen-supply snapshot + [startTime,
+///         deadline] window) → funded (fund: every leg up to its `total` — Created-only) →
+///         `Active` (configureProgram: state=Active, refused until every leg's reserve covers its
+///         total) → claimed within the window → `Closed` (sweepUnclaimed after deadline).
 ///
 ///         Reward funds are accounted **per program** (`reserved[programId][token]`): a claim only
 ///         ever draws from its own program's reserve, so programs never touch each other's money,
@@ -56,8 +57,10 @@ import {IMintAndBurnable} from "../tokenIssuer/IMintAndBurnable.sol";
 ///           1. `createProgram(oldToken, legs)` → programId (each leg = token + total)
 ///           2. `setMintAllowed(false)` on the old token (freeze supply — off-registry, OPS)
 ///           3. `configureProgram(programId, {startTime, deadline, oldSupplySnapshot: frozen
-///              totalSupply, state: Active})` (any 0 field keeps its stored value)
+///              totalSupply, state: 0})` (any 0 field keeps its stored value; stays Created)
 ///           4. `fund(programId, token, amount)` each reward token up to its `total`
+///           5. `configureProgram(programId, {state: Active})` — only possible once every leg's
+///              reserve covers its total
 contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
     using SafeERC20 for IERC20;
 
@@ -310,7 +313,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
 
     /// @notice Fund + reserve `amount` of `token` for `programId`. OPS-only, accounted so a claim
     ///         can never dip into another program's (or unrelated) balance. Caller must `approve`
-    ///         this registry for `amount` first. Allowed while the program exists and is not closed.
+    ///         this registry for `amount` first. Only allowed while the program is still Created —
+    ///         Active asserts every leg's reserve covers its total, so reserves are frozen there.
     function fund(uint256 programId, address token, uint256 amount) external onlyRole(OPS_ROLE) nonReentrant {
         uint8 s = programs[programId].state;
         if (s == uint8(State.None)) revert UnknownProgram();

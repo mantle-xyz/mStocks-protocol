@@ -41,9 +41,10 @@ interface IComplianceGuardedToken {
 ///         `settleTotal` is the total settlement asset backing the whole program, so a claim pays
 ///         `amount * settleTotal / RATE_SCALE`.
 ///
-///         If settlement is not ready yet (`settlementToken` unset or under-funded), {claim}
-///         reverts so the holder simply retries once the operator has funded and configured it via
-///         {configureProgram} — the proof stays valid and the Merkle index is not consumed.
+///         A failed {claim} (compliance-blocked account, or a not-yet-convertible record-only
+///         program) reverts without consuming the Merkle index, so the proof stays valid for a
+///         retry. Settlement terms cannot become ready *after* activation, however: funding and
+///         configuration are Created-only, so a program is fully funded by the time it is Active.
 ///
 ///         Leverage records reuse this contract only as an on-chain record anchor: OPS
 ///         `createProgram`s + `configureProgram`s the credit-line snapshot root and nobody claims
@@ -51,8 +52,10 @@ interface IComplianceGuardedToken {
 ///         `settlementToken` zero and is never funded or claimed.
 ///
 ///         Lifecycle (state machine): `Created` (createProgram: token + optional settlementToken)
-///         → `Active` (configureProgram: root + settleTotal + window + state=Active) → funded →
-///         claimed within [startTime, deadline] → `Closed` (sweepUnclaimed after deadline).
+///         → configured (configureProgram: root + settleTotal + window) → funded (fund: up to
+///         `settleTotal` — Created-only) → `Active` (configureProgram: state=Active, refused until
+///         the reserve covers `settleTotal`) → claimed within [startTime, deadline] → `Closed`
+///         (sweepUnclaimed after deadline).
 ///
 ///         The whole program lifecycle (create / configure / fund / sweep) is OPS-driven — admin
 ///         only manages roles (grants/revokes OPS_ROLE), matching {PrivatizationRegistry}.
@@ -282,8 +285,9 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     }
 
     /// @notice Fund + reserve settlement asset for a program. OPS-only; caller must `approve` the
-    ///         registry for `amount` of the program's `settlementToken` first. Allowed while the
-    ///         program exists and is not closed.
+    ///         registry for `amount` of the program's `settlementToken` first. Only allowed while
+    ///         the program is still Created — Active asserts the reserve covers `settleTotal`, so
+    ///         the reserve is frozen there.
     function fund(uint256 programId, uint256 amount) external onlyRole(OPS_ROLE) nonReentrant {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
