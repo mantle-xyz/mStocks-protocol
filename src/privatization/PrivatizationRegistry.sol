@@ -157,6 +157,10 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     error CannotRenounceLastAdmin();
     /// @notice {sweepUnclaimed}'s `to` is not on the admin-maintained {isSweepRecipient} allowlist.
     error NotRegisteredSweepRecipient();
+    /// @notice A sweep recipient may not be this registry itself — sweeping to address(this)
+    ///         zeroes the reserve accounting and closes the program while the tokens never move,
+    ///         stranding them with no recovery path (a Closed program cannot be reopened).
+    error InvalidSweepRecipient(address to);
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -335,6 +339,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///         {CustodyClaimRouter.registerHotWallet}).
     function registerSweepRecipient(address to) external onlyRole(DEFAULT_ADMIN_ROLE) {
         if (to == address(0)) revert ZeroAddress();
+        if (to == address(this)) revert InvalidSweepRecipient(to);
         isSweepRecipient[to] = true;
         emit SweepRecipientRegistered(to);
     }
@@ -343,6 +348,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     function registerSweepRecipients(address[] calldata recipients) external onlyRole(DEFAULT_ADMIN_ROLE) {
         for (uint256 i = 0; i < recipients.length; ++i) {
             if (recipients[i] == address(0)) revert ZeroAddress();
+            if (recipients[i] == address(this)) revert InvalidSweepRecipient(recipients[i]);
             isSweepRecipient[recipients[i]] = true;
             emit SweepRecipientRegistered(recipients[i]);
         }

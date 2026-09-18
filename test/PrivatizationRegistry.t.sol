@@ -1032,6 +1032,21 @@ contract PrivatizationRegistryTest is Test {
         registry.registerSweepRecipient(address(0));
     }
 
+    /// @dev The registry itself can never be a sweep destination — sweeping to address(this)
+    ///      would zero the reserve accounting and close the program while the tokens never move.
+    function test_registerSweepRecipient_rejectsSelf() public {
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(PrivatizationRegistry.InvalidSweepRecipient.selector, address(registry)));
+        registry.registerSweepRecipient(address(registry));
+
+        address[] memory recipients = new address[](2);
+        recipients[0] = makeAddr("fine");
+        recipients[1] = address(registry);
+        vm.prank(admin);
+        vm.expectRevert(abi.encodeWithSelector(PrivatizationRegistry.InvalidSweepRecipient.selector, address(registry)));
+        registry.registerSweepRecipients(recipients);
+    }
+
     /// @dev Managing the allowlist is admin-only — OPS cannot self-authorize a sweep destination.
     function test_registerSweepRecipient_onlyAdmin() public {
         vm.expectRevert(); // AccessControlUnauthorizedAccount — this test contract holds OPS, not admin
