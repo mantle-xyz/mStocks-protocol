@@ -137,6 +137,7 @@ contract WarrantRegistry is
     error ClaimStillOpen();
     error AlreadyClaimed();
     error InvalidProof();
+    error MerkleRootNotSet();
     error NotConvertibleYet();
     error NothingToSettle();
     error InsufficientReserved();
@@ -270,6 +271,8 @@ contract WarrantRegistry is
 
         if (program.token != address(0)) p.token = program.token;
         if (program.merkleRoot != bytes32(0)) p.merkleRoot = program.merkleRoot;
+        // Validate the effective root, including a root supplied in this activation patch.
+        if (program.state == uint8(State.Active) && p.merkleRoot == bytes32(0)) revert MerkleRootNotSet();
         if (program.settlementToken != address(0) || program.settleTotal != 0) {
             if (settleReserve[programId] != 0) revert SettlementTermsLocked();
             if (program.settlementToken != address(0)) p.settlementToken = program.settlementToken;
