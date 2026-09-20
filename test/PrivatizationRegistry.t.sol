@@ -411,6 +411,73 @@ contract PrivatizationRegistryTest is Test {
         assertEq(state, uint8(PrivatizationRegistry.State.Active));
     }
 
+    function _configureDuplicateTokenLegs() internal returns (uint256 id) {
+        _seed(oldToken, alice, 100 ether);
+        PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](3);
+        // Interleave duplicates to ensure the check does not depend on adjacent ordering.
+        legs[0] = PrivatizationRegistry.Leg(address(usdc), 100e6);
+        legs[1] = PrivatizationRegistry.Leg(address(newToken), 200 ether);
+        legs[2] = PrivatizationRegistry.Leg(address(usdc), 200e6);
+        id = registry.createProgram(address(oldToken), legs);
+        _activate(id, oldToken);
+        _fund(id, newToken, 200 ether);
+    }
+
+    function test_configureProgram_duplicateTokenLegsRequireCombinedReserve() public {
+        uint256 id = _configureDuplicateTokenLegs();
+        _fundUsd(id, 200e6); // enough for each individual leg, not their combined obligation
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.LegNotFullyFunded.selector, address(usdc), 200e6, 300e6)
+        );
+        _open(id);
+        (,,,, uint8 state) = registry.programs(id);
+        assertEq(state, uint8(PrivatizationRegistry.State.Created));
+        assertEq(registry.reserved(id, address(usdc)), 200e6);
+
+        _fundUsd(id, 100e6 - 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.LegNotFullyFunded.selector, address(usdc), 300e6 - 1, 300e6)
+        );
+        _open(id);
+        _fundUsd(id, 1);
+        _open(id);
+        (,,,, state) = registry.programs(id);
+        assertEq(state, uint8(PrivatizationRegistry.State.Active));
+    }
+
+    function test_claim_fullyFundedDuplicateTokenLegsSettle() public {
+        uint256 id = _configureDuplicateTokenLegs();
+        _fundUsd(id, 300e6);
+        _open(id);
+        vm.startPrank(alice);
+        oldToken.approve(address(registry), 100 ether);
+        registry.claim(id, 100 ether);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(alice), 300e6);
+        assertEq(newToken.balanceOf(alice), 200 ether);
+        assertEq(registry.reserved(id, address(usdc)), 0);
+        assertEq(registry.reserved(id, address(newToken)), 0);
+    }
+
+    function testFuzz_configureProgram_duplicateTokenTotals(uint96 first, uint96 second) public {
+        uint256 a = bound(uint256(first), 1, type(uint96).max);
+        uint256 b = bound(uint256(second), 1, type(uint96).max);
+        _seed(oldToken, alice, 100 ether);
+        PrivatizationRegistry.Leg[] memory legs = new PrivatizationRegistry.Leg[](2);
+        legs[0] = PrivatizationRegistry.Leg(address(usdc), a);
+        legs[1] = PrivatizationRegistry.Leg(address(usdc), b);
+        uint256 id = registry.createProgram(address(oldToken), legs);
+        _activate(id, oldToken);
+        uint256 fundedAmount = a > b ? a : b;
+        _fundUsd(id, fundedAmount);
+        vm.expectRevert(
+            abi.encodeWithSelector(PrivatizationRegistry.LegNotFullyFunded.selector, address(usdc), fundedAmount, a + b)
+        );
+        _open(id);
+        _fundUsd(id, a + b - fundedAmount);
+        _open(id);
+    }
+
     function test_claim_blockedHolderRevertsWhole() public {
         _seed(oldToken, bob, 100 ether);
         uint256 id = registry.createProgram(address(oldToken), _legs3());
