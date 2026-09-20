@@ -155,6 +155,9 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     /// @notice {fund} after the program opened. Funding is part of getting a program ready,
     ///         not a way to patch one that is already claimable.
     error FundLockedOnceActive();
+    /// @notice A supplied deadline must be in the future and strictly after startTime;
+    ///         a supplied startTime must precede any stored deadline.
+    error InvalidWindow();
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -257,10 +260,18 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
             if (program.settlementToken != address(0)) p.settlementToken = program.settlementToken;
             if (program.settleTotal != 0) p.settleTotal = program.settleTotal;
         }
-        if (program.startTime != 0) p.startTime = program.startTime;
-        if (program.deadline != 0) p.deadline = program.deadline;
+        if (program.startTime != 0) {
+            if (p.deadline != 0 && program.startTime >= p.deadline) revert InvalidWindow();
+            p.startTime = program.startTime;
+        }
+        if (program.deadline != 0) {
+            if (program.deadline <= block.timestamp) revert InvalidWindow();
+            if (p.startTime != 0 && program.deadline <= p.startTime) revert InvalidWindow();
+            p.deadline = program.deadline;
+        }
         if (program.state != 0) {
             if (program.state <= p.state || program.state >= uint8(State.Closed)) revert InvalidStateTransition();
+            if (program.state == uint8(State.Active) && p.deadline <= block.timestamp) revert InvalidWindow();
             // Active means claimable, so it has to mean funded. A holder whose claim
             // reverts InsufficientReserved cannot tell an under-funded program from a
             // broken one, and the operator only finds out from the complaint.

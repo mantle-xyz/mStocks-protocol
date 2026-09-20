@@ -282,6 +282,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
             // from a broken one, and a basket that is short on one leg pays out on none of
             // them, since claim() delivers all legs or reverts.
             if (program.state == uint8(State.Active)) {
+                if (p.deadline <= block.timestamp) revert InvalidWindow();
                 Leg[] storage legs = _legs[programId];
                 for (uint256 i = 0; i < legs.length; ++i) {
                     uint256 r = reserved[programId][legs[i].token];
