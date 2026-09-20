@@ -902,6 +902,47 @@ contract WarrantRegistryTest is Test {
         assertEq(reg.settleReserve(id), 0);
     }
 
+    function test_sweepUnclaimed_emptyReserveClosesWithoutEvent() public {
+        uint256 id = _createActiveProgram(_leaf(reg.programCount(), 0, alice, 1e18), 500e6, 7 days);
+        reg.claim(id, 0, alice, 1e18, new bytes32[](0));
+        assertEq(reg.settleReserve(id), 0);
+        vm.warp(block.timestamp + 8 days);
+
+        vm.recordLogs();
+        vm.prank(ops);
+        reg.sweepUnclaimed(id, custody);
+        assertEq(vm.getRecordedLogs().length, 0, "no transfer or Swept event");
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Closed));
+        assertEq(usd.balanceOf(custody), 0);
+    }
+
+    function test_sweepUnclaimed_recordOnlyClosesWithoutEvent() public {
+        vm.startPrank(ops);
+        uint256 id = reg.createProgram(oldStock, address(0));
+        WarrantRegistry.Program memory patch = _patch(WarrantRegistry.State.Active);
+        patch.merkleRoot = _root(id);
+        patch.startTime = uint64(block.timestamp);
+        patch.deadline = uint64(block.timestamp + 7 days);
+        reg.configureProgram(id, patch);
+        vm.warp(block.timestamp + 8 days);
+        vm.recordLogs();
+        reg.sweepUnclaimed(id, custody);
+        vm.stopPrank();
+        assertEq(vm.getRecordedLogs().length, 0, "record-only program transfers nothing");
+        assertEq(uint8(_state(id)), uint8(WarrantRegistry.State.Closed));
+    }
+
+    function test_sweepUnclaimed_nonZeroReserveEmitsAmount() public {
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
+        vm.warp(block.timestamp + 8 days);
+        vm.prank(ops);
+        vm.expectEmit(true, true, false, true, address(reg));
+        emit WarrantRegistry.Swept(id, custody, 500e6);
+        reg.sweepUnclaimed(id, custody);
+        assertEq(reg.settleReserve(id), 0);
+        assertEq(usd.balanceOf(custody), 500e6);
+    }
+
     // ── leverage: record anchor only — createProgram + configureProgram, no claim/fund ─────
 
     function test_leverage_recordAnchorOnly() public {
