@@ -590,8 +590,6 @@ contract PrivatizationRegistryTest is Test {
         registry.claim(id, 50 ether);
         vm.stopPrank();
 
-        assertTrue(registry.claimStarted(id));
-
         vm.expectRevert(PrivatizationRegistry.ConfigureLockedOnceActive.selector);
         registry.configureProgram(
             id,
@@ -984,6 +982,11 @@ contract PrivatizationRegistryTest is Test {
 
         vm.expectRevert(PrivatizationRegistry.BadLeg.selector);
         registry.createProgram(address(oldToken), legs);
+    }
+
+    function test_claimStartedGetterRemoved() public view {
+        (bool ok,) = address(registry).staticcall(abi.encodeWithSignature("claimStarted(uint256)", 0));
+        assertFalse(ok, "obsolete getter removed");
     }
 
     // ── previewClaim considers program state ────────────────────────────────────

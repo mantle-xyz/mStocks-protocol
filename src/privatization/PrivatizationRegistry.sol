@@ -95,10 +95,6 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     mapping(uint256 => Leg[]) internal _legs;
     /// @notice programId => reward token => amount still reserved to back claims.
     mapping(uint256 => mapping(address => uint256)) public reserved;
-    /// @notice programId => whether at least one {claim} has succeeded. Informational:
-    ///         {configureProgram} is gated on the program still being Created, not on
-    ///         this, so it freezes nothing.
-    mapping(uint256 => bool) public claimStarted;
     /// @notice oldToken => true while a program currently targets it (set by {createProgram} or a
     ///         {configureProgram} repoint, cleared for the replaced token when a repoint moves a
     ///         program off it). Never cleared once the program leaves Created — a retired security
@@ -428,9 +424,6 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         }
         if (!delivered) revert NothingToDeliver(); // guard a dust claim that burns for nothing
 
-        // Informational only now: configureProgram locks at Active, and claiming requires
-        // Active, so this can no longer be the thing that freezes anything.
-        claimStarted[programId] = true;
         emit Claimed(programId, msg.sender, amount);
     }
 
@@ -501,8 +494,6 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         super.revokeRole(role, account);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 7 vars (programs, _legs, reserved,
-    ///      claimStarted, oldTokenRegistered, programCount, isSweepRecipient) + 43 = 50 slots
-    ///      reserved.
-    uint256[43] private __gap;
+    /// @dev Six state slots + 44 reserved slots = 50 slots total.
+    uint256[44] private __gap;
 }

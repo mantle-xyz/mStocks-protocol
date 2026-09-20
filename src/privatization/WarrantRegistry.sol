@@ -100,12 +100,6 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
 
     mapping(uint256 => BitMaps.BitMap) private _claimed; // programId => merkle index bitmap
     uint256 public programCount;
-    /// @notice programId => whether at least one {claim} has succeeded. Informational:
-    ///         {configureProgram} is gated on the program still being Created, not on
-    ///         this, so it freezes nothing. Appended after `programCount` rather than grouped with the
-    ///         other mappings: this contract is already deployed behind a proxy, and inserting a
-    ///         slot would shift every variable after it.
-    mapping(uint256 => bool) public claimStarted;
 
     event ProgramCreated(uint256 indexed programId, address indexed token, address settlementToken);
     event ProgramConfigured(
@@ -410,11 +404,6 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         _claimed[programId].set(index);
         warrant[programId][account] += amount; // on-chain queryable record
         settleReserve[programId] = reserve - out;
-        // Informational only now: configureProgram locks at Active, and claiming requires
-        // Active, so this can no longer be the thing that freezes anything. Kept because it
-        // answers "was this program ever claimed against" in one call, and because removing
-        // it would move __gap and complicate the upgrade for no gain.
-        claimStarted[programId] = true;
 
         // interaction
         IERC20(p.settlementToken).safeTransfer(account, out);
@@ -516,6 +505,6 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         super.revokeRole(role, account);
     }
 
-    /// @dev Reserved slots for future state additions.
-    uint256[43] private __gap;
+    /// @dev Six state slots + 44 reserved slots = 50 slots total.
+    uint256[44] private __gap;
 }

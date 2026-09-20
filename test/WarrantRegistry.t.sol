@@ -540,7 +540,6 @@ contract WarrantRegistryTest is Test {
         assertFalse(reg.isClaimed(id, 0), "a rejected claim must not consume the index");
         assertEq(reg.warrant(id, alice), 0, "nothing recorded");
         assertEq(reg.settleReserve(id), 500e6, "reserve untouched");
-        assertFalse(reg.claimStarted(id), "a rejected claim must not lock configureProgram");
 
         address[] memory who = new address[](1);
         who[0] = alice;
@@ -1212,8 +1211,8 @@ contract WarrantRegistryTest is Test {
     /// @dev The hole this closes: `merkleRoot` had no lock. OPS could swap the whole holder set
     ///      after the program was funded AND after holders had begun claiming — redirecting
     ///      committed funds to an address absent from the original root, while `state` stayed
-    ///      `Active` and nothing on chain marked that it had happened. {PrivatizationRegistry}
-    ///      guarded the same thing with `claimStarted`; this contract did not.
+    ///      `Active` and nothing on chain marked that it had happened. Both registries now
+    ///      lock configuration as soon as the program is Active.
     function test_configureProgram_rootCannotBeSwappedAfterAClaim() public {
         // Tree B puts mallory at alice's index 0 with alice's share.
         uint256 nextId = reg.programCount();
@@ -1223,7 +1222,7 @@ contract WarrantRegistryTest is Test {
 
         vm.prank(bob);
         reg.claim(id, 1, bob, 0.3e18, _proofBob(id));
-        assertTrue(reg.claimStarted(id), "a successful claim must set claimStarted");
+        assertTrue(reg.isClaimed(id, 1), "the claimed leaf remains recorded");
 
         vm.prank(ops);
         vm.expectRevert(WarrantRegistry.ConfigureLockedOnceActive.selector);
@@ -1317,6 +1316,11 @@ contract WarrantRegistryTest is Test {
 
     // ── gaps closed from the self-test doc ─────────────────────────────────────
 
+    function test_claimStartedGetterRemoved() public view {
+        (bool ok,) = address(reg).staticcall(abi.encodeWithSignature("claimStarted(uint256)", 0));
+        assertFalse(ok, "obsolete getter removed");
+    }
+
     /// @dev A program that exists but was never configured has no root and no window, so it must
     ///      not be claimable. Guards against `Created` being mistaken for claimable.
     function test_claim_beforeConfigureReverts() public {
@@ -1362,7 +1366,6 @@ contract WarrantRegistryTest is Test {
         reg.claim(id, 0, alice, 1, proof);
 
         assertFalse(reg.isClaimed(id, 0), "a reverted claim must not consume the index");
-        assertFalse(reg.claimStarted(id), "a reverted claim must not freeze configureProgram");
     }
 
     /// @dev Domain separation: each leaf binds (chainid, registry, programId), so a proof minted
