@@ -786,13 +786,16 @@ contract WarrantRegistryTest is Test {
 
     /// The same tree, reconciled before opening: fund what the leaves actually sum to rather
     /// than what settleTotal says, and both claims settle. This is the check that has to
-    /// happen while the program is Created — Σ previewClaim over the leaves against
-    /// settleReserve.
+    /// happen while Created: sum amount * settleTotal / RATE_SCALE over the leaves,
+    /// since previewClaim only reports payouts once Active.
     function test_fund_reconcilingBeforeOpeningPaysEveryone() public {
         uint256 id = _createConfiguredProgram(_overSumRoot(reg.programCount()), 500e6, 7 days);
 
         // 0.8e18 + 0.5e18 = 1.3e18 of RATE_SCALE, so the program owes 1.3 * settleTotal.
-        assertEq(reg.previewClaim(id, 0.8e18) + reg.previewClaim(id, 0.5e18), 650e6);
+        (,,, uint256 total,,,) = reg.programs(id);
+        uint256 requiredReserve = (0.8e18 * total / reg.RATE_SCALE()) + (0.5e18 * total / reg.RATE_SCALE());
+        assertEq(requiredReserve, 650e6);
+        assertEq(reg.previewClaim(id, 0.8e18), 0, "Created does not preview a payout");
         _fund(id, 650e6);
         vm.prank(ops);
         reg.configureProgram(id, _patch(WarrantRegistry.State.Active));
@@ -804,6 +807,32 @@ contract WarrantRegistryTest is Test {
         assertEq(usd.balanceOf(alice), 400e6);
         assertEq(usd.balanceOf(bob), 250e6);
         assertEq(reg.settleReserve(id), 0, "exactly consumed");
+    }
+
+    function test_previewClaim_zeroForUnknownProgram() public view {
+        assertEq(reg.previewClaim(999, 0.6e18), 0);
+    }
+
+    function test_previewClaim_zeroWhileCreated() public {
+        uint256 id = _createConfiguredProgram(_root(reg.programCount()), 500e6, 7 days);
+        assertEq(reg.previewClaim(id, 0.6e18), 0);
+        _fund(id, 500e6);
+        assertEq(reg.previewClaim(id, 0.6e18), 0, "funding alone does not activate");
+    }
+
+    function test_previewClaim_activeChecksStateNotWindow() public {
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
+        assertEq(reg.previewClaim(id, 0.6e18), 300e6);
+        vm.warp(block.timestamp + 8 days);
+        assertEq(reg.previewClaim(id, 0.6e18), 300e6, "expired but still Active");
+    }
+
+    function test_previewClaim_zeroOnceClosed() public {
+        uint256 id = _createActiveProgram(_root(reg.programCount()), 500e6, 7 days);
+        vm.warp(block.timestamp + 8 days);
+        vm.prank(ops);
+        reg.sweepUnclaimed(id, custody);
+        assertEq(reg.previewClaim(id, 0.6e18), 0);
     }
 
     function test_claim_doubleClaimReverts() public {

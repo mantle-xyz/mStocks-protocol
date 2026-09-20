@@ -310,7 +310,8 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         // before opening: afterwards its later claimants cannot be paid and the reserve only
         // returns through sweepUnclaimed. Nothing on chain can catch it — the sum is not
         // visible here — so the check is the operator reconciling settleReserve against the
-        // sum of previewClaim over the leaves, while the program is still Created.
+        // sum of amount * settleTotal / RATE_SCALE over the leaves while still Created.
+        // previewClaim intentionally returns zero until the program is Active.
         if (p.state != uint8(State.Created)) revert FundLockedOnceActive();
         if (p.settlementToken == address(0)) revert NotConvertibleYet();
         // createProgram already sets settlementToken, so without this a caller could fund
@@ -330,8 +331,11 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         return _claimed[programId].get(index);
     }
 
-    /// @notice Settlement asset paid for a leaf carrying `amount` (0 if not yet convertible).
+    /// @notice Settlement asset for a leaf carrying `amount`; zero unless Active with a
+    ///         non-zero settleTotal. Like PrivatizationRegistry, this checks state only,
+    ///         not the claim window, proof, compliance, or whether the leaf was claimed.
     function previewClaim(uint256 programId, uint256 amount) external view returns (uint256) {
+        if (programs[programId].state != uint8(State.Active)) return 0;
         uint256 total = programs[programId].settleTotal;
         return total == 0 ? 0 : Math.mulDiv(amount, total, RATE_SCALE);
     }
