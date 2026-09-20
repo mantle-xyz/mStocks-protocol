@@ -2,6 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {
     AccessControlEnumerableUpgradeable
@@ -68,7 +69,12 @@ interface IComplianceGuardedToken {
 ///         `StandardMerkleTree` with encoding
 ///         `["uint256","address","uint256","uint256","address","uint256"]` — the chainid /
 ///         registry / programId prefix binds every proof to one distribution on one deployment.
-contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, ReentrancyGuardTransient {
+contract WarrantRegistry is
+    Initializable,
+    AccessControlEnumerableUpgradeable,
+    ReentrancyGuardTransient,
+    PausableUpgradeable
+{
     using SafeERC20 for IERC20;
     using BitMaps for BitMaps.BitMap;
 
@@ -167,6 +173,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     function initialize(address admin, address[] calldata ops) external initializer {
         if (admin == address(0)) revert ZeroAddress();
         __AccessControlEnumerable_init();
+        __Pausable_init();
         // ReentrancyGuardTransient (EIP-1153 TSTORE) uses transient storage — no initializer needed.
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _setRoleAdmin(OPS_ROLE, DEFAULT_ADMIN_ROLE);
@@ -174,6 +181,16 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
             if (ops[i] == address(0)) revert ZeroAddress();
             _grantRole(OPS_ROLE, ops[i]);
         }
+    }
+
+    /// @notice Pause claims across all programs. Configuration, funding and sweep remain available.
+    function pause() external onlyRole(OPS_ROLE) {
+        _pause();
+    }
+
+    /// @notice Resume claims without changing program terms or deadlines.
+    function unpause() external onlyRole(OPS_ROLE) {
+        _unpause();
     }
 
     // ── program lifecycle ─────────────────────────────────────────────────────
@@ -372,6 +389,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     ///         ready.
     function claim(uint256 programId, uint256 index, address account, uint256 amount, bytes32[] calldata proof)
         external
+        whenNotPaused
         nonReentrant
     {
         Program storage p = programs[programId];
