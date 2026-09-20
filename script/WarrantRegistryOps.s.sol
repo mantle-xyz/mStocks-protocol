@@ -21,8 +21,8 @@ import {WarrantRegistry} from "../src/privatization/WarrantRegistry.sol";
 ///         state=Active, settlementToken/settleTotal left 0) to anchor the credit-line root
 ///         on-chain; no fund / claim (settled elsewhere).
 ///
-///         Every entrypoint here (create / configure / fund / sweep) is OPS-driven — admin only
-///         manages roles, matching the registry's own role split.
+///         Create / configure / fund / sweep are OPS-driven. Admin manages roles and the
+///         sweep recipient allowlist, matching the registry's role split.
 contract WarrantRegistryOps is Script {
     /// @notice Deploy behind a TransparentUpgradeableProxy. `proxyAdmin` owns upgrades; `admin`
     ///         gets DEFAULT_ADMIN_ROLE.
@@ -83,8 +83,24 @@ contract WarrantRegistryOps is Script {
         console.log("  settleReserve now:", WarrantRegistry(registry).settleReserve(programId));
     }
 
-    /// @notice After the deadline, sweep unclaimed settlement asset to custody. Broadcaster must
-    ///         hold OPS_ROLE.
+    /// @notice Approve sweep destinations before sweeping. Broadcaster must hold DEFAULT_ADMIN_ROLE.
+    function registerSweepRecipients(address registry, address[] calldata recipients) external {
+        vm.startBroadcast();
+        WarrantRegistry(registry).registerSweepRecipients(recipients);
+        vm.stopBroadcast();
+        console.log("Registered", recipients.length, "sweep recipient(s) on", registry);
+    }
+
+    /// @notice Revoke a sweep destination. Broadcaster must hold DEFAULT_ADMIN_ROLE.
+    function deregisterSweepRecipient(address registry, address to) external {
+        vm.startBroadcast();
+        WarrantRegistry(registry).deregisterSweepRecipient(to);
+        vm.stopBroadcast();
+        console.log("Deregistered sweep recipient:", to);
+    }
+
+    /// @notice After the deadline, sweep to an admin-approved destination. Broadcaster must
+    ///         hold OPS_ROLE; admin must first call registerSweepRecipients.
     function sweep(address registry, uint256 programId, address to) external {
         vm.startBroadcast();
         WarrantRegistry(registry).sweepUnclaimed(programId, to);

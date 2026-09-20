@@ -120,8 +120,12 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
     event Funded(uint256 indexed programId, address indexed from, uint256 amount);
     event Claimed(uint256 indexed programId, uint256 index, address indexed account, uint256 amount, uint256 assetOut);
     event Swept(uint256 indexed programId, address indexed to, uint256 amount);
+    event SweepRecipientRegistered(address indexed to);
+    event SweepRecipientDeregistered(address indexed to);
 
     error ZeroAddress();
+    error NotRegisteredSweepRecipient();
+    error InvalidSweepRecipient(address to);
     error ZeroAmount();
     error UnknownProgram();
     error InvalidStateTransition();
@@ -325,6 +329,31 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         emit Funded(programId, msg.sender, amount);
     }
 
+    // ── sweep recipient allowlist (admin) ────────────────────────────────────────
+
+    /// @notice Approve a sweep destination. Admin controls recipients; OPS only triggers sweeps.
+    function registerSweepRecipient(address to) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        if (to == address(0)) revert ZeroAddress();
+        if (to == address(this)) revert InvalidSweepRecipient(to);
+        isSweepRecipient[to] = true;
+        emit SweepRecipientRegistered(to);
+    }
+
+    /// @notice Batch variant of {registerSweepRecipient}.
+    function registerSweepRecipients(address[] calldata recipients) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        for (uint256 i = 0; i < recipients.length; ++i) {
+            if (recipients[i] == address(0)) revert ZeroAddress();
+            if (recipients[i] == address(this)) revert InvalidSweepRecipient(recipients[i]);
+            isSweepRecipient[recipients[i]] = true;
+            emit SweepRecipientRegistered(recipients[i]);
+        }
+    }
+
+    function deregisterSweepRecipient(address to) external onlyRole(DEFAULT_ADMIN_ROLE) {
+        isSweepRecipient[to] = false;
+        emit SweepRecipientDeregistered(to);
+    }
+
     // ── views ─────────────────────────────────────────────────────────────────
 
     function isClaimed(uint256 programId, uint256 index) external view returns (bool) {
@@ -423,7 +452,8 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
 
     /// @notice After the deadline, sweep the program's remaining (unclaimed) settlement reserve to
     ///         a custody address and close it. OPS-only. Deadline-gated so committed funds cannot
-    ///         be pulled out from under holders who can still claim.
+    ///         be pulled out from under holders who can still claim. The destination
+    ///         must be on the admin-maintained {isSweepRecipient} allowlist.
     function sweepUnclaimed(uint256 programId, address to) external onlyRole(OPS_ROLE) nonReentrant {
         Program storage p = programs[programId];
         if (p.state == uint8(State.None)) revert UnknownProgram();
@@ -431,6 +461,7 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         if (block.timestamp <= p.deadline) revert ClaimStillOpen();
         if (to == address(0)) revert ZeroAddress();
 
+        if (!isSweepRecipient[to]) revert NotRegisteredSweepRecipient();
         p.state = uint8(State.Closed);
         uint256 reserve = settleReserve[programId];
         if (reserve != 0) {
@@ -439,6 +470,9 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         }
         emit Swept(programId, to, reserve);
     }
+
+    /// @notice Admin-approved sweep destinations. Appended using one former gap slot.
+    mapping(address => bool) public isSweepRecipient;
 
     // ── role guards (repo convention) ───────────────────────────────────────────
 
@@ -482,7 +516,6 @@ contract WarrantRegistry is Initializable, AccessControlEnumerableUpgradeable, R
         super.revokeRole(role, account);
     }
 
-    /// @dev Storage gap for upgrade-safe additions. 5 vars (programs, warrant, settleReserve,
-    ///      _claimed, claimStarted) + programCount + 44 = 50 slots reserved.
-    uint256[44] private __gap;
+    /// @dev Reserved slots for future state additions.
+    uint256[43] private __gap;
 }
