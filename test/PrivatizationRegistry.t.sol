@@ -898,7 +898,7 @@ contract PrivatizationRegistryTest is Test {
     /// @dev Repointing to a brand-new oldToken registers it; repointing back to the program's own
     ///      current oldToken is a no-op, not a self-conflict.
     function test_configureProgram_repointToFreshOldTokenRegistersIt() public {
-        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        uint256 id = registry.createProgram(address(oldToken), _legs3ExCvr());
 
         registry.configureProgram(
             id,
@@ -912,7 +912,7 @@ contract PrivatizationRegistryTest is Test {
 
         // now a fresh program cannot also target cvr
         vm.expectRevert(abi.encodeWithSelector(PrivatizationRegistry.OldTokenAlreadyRegistered.selector, address(cvr)));
-        registry.createProgram(address(cvr), _legs3());
+        registry.createProgram(address(cvr), _legs3ExCvr());
 
         // re-supplying the program's own current oldToken is not treated as a repoint at all
         registry.configureProgram(
@@ -921,6 +921,106 @@ contract PrivatizationRegistryTest is Test {
                 oldToken: address(cvr), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
             })
         );
+    }
+
+    function test_configureProgram_repointRejectsEveryRewardLeg() public {
+        _seed(oldToken, alice, 100 ether);
+        PrivatizationRegistry.Leg[] memory legs = _legs3();
+        uint256 id = registry.createProgram(address(oldToken), legs);
+        _activate(id, oldToken);
+
+        for (uint256 i = 0; i < legs.length; ++i) {
+            vm.expectRevert(PrivatizationRegistry.BadLeg.selector);
+            registry.configureProgram(
+                id,
+                PrivatizationRegistry.Program({
+                    oldToken: legs[i].token, startTime: 0, deadline: 0, oldSupplySnapshot: 200 ether, state: 0
+                })
+            );
+            (address storedToken,,, uint256 snapshot, uint8 state) = registry.programs(id);
+            assertEq(storedToken, address(oldToken));
+            assertEq(snapshot, 100 ether, "failed repoint preserves the original snapshot");
+            assertEq(state, uint8(PrivatizationRegistry.State.Created));
+            assertTrue(registry.oldTokenRegistered(address(oldToken)));
+            assertFalse(registry.oldTokenRegistered(legs[i].token));
+        }
+    }
+
+    function test_configureProgram_repointClearsStaleSnapshotUntilReconfigured() public {
+        _assertRepointSettlement(false);
+    }
+
+    function test_configureProgram_repointWithNewSnapshotSettlesAgainstNewToken() public {
+        _assertRepointSettlement(true);
+    }
+
+    function _assertRepointSettlement(bool supplySnapshotInPatch) internal {
+        _seed(oldToken, alice, 100 ether);
+        _seed(cvr, alice, 50 ether);
+        _seed(cvr, bob, 150 ether);
+        _freeze(cvr);
+        uint256 id = registry.createProgram(address(oldToken), _legs3ExCvr());
+        _activate(id, oldToken); // original denominator: 100 ether
+
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(cvr),
+                startTime: 0,
+                deadline: 0,
+                oldSupplySnapshot: supplySnapshotInPatch ? 200 ether : 0,
+                state: 0
+            })
+        );
+        (address storedToken,,, uint256 snapshot,) = registry.programs(id);
+        assertEq(storedToken, address(cvr));
+        assertEq(snapshot, supplySnapshotInPatch ? 200 ether : 0);
+        assertFalse(registry.oldTokenRegistered(address(oldToken)));
+        assertTrue(registry.oldTokenRegistered(address(cvr)));
+
+        if (!supplySnapshotInPatch) {
+            vm.expectRevert(PrivatizationRegistry.SupplySnapshotNotSet.selector);
+            registry.fund(id, address(usdc), 300e6);
+            vm.expectRevert(
+                abi.encodeWithSelector(PrivatizationRegistry.LegNotFullyFunded.selector, address(usdc), 0, 300e6)
+            );
+            _open(id);
+            vm.expectRevert(PrivatizationRegistry.NotActive.selector);
+            registry.claim(id, 50 ether);
+            _configure(id, uint64(block.timestamp), uint64(block.timestamp + WEEK));
+        }
+
+        _fundUsd(id, 300e6);
+        _fund(id, newToken, 200 ether);
+        _open(id);
+        vm.startPrank(alice);
+        cvr.approve(address(registry), 50 ether);
+        registry.claim(id, 50 ether);
+        vm.stopPrank();
+
+        // Alice owns 25% of the replacement supply, not 50% of the previous token's supply.
+        assertEq(usdc.balanceOf(alice), 75e6);
+        assertEq(newToken.balanceOf(alice), 50 ether);
+        assertEq(cvr.balanceOf(alice), 0);
+        assertEq(oldToken.balanceOf(alice), 100 ether, "only the replacement token is burned");
+        (,,, snapshot,) = registry.programs(id);
+        assertEq(snapshot, 200 ether, "replacement snapshot stays fixed after burning");
+    }
+
+    function test_configureProgram_sameOldTokenKeepsSnapshot() public {
+        _seed(oldToken, alice, 100 ether);
+        uint256 id = registry.createProgram(address(oldToken), _legs3());
+        _activate(id, oldToken);
+        registry.configureProgram(
+            id,
+            PrivatizationRegistry.Program({
+                oldToken: address(oldToken), startTime: 0, deadline: 0, oldSupplySnapshot: 0, state: 0
+            })
+        );
+        (address storedToken,,, uint256 snapshot,) = registry.programs(id);
+        assertEq(storedToken, address(oldToken));
+        assertEq(snapshot, 100 ether, "unchanged token still uses zero-means-keep semantics");
+        assertTrue(registry.oldTokenRegistered(address(oldToken)));
     }
 
     /// @dev A repoint frees the replaced token: it was never actually delisted (repoint is only

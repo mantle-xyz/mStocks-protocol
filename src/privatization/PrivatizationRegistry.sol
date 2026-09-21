@@ -217,6 +217,9 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///         overwrites it. So an operator can set or later adjust any subset — open the window by
     ///         supplying `{startTime, deadline, oldSupplySnapshot, state: Active}`, or extend the
     ///         deadline alone by supplying only `deadline` (everything else 0).
+    ///         Exception: changing `oldToken` invalidates the previous token's snapshot. Supply a
+    ///         new non-zero `oldSupplySnapshot` in the same patch or it is cleared to zero and must
+    ///         be configured again before funding. The new token must not be any reward leg.
     ///
     ///         Three guards on top of the free-overwrite rule, all because `claim` reads `oldToken`
     ///         and `oldSupplySnapshot` **live** rather than from a pre-committed per-account amount:
@@ -228,7 +231,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
     ///           - `state` must move strictly forward (`Created` → `Active`) and can never reach
     ///             `Closed` here — that transition is {sweepUnclaimed}'s exclusively, atomically
     ///             paired with sweeping the remaining reserve.
-    ///           - Once any {claim} has succeeded, the ENTIRE patch is refused — every claimant of a
+    ///           - Once the program is Active, the ENTIRE patch is refused — every claimant of a
     ///             program must be settled under the exact same terms.
     ///
     ///         OPS-only and fully trusted otherwise: the contract does NOT read the snapshot on-chain
@@ -253,6 +256,7 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
             if (_isFunded(programId)) revert TermsLockedAfterFund();
             if (program.oldToken != address(0) && program.oldToken != p.oldToken) {
                 if (oldTokenRegistered[program.oldToken]) revert OldTokenAlreadyRegistered(program.oldToken);
+                if (_isLegToken(programId, program.oldToken)) revert BadLeg();
                 // The replaced token was never actually delisted — this branch is only reachable
                 // while Created and unfunded, so no claim can have burned it. Free it for a real
                 // program (or a repoint back); without this a mis-repoint locks the ORIGINAL,
@@ -260,6 +264,9 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
                 oldTokenRegistered[p.oldToken] = false;
                 oldTokenRegistered[program.oldToken] = true;
                 p.oldToken = program.oldToken;
+                // A snapshot belongs to one token. Never inherit the replaced token's denominator;
+                // fund() requires a non-zero replacement before any reward reserve can be locked.
+                p.oldSupplySnapshot = 0;
             }
             if (program.oldSupplySnapshot != 0) p.oldSupplySnapshot = program.oldSupplySnapshot;
         }
@@ -308,7 +315,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         return false;
     }
 
-    /// @dev True if `token` is one of `programId`'s legs. Used to reject {fund} deposits of a token
+    /// @dev True if `token` is one of `programId`'s legs. Also prevents repointing oldToken to a
+    ///      reward token. Used to reject {fund} deposits of a token
     ///      that isn't part of the basket — a wrong-token transfer would otherwise get credited to
     ///      `reserved` and then never be read by {claim} or {sweepUnclaimed}, both of which only
     ///      ever iterate over the program's legs, stranding it permanently.
@@ -333,8 +341,8 @@ contract PrivatizationRegistry is Initializable, AccessControlEnumerableUpgradea
         if (s != uint8(State.Created)) revert FundLockedOnceActive();
         if (token == address(0)) revert ZeroAddress();
         if (!_isLegToken(programId, token)) revert NotALegToken(token);
-        // oldToken and the legs are fixed at creation, but oldSupplySnapshot — the claim
-        // denominator — is not, and funding locks it. Without this a caller could fund
+        // The legs are fixed at creation; oldToken and oldSupplySnapshot — the claim
+        // denominator — remain configurable until funding locks them. Without this a caller could fund
         // straight after creating, stranding the snapshot at zero: previewClaim would
         // return zeros and every claim would revert on the division. The program would
         // look configured, hold the reserves, and deliver nothing.
