@@ -387,9 +387,10 @@ contract WarrantRegistry is
 
     /// @notice Verify `account`'s snapshot allocation and settle it in the settlement asset, in one
     ///         call. Anyone may submit a valid proof on an account's behalf; the record / payout
-    ///         always accrues to `account`. Reverts (leaving the index unconsumed) if the program
-    ///         isn't Active / in its window, or is not yet convertible or under-funded — retry once
-    ///         ready.
+    ///         always accrues to `account`. Requires an Active program within its claim window,
+    ///         unpaused claims, a valid proof, compliance, and sufficient settlement reserve.
+    ///         Any revert leaves the index unconsumed. Settlement terms and funding must be
+    ///         finalized before activation: an Active program cannot be reconfigured or funded.
     function claim(uint256 programId, uint256 index, address account, uint256 amount, bytes32[] calldata proof)
         external
         whenNotPaused

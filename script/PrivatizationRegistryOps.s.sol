@@ -90,10 +90,12 @@ contract PrivatizationRegistryOps is Script {
         console.log("  legs:", tokens.length);
     }
 
-    /// @notice Step 4 — open the claim window by patching the program to `Active`. Broadcaster must
-    ///         hold OPS_ROLE. Run AFTER freezeSupply (Step 3b). Pass `oldSupplySnapshot` = the old
-    ///         token's frozen `totalSupply()` (the pro-rata denominator) and `state` = 2 (Active);
-    ///         any field left 0 keeps the program's stored value (`oldToken` stays as set at create).
+    /// @notice Steps 4 / 5b — configure while Created, then activate only after funding.
+    ///         Broadcaster must hold OPS_ROLE. After freezeSupply (Step 3b), set the claim window
+    ///         and `oldSupplySnapshot` to the old token's frozen `totalSupply()`, leaving `state` = 0.
+    ///         Next fund every reward token to cover its aggregate leg totals (Step 5). Then call
+    ///         again with `state` = 2 (Active) and all other patch fields 0 to keep the funded terms.
+    ///         This helper never changes `oldToken`; zero-valued patch fields keep stored values.
     function configureProgram(
         address registry,
         uint256 programId,
