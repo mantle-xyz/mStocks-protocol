@@ -13,3 +13,11 @@ safe-txs/*.json
 
 # Dotenv file
 .env
+
+.DS_Store
+
+# Local-only docs: QA handover / self-test runbooks and anything else whose
+# lifecycle is not the code's. Ends in .local.md so the rule is a filename
+# convention rather than a path — the same shape as *.local.yaml in the service
+# repo. Deliberately not `*.md`: README.md and future real docs belong in git.
+*.local.md
