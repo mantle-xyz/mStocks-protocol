@@ -13,8 +13,9 @@ use crate::events::{ClawedBack, Frozen, Thawed};
 use crate::state::*;
 use crate::token2022::{self, Authority};
 
-/// Accounts shared by `freeze` (Freezer role: backend KMS, fast) and `thaw` (Unfreezer role:
-/// multisig, careful). Token accounts to act on are passed as remaining accounts.
+/// Accounts shared by `freeze` (Freezer role) and `thaw` (Unfreezer role); the compliance backend
+/// normally holds both, like the EVM OPS role. Token accounts to act on are passed as remaining
+/// accounts.
 macro_rules! freeze_accounts {
     ($name:ident, $role:expr) => {
         #[derive(Accounts)]

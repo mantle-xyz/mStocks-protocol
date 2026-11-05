@@ -65,8 +65,8 @@
 | `MULTIPLIER_SCHEDULER` | 调度 KMS | 调度 multiplier | `MULTIPLIER_SCHEDULER_ROLE` |
 | `PAUSER` | 运营 EOA / KMS | 暂停 | `PAUSE_ROLE` |
 | `UNPAUSER` | 多签 | 恢复 | `UNPAUSE_ROLE` |
-| `FREEZER` | 后端 KMS | 冻结账户（求快） | `ComplianceRegistry` OPS |
-| `UNFREEZER` | 多签 | 解冻账户（求稳） | — |
+| `FREEZER` | 后端 KMS | 冻结账户（拉黑） | `ComplianceRegistry` OPS（`sanctionUsers`） |
+| `UNFREEZER` | 后端 KMS（默认与 `FREEZER` 同一密钥） | 解冻账户（移出黑名单后自动解除） | `ComplianceRegistry` OPS（`unsanctionUsers`） |
 | `CLAWBACK` | 多签 | 强制划转（Permanent Delegate） | — |
 | `METADATA_OPS` | 运营 | 更新名称、代码、ISIN | `ScaledToken` OPS |
 
@@ -266,7 +266,8 @@ solana/
 - multiplier 换算：u128 → f64 的精度损失在链下调度阶段控制（最多 15 位有效数字）。
 - Core 的 upgrade authority 交给 Squads 多签 + Timelock。`initialize` 要求 upgrade authority 签名，所以顺序是：部署者部署 → `init-core` → 移交 upgrade authority。
 - `register_mint` 使用扩展白名单：mint 上任何 Core 不掌控的扩展都会被拒绝，避免留下后门权限。
-- 若将来用 `set_default_account_state` 切换到「先审后用」，每个新账户都需要先解冻；目前解冻权（`UNFREEZER`）在多签手里，日常开户太慢，届时需要为后端新增一个只能解冻新账户的「开户」角色。
+- 后端 KMS 密钥同时持有 `FREEZER` 和 `UNFREEZER`，与 EVM 上 OPS 既能 sanction 也能 unsanction 一致：密钥泄露时可冻结 / 解冻任意账户，但不能划转资产（`CLAWBACK` 在多签）。Admin 可随时撤销其角色。
+- 若将来用 `set_default_account_state` 切换到「先审后用」，每个新账户都需要先解冻。后端已持有 `UNFREEZER`，技术上可以直接解冻新账户；但该角色能解冻任何账户，若要把开户权限限制为只解冻新账户，届时可新增一个「开户」角色。
 - 上线前做独立的 Solana 审计。
 
 ---
@@ -282,6 +283,7 @@ solana/
 | 5 | 工具链 | 升级到 Agave + Anchor 1.x |
 | 6 | 角色密钥 | 后端 KMS 支持 Ed25519，各运营角色使用 KMS 密钥 |
 | 7 | 合规后端 | 在现有 `mstocks-aml` 中兼容 Solana，尽量不改 EVM 逻辑（§11） |
+| 8 | 解冻 | 与 EVM 一致：移出黑名单后由后端签名机自动解冻，`UNFREEZER` 由后端 KMS 持有 |
 
 ---
 
@@ -303,7 +305,7 @@ Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ─
 | --- | --- | --- |
 | 索引 | ERC20 `Transfer` 日志 | 按 mint 拉交易历史（`getSignaturesForAddress`），用交易前后的余额变化还原转账；每个 mint 一个签名游标 |
 | 拉黑 | `ComplianceRegistry.sanctionUsers` | Core `freeze`：冻结该钱包在所有已登记 mint 下的全部余额账户 |
-| 解除 | `unsanctionUsers` | Core `thaw`（需 `UNFREEZER` 密钥，可选） |
+| 解除 | `unsanctionUsers` | Core `thaw`：解冻该钱包的全部余额账户 |
 | 签名 | secp256k1（本地 / AWS KMS） | Ed25519（本地 keypair / AWS KMS `ECC_NIST_EDWARDS25519`） |
 
 **要点：**
@@ -311,7 +313,7 @@ Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ─
 - **新账户**：钱包被冻结后仍可能出现新的余额账户（另一个 mint 的账户，或 CCIP 跨链铸币自动创建的 ATA）。已冻结的账户不能收币，所以新进来的币一定在新账户里。索引器发现受制裁钱包有资金变动时，把它重新标为待同步，同步器随即冻结新账户。
 - **账户所有权转移**：非 ATA 的余额账户可以用 `SetAuthority` 把所有者改成另一个钱包。这笔交易不带 mint 账户、余额也不变，不会出现在 mint 的交易历史里（已实测），所以别人可以把一个有余额的账户直接「送给」黑名单钱包而不被索引到。已冻结的账户不能转移所有权，所以黑名单钱包只能这样多出账户，不能把账户转走。对策：对账器每隔 `reconcile_interval`（默认 10 分钟）检查全部已拉黑钱包，发现有未冻结账户就重新排队冻结；每轮每个钱包一次 `getTokenAccountsByOwner`。
 - **是否需要上链**：钱包可能部分冻结，同步器按目标状态判断：拉黑要求没有未冻结账户，解除要求没有冻结账户；已满足则不发交易。Core 跳过已处于目标状态的账户，失败重试是安全的。每笔交易 20 个账户，可配置优先费。
-- **解冻**：按 §4，`UNFREEZER` 在多签手里。后端不配置解冻密钥时，解除拉黑的记录重试后停住，由多签执行 `freeze.ts --thaw`；也可以给后端单独配一个 Unfreezer 密钥。
+- **解冻**：与 EVM 一致。AML 网关不再命中某地址时（recheck 或新交易触发），数据库把它标为待解除，同步器用后端签名机发 Core `thaw` 解冻其全部账户。默认与冻结使用同一把密钥（需同时持有 `FREEZER` 和 `UNFREEZER`），也可单独配置 `unfreezer`。与 EVM 相同：运营手动冻结、但 AML 判定为干净的地址，如果之后第一次被服务处理（例如出现在新交易中），会被自动解冻。
 - **签名与启动检查**：生产用 AWS KMS Ed25519（`ED25519_SHA_512`，原始消息），签完在本地验签。启动时检查签名者持有对应角色、配置的 mint 已在 Core 登记。签名者自付手续费，需要保持 SOL 余额。
 - **对 EVM 代码的改动**：处理器的地址小写化改为可配置（Solana 地址区分大小写，EVM 仍转小写）；同步器增加一个可选接口用于按目标状态判断（EVM 客户端不实现，行为不变）；数据库迁移 006 加宽地址和交易哈希字段，新增游标表；启动时按 `chain_type` 选择组件。
 
@@ -324,4 +326,4 @@ Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ─
 
 **RPC：** 已在 Alchemy devnet 上逐个验证服务用到的方法：`getSignaturesForAddress`（limit 1000、`before` / `until` 分页、finalized）、`getTransaction`（v0 交易，余额变化带 owner）、按 Token-2022 过滤的 `getTokenAccountsByOwner`、`getMultipleAccounts`、`getLatestBlockhash`、`getBlockHeight`、`getSignatureStatuses`，均可用。
 
-**上线前需确认：** Freezer 的 KMS 密钥及 SOL 余额；后端是否持有 Unfreezer 密钥。
+**上线前需准备：** 后端 KMS Ed25519 密钥，由 Admin（Squads）授予 `FREEZER` 和 `UNFREEZER` 两个角色，并保持 SOL 余额支付手续费。
