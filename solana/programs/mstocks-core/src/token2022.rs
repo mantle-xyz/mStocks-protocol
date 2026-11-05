@@ -14,7 +14,11 @@ pub struct Authority<'a, 'info> {
 }
 
 impl<'a, 'info> Authority<'a, 'info> {
-    fn invoke(&self, ix: &anchor_lang::solana_program::instruction::Instruction, infos: &[AccountInfo<'info>]) -> Result<()> {
+    fn invoke(
+        &self,
+        ix: &anchor_lang::solana_program::instruction::Instruction,
+        infos: &[AccountInfo<'info>],
+    ) -> Result<()> {
         invoke_signed(ix, infos, &[&[AUTHORITY_SEED, &[self.bump]]]).map_err(Into::into)
     }
 }
@@ -59,16 +63,10 @@ pub fn set_frozen<'info>(
     authority: &Authority<'_, 'info>,
     frozen: bool,
 ) -> Result<()> {
-    let build = if frozen {
-        spl_token_2022::instruction::freeze_account
-    } else {
-        spl_token_2022::instruction::thaw_account
-    };
+    let build =
+        if frozen { spl_token_2022::instruction::freeze_account } else { spl_token_2022::instruction::thaw_account };
     let ix = build(token_program.key, account.key, mint.key, authority.account.key, &[])?;
-    authority.invoke(
-        &ix,
-        &[account.clone(), mint.clone(), authority.account.clone(), token_program.clone()],
-    )
+    authority.invoke(&ix, &[account.clone(), mint.clone(), authority.account.clone(), token_program.clone()])
 }
 
 /// Sets the state every new token account of `mint` starts in (Default Account State extension;
@@ -79,7 +77,9 @@ pub fn set_default_account_state<'info>(
     authority: &Authority<'_, 'info>,
     frozen: bool,
 ) -> Result<()> {
-    use spl_token_2022::{extension::default_account_state::instruction::update_default_account_state, state::AccountState};
+    use spl_token_2022::{
+        extension::default_account_state::instruction::update_default_account_state, state::AccountState,
+    };
     let state = if frozen { AccountState::Frozen } else { AccountState::Initialized };
     let ix = update_default_account_state(token_program.key, mint.key, authority.account.key, &[], &state)?;
     authority.invoke(&ix, &[mint.clone(), authority.account.clone(), token_program.clone()])
@@ -109,13 +109,7 @@ pub fn delegate_transfer<'info>(
     )?;
     authority.invoke(
         &ix,
-        &[
-            source.clone(),
-            mint.clone(),
-            destination.clone(),
-            authority.account.clone(),
-            token_program.clone(),
-        ],
+        &[source.clone(), mint.clone(), destination.clone(), authority.account.clone(), token_program.clone()],
     )
 }
 

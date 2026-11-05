@@ -3,10 +3,9 @@ use anchor_spl::compat::spl_token_metadata_interface::state::TokenMetadata;
 use anchor_spl::token_2022::spl_token_2022::{
     self,
     extension::{
-        default_account_state::DefaultAccountState, metadata_pointer::MetadataPointer,
-        pausable::PausableConfig, permanent_delegate::PermanentDelegate,
-        scaled_ui_amount::ScaledUiAmountConfig, transfer_hook::TransferHook, BaseStateWithExtensions,
-        ExtensionType, StateWithExtensions,
+        default_account_state::DefaultAccountState, metadata_pointer::MetadataPointer, pausable::PausableConfig,
+        permanent_delegate::PermanentDelegate, scaled_ui_amount::ScaledUiAmountConfig, transfer_hook::TransferHook,
+        BaseStateWithExtensions, ExtensionType, StateWithExtensions,
     },
     state::{AccountState, Mint},
 };
@@ -75,14 +74,8 @@ fn validate_mint(mint_info: &AccountInfo, authority: &Pubkey, hook_authority: &P
     for extension in mint.get_extension_types()? {
         require!(ALLOWED_EXTENSIONS.contains(&extension), CoreError::UnexpectedExtension);
     }
-    require!(
-        !is_authority(Option::<Pubkey>::from(mint.base.mint_authority)),
-        CoreError::MintAuthorityIsCore
-    );
-    require!(
-        is_authority(Option::<Pubkey>::from(mint.base.freeze_authority)),
-        CoreError::WrongFreezeAuthority
-    );
+    require!(!is_authority(Option::<Pubkey>::from(mint.base.mint_authority)), CoreError::MintAuthorityIsCore);
+    require!(is_authority(Option::<Pubkey>::from(mint.base.freeze_authority)), CoreError::WrongFreezeAuthority);
 
     let scaled = mint.get_extension::<ScaledUiAmountConfig>().map_err(|_| CoreError::WrongScaledUiConfig)?;
     require!(is_authority(Option::<Pubkey>::from(scaled.authority)), CoreError::WrongScaledUiConfig);
@@ -96,9 +89,7 @@ fn validate_mint(mint_info: &AccountInfo, authority: &Pubkey, hook_authority: &P
             && is_authority(Option::<Pubkey>::from(pointer.authority)),
         CoreError::WrongMetadataPointer
     );
-    let metadata = mint
-        .get_variable_len_extension::<TokenMetadata>()
-        .map_err(|_| CoreError::WrongTokenMetadata)?;
+    let metadata = mint.get_variable_len_extension::<TokenMetadata>().map_err(|_| CoreError::WrongTokenMetadata)?;
     require!(
         metadata.mint == *mint_info.key && is_authority(Option::<Pubkey>::from(metadata.update_authority)),
         CoreError::WrongTokenMetadata
@@ -111,17 +102,10 @@ fn validate_mint(mint_info: &AccountInfo, authority: &Pubkey, hook_authority: &P
         CoreError::WrongTransferHook
     );
 
-    let default_state = mint
-        .get_extension::<DefaultAccountState>()
-        .map_err(|_| CoreError::WrongDefaultAccountState)?;
-    require!(
-        default_state.state == AccountState::Initialized as u8,
-        CoreError::WrongDefaultAccountState
-    );
+    let default_state = mint.get_extension::<DefaultAccountState>().map_err(|_| CoreError::WrongDefaultAccountState)?;
+    require!(default_state.state == AccountState::Initialized as u8, CoreError::WrongDefaultAccountState);
 
-    let delegate = mint
-        .get_extension::<PermanentDelegate>()
-        .map_err(|_| CoreError::WrongPermanentDelegate)?;
+    let delegate = mint.get_extension::<PermanentDelegate>().map_err(|_| CoreError::WrongPermanentDelegate)?;
     require!(is_authority(Option::<Pubkey>::from(delegate.delegate)), CoreError::WrongPermanentDelegate);
 
     Ok(())

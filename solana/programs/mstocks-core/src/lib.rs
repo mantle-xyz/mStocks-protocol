@@ -50,7 +50,11 @@ pub mod mstocks_core {
         instructions::register_mint::register_mint(ctx, mantle_token)
     }
 
-    pub fn schedule_multiplier(ctx: Context<ScheduleMultiplier>, multiplier_1e18: u128, effective_at: i64) -> Result<()> {
+    pub fn schedule_multiplier(
+        ctx: Context<ScheduleMultiplier>,
+        multiplier_1e18: u128,
+        effective_at: i64,
+    ) -> Result<()> {
         instructions::multiplier::schedule_multiplier(ctx, multiplier_1e18, effective_at)
     }
 

@@ -3,8 +3,8 @@
 //! Prerequisites: `cargo build-sbf` (produces target/deploy/mstocks_core.so) and
 //! `scripts/fetch-fixtures.sh` (produces tests/fixtures/token2022.so).
 
-use anchor_lang::{prelude::Pubkey, AccountDeserialize, InstructionData, ToAccountMetas};
 use anchor_lang::solana_program::instruction::Instruction;
+use anchor_lang::{prelude::Pubkey, AccountDeserialize, InstructionData, ToAccountMetas};
 use litesvm::LiteSVM;
 use mstocks_core::{
     instructions::MetadataField,
@@ -64,7 +64,8 @@ impl Env {
 
     fn bare() -> Self {
         let mut svm = LiteSVM::new();
-        svm.add_program_from_file(TOKEN_2022, token2022_so()).expect("token2022 fixture missing: run scripts/fetch-fixtures.sh");
+        svm.add_program_from_file(TOKEN_2022, token2022_so())
+            .expect("token2022 fixture missing: run scripts/fetch-fixtures.sh");
         svm.add_program_from_file(mstocks_core::ID, program_so()).expect("program missing: run cargo build-sbf");
         let mut clock: Clock = svm.get_sysvar();
         clock.unix_timestamp = NOW;
@@ -83,7 +84,11 @@ impl Env {
         }
     }
 
-    fn send(&mut self, ixs: &[Instruction], signers: &[&Keypair]) -> Result<litesvm::types::TransactionMetadata, String> {
+    fn send(
+        &mut self,
+        ixs: &[Instruction],
+        signers: &[&Keypair],
+    ) -> Result<litesvm::types::TransactionMetadata, String> {
         self.svm.expire_blockhash();
         let mut all: Vec<&Keypair> = vec![&self.payer];
         all.extend_from_slice(signers);
@@ -91,7 +96,12 @@ impl Env {
         self.svm.send_transaction(tx).map_err(|e| format!("{:?}\n{}", e.err, e.meta.logs.join("\n")))
     }
 
-    fn core_ix(&self, accounts: impl ToAccountMetas, data: impl InstructionData, remaining: Vec<anchor_lang::solana_program::instruction::AccountMeta>) -> Instruction {
+    fn core_ix(
+        &self,
+        accounts: impl ToAccountMetas,
+        data: impl InstructionData,
+        remaining: Vec<anchor_lang::solana_program::instruction::AccountMeta>,
+    ) -> Instruction {
         let mut metas = accounts.to_account_metas(None);
         metas.extend(remaining);
         Instruction { program_id: mstocks_core::ID, accounts: metas, data: data.data() }
@@ -113,7 +123,8 @@ impl Env {
         );
         self.svm.airdrop(&signer.pubkey(), 10_000_000_000).unwrap();
         self.svm.expire_blockhash();
-        let tx = Transaction::new_signed_with_payer(&[ix], Some(&signer.pubkey()), &[signer], self.svm.latest_blockhash());
+        let tx =
+            Transaction::new_signed_with_payer(&[ix], Some(&signer.pubkey()), &[signer], self.svm.latest_blockhash());
         self.svm.send_transaction(tx).map(|_| ()).map_err(|e| format!("{:?}", e.err))
     }
 
@@ -171,8 +182,19 @@ impl Env {
             create_account(&self.payer.pubkey(), &m, lamports, space as u64, &TOKEN_2022),
             scaled_ui_amount::instruction::initialize(&TOKEN_2022, &m, Some(auth), 1.0).unwrap(),
             pausable::instruction::initialize(&TOKEN_2022, &m, &auth).unwrap(),
-            metadata_pointer::instruction::initialize(&TOKEN_2022, &m, Some(opts.pointer_authority.unwrap_or(auth)), Some(m)).unwrap(),
-            default_account_state::instruction::initialize_default_account_state(&TOKEN_2022, &m, &AccountState::Initialized).unwrap(),
+            metadata_pointer::instruction::initialize(
+                &TOKEN_2022,
+                &m,
+                Some(opts.pointer_authority.unwrap_or(auth)),
+                Some(m),
+            )
+            .unwrap(),
+            default_account_state::instruction::initialize_default_account_state(
+                &TOKEN_2022,
+                &m,
+                &AccountState::Initialized,
+            )
+            .unwrap(),
             transfer_hook::instruction::initialize(&TOKEN_2022, &m, Some(hook_authority), opts.hook_program).unwrap(),
             token_ix::initialize_permanent_delegate(&TOKEN_2022, &m, &auth).unwrap(),
         ];
@@ -180,14 +202,30 @@ impl Env {
             ixs.push(token_ix::initialize_mint_close_authority(&TOKEN_2022, &m, Some(&Pubkey::new_unique())).unwrap());
         }
         ixs.extend([
-            token_ix::initialize_mint2(&TOKEN_2022, &m, &mint_authority.pubkey(), Some(&freeze), opts.decimals).unwrap(),
+            token_ix::initialize_mint2(&TOKEN_2022, &m, &mint_authority.pubkey(), Some(&freeze), opts.decimals)
+                .unwrap(),
             spl_token_metadata_interface::instruction::initialize(
-                &TOKEN_2022, &m, &auth, &m, &mint_authority.pubkey(), "Apple mStock".into(), "AAPLm".into(), "https://example.com".into(),
+                &TOKEN_2022,
+                &m,
+                &auth,
+                &m,
+                &mint_authority.pubkey(),
+                "Apple mStock".into(),
+                "AAPLm".into(),
+                "https://example.com".into(),
             ),
         ]);
         if mint_auth != mint_authority.pubkey() {
             ixs.push(
-                token_ix::set_authority(&TOKEN_2022, &m, Some(&mint_auth), token_ix::AuthorityType::MintTokens, &mint_authority.pubkey(), &[]).unwrap(),
+                token_ix::set_authority(
+                    &TOKEN_2022,
+                    &m,
+                    Some(&mint_auth),
+                    token_ix::AuthorityType::MintTokens,
+                    &mint_authority.pubkey(),
+                    &[],
+                )
+                .unwrap(),
             );
         }
         self.send(&ixs, &[&mint, &mint_authority]).expect("create mint");
@@ -227,7 +265,13 @@ impl Env {
         let needed = ExtensionType::get_required_init_account_extensions(&mint_exts);
         let space = ExtensionType::try_calculate_account_len::<TokenAccount>(&needed).unwrap();
         let ixs = [
-            create_account(&self.payer.pubkey(), &account.pubkey(), self.svm.minimum_balance_for_rent_exemption(space), space as u64, &TOKEN_2022),
+            create_account(
+                &self.payer.pubkey(),
+                &account.pubkey(),
+                self.svm.minimum_balance_for_rent_exemption(space),
+                space as u64,
+                &TOKEN_2022,
+            ),
             token_ix::initialize_account3(&TOKEN_2022, &account.pubkey(), mint, owner).unwrap(),
         ];
         self.send(&ixs, &[&account]).expect("token account");
@@ -235,13 +279,21 @@ impl Env {
     }
 
     fn mint_to(&mut self, m: &TestMint, account: &Pubkey, amount: u64) -> Result<(), String> {
-        let ix = token_ix::mint_to_checked(&TOKEN_2022, &m.mint, account, &m.mint_authority.pubkey(), &[], amount, 9).unwrap();
+        let ix = token_ix::mint_to_checked(&TOKEN_2022, &m.mint, account, &m.mint_authority.pubkey(), &[], amount, 9)
+            .unwrap();
         let ma = m.mint_authority.insecure_clone();
         self.send(&[ix], &[&ma]).map(|_| ())
     }
 
     /// Plain 4-account transfer_checked — the same shape CCIP Router uses.
-    fn transfer(&mut self, mint: &Pubkey, from: &Pubkey, owner: &Keypair, to: &Pubkey, amount: u64) -> Result<(), String> {
+    fn transfer(
+        &mut self,
+        mint: &Pubkey,
+        from: &Pubkey,
+        owner: &Keypair,
+        to: &Pubkey,
+        amount: u64,
+    ) -> Result<(), String> {
         let ix = token_ix::transfer_checked(&TOKEN_2022, from, mint, to, &owner.pubkey(), &[], amount, 9).unwrap();
         self.send(&[ix], &[owner]).map(|_| ())
     }
@@ -266,7 +318,13 @@ impl Env {
         self.svm.set_sysvar(&clock);
     }
 
-    fn schedule(&mut self, op: &Keypair, mint: &Pubkey, multiplier_1e18: u128, effective_at: i64) -> Result<(), String> {
+    fn schedule(
+        &mut self,
+        op: &Keypair,
+        mint: &Pubkey,
+        multiplier_1e18: u128,
+        effective_at: i64,
+    ) -> Result<(), String> {
         let ix = self.core_ix(
             mstocks_core::accounts::ScheduleMultiplier {
                 operator: op.pubkey(),
@@ -319,19 +377,36 @@ impl Env {
 
     fn set_frozen(&mut self, op: &Keypair, mint: &Pubkey, accounts: &[Pubkey], frozen: bool) -> Result<(), String> {
         let role = if frozen { Role::Freezer } else { Role::Unfreezer };
-        let remaining = accounts.iter().map(|a| anchor_lang::solana_program::instruction::AccountMeta::new(*a, false)).collect();
+        let remaining =
+            accounts.iter().map(|a| anchor_lang::solana_program::instruction::AccountMeta::new(*a, false)).collect();
         let (config, authority) = (self.config, self.authority);
         let mint_state = pda(&[MINT_SEED, mint.as_ref()]);
         let role_entry = role_pda(role, &op.pubkey());
         let ix = if frozen {
             self.core_ix(
-                mstocks_core::accounts::Freeze { operator: op.pubkey(), config, role_entry, mint: *mint, mint_state, authority, token_program: TOKEN_2022 },
+                mstocks_core::accounts::Freeze {
+                    operator: op.pubkey(),
+                    config,
+                    role_entry,
+                    mint: *mint,
+                    mint_state,
+                    authority,
+                    token_program: TOKEN_2022,
+                },
                 mstocks_core::instruction::Freeze {},
                 remaining,
             )
         } else {
             self.core_ix(
-                mstocks_core::accounts::Thaw { operator: op.pubkey(), config, role_entry, mint: *mint, mint_state, authority, token_program: TOKEN_2022 },
+                mstocks_core::accounts::Thaw {
+                    operator: op.pubkey(),
+                    config,
+                    role_entry,
+                    mint: *mint,
+                    mint_state,
+                    authority,
+                    token_program: TOKEN_2022,
+                },
                 mstocks_core::instruction::Thaw {},
                 remaining,
             )
@@ -697,7 +772,10 @@ fn pause_all_pauses_every_given_mint() {
         .flat_map(|m| {
             [
                 anchor_lang::solana_program::instruction::AccountMeta::new(*m, false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(pda(&[MINT_SEED, m.as_ref()]), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    pda(&[MINT_SEED, m.as_ref()]),
+                    false,
+                ),
             ]
         })
         .collect();
@@ -812,7 +890,8 @@ fn batch_operations_fit_transaction_limits() {
     let m = env.registered_mint();
     let accounts: Vec<Pubkey> = (0..20).map(|_| env.token_account(&m.mint, &Pubkey::new_unique())).collect();
     let freezer = env.operator(Role::Freezer);
-    let remaining = accounts.iter().map(|a| anchor_lang::solana_program::instruction::AccountMeta::new(*a, false)).collect();
+    let remaining =
+        accounts.iter().map(|a| anchor_lang::solana_program::instruction::AccountMeta::new(*a, false)).collect();
     let ix = env.core_ix(
         mstocks_core::accounts::Freeze {
             operator: freezer.pubkey(),
@@ -826,7 +905,7 @@ fn batch_operations_fit_transaction_limits() {
         mstocks_core::instruction::Freeze {},
         remaining,
     );
-    let size = tx_size(&env, &[ix.clone()], &[&freezer]);
+    let size = tx_size(&env, std::slice::from_ref(&ix), &[&freezer]);
     let cu = env.send(&[ix], &[&freezer]).unwrap().compute_units_consumed;
     println!("freeze 20 accounts: {cu} CU, {size} bytes");
     assert!(cu < 200_000 && size <= 1232, "freeze batch of 20: {cu} CU, {size} bytes");
@@ -838,7 +917,10 @@ fn batch_operations_fit_transaction_limits() {
         .flat_map(|m| {
             [
                 anchor_lang::solana_program::instruction::AccountMeta::new(*m, false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(pda(&[MINT_SEED, m.as_ref()]), false),
+                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
+                    pda(&[MINT_SEED, m.as_ref()]),
+                    false,
+                ),
             ]
         })
         .collect();
@@ -853,7 +935,7 @@ fn batch_operations_fit_transaction_limits() {
         mstocks_core::instruction::PauseAll {},
         remaining,
     );
-    let size = tx_size(&env, &[ix.clone()], &[&pauser]);
+    let size = tx_size(&env, std::slice::from_ref(&ix), &[&pauser]);
     let cu = env.send(&[ix], &[&pauser]).unwrap().compute_units_consumed;
     println!("pause_all 8 mints: {cu} CU, {size} bytes");
     assert!(cu < 200_000 && size <= 1232, "pause_all batch of 8: {cu} CU, {size} bytes");

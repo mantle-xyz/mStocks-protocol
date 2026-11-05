@@ -32,20 +32,11 @@ pub struct ScheduleMultiplier<'info> {
 /// `ScaledToken.setUIMultiplier`, with the same rules. Token-2022 itself would accept any positive
 /// value and apply past timestamps immediately, so all checks live here.
 pub fn schedule_multiplier(ctx: Context<ScheduleMultiplier>, multiplier_1e18: u128, effective_at: i64) -> Result<()> {
-    require!(
-        (MULTIPLIER_MIN..=MULTIPLIER_MAX).contains(&multiplier_1e18),
-        CoreError::MultiplierOutOfRange
-    );
+    require!((MULTIPLIER_MIN..=MULTIPLIER_MAX).contains(&multiplier_1e18), CoreError::MultiplierOutOfRange);
     let config = &ctx.accounts.config;
     let now = Clock::get()?.unix_timestamp;
-    require!(
-        effective_at >= now.saturating_add(config.min_notice),
-        CoreError::NoticeTooShort
-    );
-    require!(
-        effective_at <= now.saturating_add(config.max_horizon),
-        CoreError::EffectiveTooFar
-    );
+    require!(effective_at >= now.saturating_add(config.min_notice), CoreError::NoticeTooShort);
+    require!(effective_at <= now.saturating_add(config.max_horizon), CoreError::EffectiveTooFar);
 
     // Off-chain scheduling limits values to 15 significant digits so this conversion is exact
     // enough for both chains to display the same UI amount.
