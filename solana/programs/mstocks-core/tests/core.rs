@@ -900,3 +900,21 @@ fn admin_switches_default_account_state() {
     let usable_new = env.token_account(&m.mint, &Pubkey::new_unique());
     assert_eq!(env.token(&usable_new).1, AccountState::Initialized, "new accounts start usable again");
 }
+
+/// The backend indexes transfers by looking up transactions that touch the mint. That only works if
+/// every transfer has to carry the mint account, i.e. the legacy mint-less `Transfer` is rejected.
+#[test]
+fn transfers_must_carry_the_mint_account() {
+    let mut env = Env::new();
+    let m = env.registered_mint();
+    let alice = Keypair::new();
+    let a = env.token_account(&m.mint, &alice.pubkey());
+    let b = env.token_account(&m.mint, &Pubkey::new_unique());
+    env.mint_to(&m, &a, 1_000).unwrap();
+    #[allow(deprecated)]
+    let legacy = token_ix::transfer(&TOKEN_2022, &a, &b, &alice.pubkey(), &[], 100).unwrap();
+    let result = env.send(&[legacy], &[&alice]).map(|_| ());
+    println!("legacy Transfer without mint: {result:?}");
+    assert!(result.is_err(), "legacy Transfer without the mint must be rejected");
+    assert_eq!(env.token(&b).0, 0);
+}
