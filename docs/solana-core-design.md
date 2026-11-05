@@ -232,7 +232,7 @@ solana/
 
 ## 8. 测试计划
 
-**Rust 集成测试（`cargo test -p mstocks-core`，20 个，全部通过）：**
+**Rust 集成测试（`cargo test -p mstocks-core`，21 个，全部通过）：**
 
 | 类别 | 覆盖内容 | 状态 |
 | --- | --- | --- |
@@ -244,14 +244,16 @@ solana/
 | 合规策略 | 只有 Admin 能切换默认账户状态；切换为冻结后新账户默认冻结，切回后新账户默认可用 | ✅ |
 | 合规 | 批量冻结（重复发送不报错）；冻结后不能转出、不能收币、不能收 CCIP 铸币；冻结员不能解冻；其他 mint 的账户被拒；clawback（源账户冻结或未冻结，最终都冻结） | ✅ |
 | 元数据 | 更新名称 | ✅ |
-| 兼容性 | 休眠 Hook 下 4 账户转账成功（模拟 CCIP Router） | ✅ |
+| 兼容性 | 休眠 Hook 下 4 账户转账成功（模拟 CCIP Router）；不带 mint 账户的旧版 `Transfer` 被拒（合规后端按 mint 索引的前提，§11） | ✅ |
 | 交易限制 | 冻结 20 个账户、暂停 8 个 mint 都在 200k CU 和 1232 字节以内 | ✅ |
+
+**CI（`.github/workflows/solana.yml`）：** `solana/` 有改动时运行 rustfmt、`cargo build-sbf`、clippy（警告即失败）、上述集成测试和脚本类型检查。
 
 **本地端到端（`npm run local-e2e`）：** 在本地验证节点上依次运行全部脚本：初始化 → 授予角色 → 创建并登记 mint → 调度 multiplier → 铸币 → 按钱包拉黑 → 强制划转 → 解冻 → 暂停 / 恢复 → 全局暂停 → 更新元数据（含新增字段）→ 切换默认账户状态 → 撤销角色 → 交出铸造权演练。全部通过。
 
 **对账测试（`scripts/test-check-multiplier.sh`）：** 在 anvil 上部署真实的 `ScaledToken`（ERC1967 代理），在本地 Solana 链上登记对应 mint：两链调度相同的值时结果为 OK（退出码 0）；Solana 单独改值后结果为 MISMATCH（退出码 1）。通过。
 
-**devnet 冒烟测试（`scripts/devnet-smoke.sh`）：** Core 已部署到 devnet（`3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd`，链上字节与本地构建一致）。在 devnet 上跑通：初始化 → 授予角色 → 创建并登记测试 mint（`7bopkv9QKKHNiHKbphGrDKJWr5V6tW3iz63NW9EQQLeG`）→ 调度 multiplier（1.5×）→ 铸币 → 按钱包拉黑 → 强制划转 → 解冻 → 全局暂停 / 恢复 → 新增元数据字段。最终链上配置与 §6 逐项一致。
+**devnet 冒烟测试（`scripts/devnet-smoke.sh`）：** Core 已部署到 devnet（`3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd`，链上字节与当前代码的构建逐字节一致；代码格式化后已重新部署并核对）。在 devnet 上跑通：初始化 → 授予角色 → 创建并登记测试 mint（`7bopkv9QKKHNiHKbphGrDKJWr5V6tW3iz63NW9EQQLeG`）→ 调度 multiplier（1.5×）→ 铸币 → 按钱包拉黑 → 强制划转 → 解冻 → 全局暂停 / 恢复 → 新增元数据字段。最终链上配置与 §6 逐项一致。
 
 **合规后端：** 见 §11。
 
