@@ -9,8 +9,9 @@
 - `mstocks-core`：Solana 上唯一的自研程序（Anchor）。
 - 发币与配置脚本：创建带扩展的 Mint、接入 Core、注册 CCIP pool。
 - 测试：基于 LiteSVM，加载主网版 Token-2022 运行。
+- 配套合规后端 `mstocks-aml` 的 Solana 适配：监听转账、查黑名单、调用 Core 冻结 / 解冻（§11）。
 
-**不在本次范围：** Mantle 侧的 CCIP LockRelease pool 部署与配置（CCIP 标准合约，无需自研）、后端服务（事件监听、黑名单、冻结调用）、前端。
+**不在本次范围：** Mantle 侧的 CCIP LockRelease pool 部署与配置（CCIP 标准合约，无需自研）、multiplier 对账的定时调度与告警、前端。
 
 **已确定的前提：**
 - 精度 9 位；Mantle 为唯一发行链；CCIP 采用 lock / mint：Mantle 侧 LockRelease pool 锁定 / 释放，Solana 侧 BurnMint pool 铸造 / 销毁。Solana 上的币只由 CCIP BurnMint pool 铸造，其总量等于 Mantle pool 中锁定的数量（÷1e9）。
@@ -252,6 +253,8 @@ solana/
 
 **devnet 冒烟测试（`scripts/devnet-smoke.sh`）：** Core 已部署到 devnet（`3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd`，链上字节与本地构建一致）。在 devnet 上跑通：初始化 → 授予角色 → 创建并登记测试 mint（`7bopkv9QKKHNiHKbphGrDKJWr5V6tW3iz63NW9EQQLeG`）→ 调度 multiplier（1.5×）→ 铸币 → 按钱包拉黑 → 强制划转 → 解冻 → 全局暂停 / 恢复 → 新增元数据字段。最终链上配置与 §6 逐项一致。
 
+**合规后端：** 见 §11。
+
 **未覆盖：** 真实 CCIP 环境下的注册、跨链铸币与销毁（等 CCIP 就绪后在 devnet 验证）。
 
 ---
@@ -278,3 +281,42 @@ solana/
 | 4 | 代码位置 | 本仓库 `solana/` 子目录 |
 | 5 | 工具链 | 升级到 Agave + Anchor 1.x |
 | 6 | 角色密钥 | 后端 KMS 支持 Ed25519，各运营角色使用 KMS 密钥 |
+| 7 | 合规后端 | 在现有 `mstocks-aml` 中兼容 Solana，尽量不改 EVM 逻辑（§11） |
+
+---
+
+## 11. 配套服务：合规后端（mstocks-aml）
+
+「先用后查」的后端部分。仓库 `mstocks-aml`（Go，原先只支持 EVM），分支 `feat/solana-support`。同一个程序通过配置 `chain_type: solana` 切换，每条链一个实例、一个数据库；处理器、同步器、recheck、HTTP 接口与 EVM 共用。
+
+```
+Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ──► aml-gateway（黑名单）
+                                                  │
+                                                  ▼
+                                    sanctioned_addresses（目标状态，待同步）
+                                                  │
+                                                  ▼
+                       同步器 ──► Core freeze / thaw（FREEZER / UNFREEZER 签名）
+```
+
+| | EVM（不变） | Solana |
+| --- | --- | --- |
+| 索引 | ERC20 `Transfer` 日志 | 按 mint 拉交易历史（`getSignaturesForAddress`），用交易前后的余额变化还原转账；每个 mint 一个签名游标 |
+| 拉黑 | `ComplianceRegistry.sanctionUsers` | Core `freeze`：冻结该钱包在所有已登记 mint 下的全部余额账户 |
+| 解除 | `unsanctionUsers` | Core `thaw`（需 `UNFREEZER` 密钥，可选） |
+| 签名 | secp256k1（本地 / AWS KMS） | Ed25519（本地 keypair / AWS KMS `ECC_NIST_EDWARDS25519`） |
+
+**要点：**
+- **索引完整性**：Token-2022 对带这些扩展的 mint 拒绝不带 mint 账户的旧版 `Transfer`（测试 `transfers_must_carry_the_mint_account`），所以 mint 的交易历史覆盖全部转账、CCIP 铸币 / 销毁和 clawback。记录的是钱包（owner），不是余额账户。默认按 finalized 读取，无需处理回滚。
+- **新账户**：钱包被冻结后仍可能出现新的余额账户（另一个 mint 的账户，或 CCIP 跨链铸币自动创建的 ATA）。已冻结的账户不能收币，所以新进来的币一定在新账户里。索引器发现受制裁钱包有资金变动时，把它重新标为待同步，同步器随即冻结新账户。
+- **是否需要上链**：钱包可能部分冻结，同步器按目标状态判断：拉黑要求没有未冻结账户，解除要求没有冻结账户；已满足则不发交易。Core 跳过已处于目标状态的账户，失败重试是安全的。每笔交易 20 个账户，可配置优先费。
+- **解冻**：按 §4，`UNFREEZER` 在多签手里。后端不配置解冻密钥时，解除拉黑的记录重试后停住，由多签执行 `freeze.ts --thaw`；也可以给后端单独配一个 Unfreezer 密钥。
+- **签名与启动检查**：生产用 AWS KMS Ed25519（`ED25519_SHA_512`，原始消息），签完在本地验签。启动时检查签名者持有对应角色、配置的 mint 已在 Core 登记。签名者自付手续费，需要保持 SOL 余额。
+- **对 EVM 代码的改动**：处理器的地址小写化改为可配置（Solana 地址区分大小写，EVM 仍转小写）；同步器增加一个可选接口用于按目标状态判断（EVM 客户端不实现，行为不变）；数据库迁移 006 加宽地址和交易哈希字段，新增游标表；启动时按 `chain_type` 选择组件。
+
+**测试（全部通过）：**
+- 单元测试：签名器（含 KMS 模拟：密钥类型、算法、坏签名）、freeze / thaw 指令布局、按 mint 分组和分批、幂等、余额变化还原转账、分页与游标续跑、地址大小写、按目标状态判断。
+- EVM 回归：`go test -race ./...` 全量通过；Go 1.24（Dockerfile 版本）编译通过。
+- 端到端 `scripts/solana-e2e.sh`：本地验证节点 + Core + 两个 mint + 临时 Postgres + 模拟 AML 网关。覆盖：转给黑名单钱包 → 其账户被冻结；干净钱包不受影响；黑名单钱包在另一个 mint 下新建的账户（模拟 CCIP 铸币）→ 被冻结；向已冻结账户转账被拒；移出黑名单并触发 recheck → 全部账户被解冻。
+
+**上线前需确认：** AML 网关的 Solana 链名（配置项 `indexer.chain_name`）；RPC 服务商支持 `getSignaturesForAddress`、`getTransaction` 和按 Token-2022 过滤的 `getTokenAccountsByOwner`；Freezer 的 KMS 密钥及 SOL 余额；后端是否持有 Unfreezer 密钥。
