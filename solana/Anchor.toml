@@ -1,0 +1,17 @@
+[toolchain]
+anchor_version = "1.2.2"
+solana_version = "4.4.0"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+mstocks_core = "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd"
+
+[provider]
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "npm test"

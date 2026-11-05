@@ -1,0 +1,20 @@
+{
+  "name": "mstocks-solana-scripts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "init-core": "tsx scripts/init-core.ts",
+    "grant-role": "tsx scripts/grant-role.ts",
+    "create-mint": "tsx scripts/create-mint.ts",
+    "handoff-mint-authority": "tsx scripts/handoff-mint-authority.ts",
+    "local-e2e": "bash scripts/local-e2e.sh"
+  },
+  "dependencies": {
+    "@solana-program/system": "^0.16.0",
+    "@solana-program/token-2022": "^0.20.0",
+    "@solana/kit": "^8.6.0",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
