@@ -114,7 +114,7 @@
 
 参数直接沿用 Mantle `setUIMultiplier` 的单位（1e18 定点 + Unix 秒），两边下发同一组值。
 
-一致性由运营流程和对账保证：运营在 Mantle 与 Solana 下发同一组参数，对账服务比对两链状态（不在本次范围）。方案 A（CCIP 消息同步）本次不实现。
+一致性由运营流程和对账保证：运营在 Mantle 与 Solana 下发同一组参数，`check-multiplier.ts` 比对两链状态（单次运行；定时调度与告警由后端负责，不在本次范围）。方案 A（CCIP 消息同步）本次不实现。
 
 ### 5.3 暂停
 
@@ -181,6 +181,7 @@
 | 授予角色 | `grant-role.ts` / `revoke-role.ts` |
 | 第 1–4 步 | `create-mint.ts` |
 | 补调度待生效的 multiplier | `schedule-multiplier.ts` |
+| 核对两链 multiplier（方案 B） | `check-multiplier.ts` |
 | 第 5 步 CCIP 注册 | 按 Chainlink 自助流程操作，未脚本化（等 CCIP 就绪后在 devnet 验证） |
 | 第 6 步 | `handoff-mint-authority.ts`（默认只演练，`--yes` 才执行） |
 | 检查结果 | `show-mint.ts` |
@@ -198,6 +199,7 @@
 | 拉黑 / 解除 | `freeze.ts`（`--thaw`） | `--owner <钱包>` 会通过 RPC 找出该钱包在此 mint 下的所有余额账户（含非 ATA），每批 20 个发送，即后端拉黑时的流程 |
 | 强制划转 | `clawback.ts` | 划到托管账户，源账户最终保持冻结 |
 | 更新元数据 | `update-metadata.ts` | 字段变长时先给 mint 补足租金，再调用 Core |
+| multiplier 对账 | `check-multiplier.ts` | 方案 B 的对账工具：Mantle token 地址从 Core 的登记信息读取，按同一时刻比对两链的当前值和待生效值（数值 + 生效时间）；不一致时退出码为 1，便于定时任务告警；生效时间前后 60 秒内的不一致只告警，因为两链时钟可能有几秒差 |
 | 查看账户 | `show-account.ts` | 余额与冻结状态 |
 | 测试铸币 | `dev-mint-to.ts` | 仅限本地 / devnet，在交出铸造权之前使用 |
 
@@ -243,6 +245,8 @@ solana/
 | 交易限制 | 冻结 20 个账户、暂停 8 个 mint 都在 200k CU 和 1232 字节以内 | ✅ |
 
 **本地端到端（`npm run local-e2e`）：** 在本地验证节点上依次运行全部脚本：初始化 → 授予角色 → 创建并登记 mint → 调度 multiplier → 铸币 → 按钱包拉黑 → 强制划转 → 解冻 → 暂停 / 恢复 → 全局暂停 → 更新元数据（含新增字段）→ 撤销角色 → 交出铸造权演练。全部通过。
+
+**对账测试（`scripts/test-check-multiplier.sh`）：** 在 anvil 上部署真实的 `ScaledToken`（ERC1967 代理），在本地 Solana 链上登记对应 mint：两链调度相同的值时结果为 OK（退出码 0）；Solana 单独改值后结果为 MISMATCH（退出码 1）。通过。
 
 **devnet 冒烟测试（`scripts/devnet-smoke.sh`）：** Core 已部署到 devnet（`3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd`，链上字节与本地构建一致）。在 devnet 上跑通：初始化 → 授予角色 → 创建并登记测试 mint（`7bopkv9QKKHNiHKbphGrDKJWr5V6tW3iz63NW9EQQLeG`）→ 调度 multiplier（1.5×）→ 铸币 → 按钱包拉黑 → 强制划转 → 解冻 → 全局暂停 / 恢复 → 新增元数据字段。最终链上配置与 §6 逐项一致。
 

@@ -34,6 +34,7 @@ anchor build                       # program + IDL (target/idl/mstocks_core.json
 scripts/fetch-fixtures.sh          # mainnet Token-2022 → tests/fixtures/token2022.so
 cargo test -p mstocks-core         # LiteSVM integration tests
 npm install && npm run local-e2e   # every script end-to-end on a local validator
+scripts/test-check-multiplier.sh   # reconciliation against a real ScaledToken on anvil
 ```
 
 ## Scripts
@@ -47,6 +48,7 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | `grant-role.ts` | Admin | Grant `MultiplierScheduler`, `Pauser`, `Unpauser`, `Freezer`, `Unfreezer`, `Clawback`, `MetadataOps` |
 | `create-mint.ts` | Deployer + admin | Create a mint with all extensions and metadata (incl. ISIN), then `register_mint` |
 | `schedule-multiplier.ts` | `MultiplierScheduler` | Schedule the same `(multiplier, effectiveAt)` sent to Mantle |
+| `check-multiplier.ts` | — | Reconcile each mint's multiplier with its Mantle `ScaledToken` (address read from Core); exits 1 on mismatch for alerting. Needs `MANTLE_RPC_URL` |
 | `handoff-mint-authority.ts` | Deployer (current mint authority) | Give the mint authority to the CCIP pool signer PDA (dry run unless `--yes`) |
 | `pause.ts` | `Pauser` / `Unpauser` (`--resume`) | Pause or resume one mint |
 | `pause-all.ts` | `Pauser` | Emergency pause of every registered mint, 8 per transaction (`--dry-run` lists them; `--mints` if the RPC rejects `getProgramAccounts`) |
