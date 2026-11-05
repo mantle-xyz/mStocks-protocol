@@ -35,7 +35,11 @@ scripts/fetch-fixtures.sh          # mainnet Token-2022 → tests/fixtures/token
 cargo test -p mstocks-core         # LiteSVM integration tests
 npm install && npm run local-e2e   # every script end-to-end on a local validator
 scripts/test-check-multiplier.sh   # reconciliation against a real ScaledToken on anvil
+cargo fmt --check && cargo clippy -p mstocks-core --all-targets -- -D warnings
 ```
+
+CI (`.github/workflows/solana.yml`) runs rustfmt, `cargo build-sbf`, clippy, the LiteSVM tests and a
+typecheck of the scripts on every change under `solana/`.
 
 ## Scripts
 

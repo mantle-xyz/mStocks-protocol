@@ -1,0 +1,81 @@
+name: Solana
+
+permissions:
+  contents: read
+
+on:
+  push:
+    paths: ["solana/**", ".github/workflows/solana.yml"]
+  pull_request:
+    paths: ["solana/**", ".github/workflows/solana.yml"]
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: solana
+
+env:
+  # Keep in sync with solana/Anchor.toml (solana_version).
+  AGAVE_VERSION: "4.4.0"
+
+jobs:
+  check:
+    name: Solana program
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Install Rust (solana/rust-toolchain.toml)
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+
+      - name: Cache Agave and platform tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
+          key: agave-${{ env.AGAVE_VERSION }}-${{ runner.os }}
+
+      - name: Install Agave
+        run: |
+          if [ ! -x "$HOME/.local/share/solana/install/releases/$AGAVE_VERSION/solana-release/bin/cargo-build-sbf" ]; then
+            sh -c "$(curl -sSfL https://release.anza.xyz/v$AGAVE_VERSION/install)"
+          fi
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: solana
+
+      - name: Rustfmt
+        run: cargo fmt --check
+
+      - name: Build program
+        run: cargo build-sbf
+
+      # The tests run against the mainnet Token-2022 binary (gitignored).
+      - name: Fetch Token-2022 fixture
+        run: |
+          for i in 1 2 3 4 5; do scripts/fetch-fixtures.sh && exit 0; sleep $((i * 10)); done
+          exit 1
+
+      - name: Clippy
+        run: cargo clippy -p mstocks-core --all-targets -- -D warnings
+
+      - name: Integration tests (LiteSVM)
+        run: cargo test -p mstocks-core
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: solana/package-lock.json
+
+      - name: Typecheck scripts
+        run: |
+          npm ci
+          npx tsc --noEmit -p tsconfig.json
