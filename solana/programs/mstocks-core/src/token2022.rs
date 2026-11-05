@@ -71,6 +71,20 @@ pub fn set_frozen<'info>(
     )
 }
 
+/// Sets the state every new token account of `mint` starts in (Default Account State extension;
+/// the freeze authority signs).
+pub fn set_default_account_state<'info>(
+    token_program: &AccountInfo<'info>,
+    mint: &AccountInfo<'info>,
+    authority: &Authority<'_, 'info>,
+    frozen: bool,
+) -> Result<()> {
+    use spl_token_2022::{extension::default_account_state::instruction::update_default_account_state, state::AccountState};
+    let state = if frozen { AccountState::Frozen } else { AccountState::Initialized };
+    let ix = update_default_account_state(token_program.key, mint.key, authority.account.key, &[], &state)?;
+    authority.invoke(&ix, &[mint.clone(), authority.account.clone(), token_program.clone()])
+}
+
 /// Transfer as the mint's permanent delegate. The mint's Transfer Hook is dormant, so no extra
 /// hook accounts are needed.
 #[allow(clippy::too_many_arguments)]

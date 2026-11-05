@@ -56,6 +56,7 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | `clawback.ts` | `Clawback` | Move tokens from an account to custody as permanent delegate; the source ends frozen |
 | `update-metadata.ts` | `MetadataOps` | Update name / symbol / uri / any key (e.g. isin); tops up the mint's rent first |
 | `revoke-role.ts` | Admin | Revoke a role |
+| `set-default-account-state.ts` | Admin | Compliance policy switch: new token accounts start frozen (`--frozen`) or usable (default) |
 | `show-mint.ts` / `show-account.ts` | — | Print a mint's configuration / a token account's balance and state |
 | `dev-mint-to.ts` | Mint authority | Local/devnet only: mint before the CCIP handoff |
 

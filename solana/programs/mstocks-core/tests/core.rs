@@ -865,3 +865,38 @@ fn tx_size(env: &Env, ixs: &[Instruction], signers: &[&Keypair]) -> usize {
     let tx = Transaction::new_signed_with_payer(ixs, Some(&env.payer.pubkey()), &all, env.svm.latest_blockhash());
     1 + 64 * tx.signatures.len() + tx.message.serialize().len()
 }
+
+#[test]
+fn admin_switches_default_account_state() {
+    let mut env = Env::new();
+    let m = env.registered_mint();
+    let set = |env: &Env, signer: &Keypair, frozen: bool| {
+        env.core_ix(
+            mstocks_core::accounts::SetDefaultAccountState {
+                admin: signer.pubkey(),
+                config: env.config,
+                mint: m.mint,
+                mint_state: pda(&[MINT_SEED, m.mint.as_ref()]),
+                authority: env.authority,
+                token_program: TOKEN_2022,
+            },
+            mstocks_core::instruction::SetDefaultAccountState { frozen },
+            vec![],
+        )
+    };
+
+    let stranger = env.operator(Role::Freezer);
+    let ix = set(&env, &stranger, true);
+    assert!(env.send(&[ix], &[&stranger]).is_err(), "only the admin switches the policy");
+
+    let admin = env.admin.insecure_clone();
+    let ix = set(&env, &admin, true);
+    env.send(&[ix], &[&admin]).unwrap();
+    let frozen_new = env.token_account(&m.mint, &Pubkey::new_unique());
+    assert_eq!(env.token(&frozen_new).1, AccountState::Frozen, "new accounts start frozen");
+
+    let ix = set(&env, &admin, false);
+    env.send(&[ix], &[&admin]).unwrap();
+    let usable_new = env.token_account(&m.mint, &Pubkey::new_unique());
+    assert_eq!(env.token(&usable_new).1, AccountState::Initialized, "new accounts start usable again");
+}

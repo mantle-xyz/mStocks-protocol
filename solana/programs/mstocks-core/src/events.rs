@@ -70,6 +70,12 @@ pub struct ClawedBack {
 }
 
 #[event]
+pub struct DefaultAccountStateSet {
+    pub mint: Pubkey,
+    pub frozen: bool,
+}
+
+#[event]
 pub struct MetadataUpdated {
     pub mint: Pubkey,
     pub field: String,

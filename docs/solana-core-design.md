@@ -89,6 +89,7 @@
 | `revoke_role(role, member)` | Admin | — | 关闭 `RoleEntry` |
 | `renounce_role(role)` | 角色成员本人 | — | 关闭自己的 `RoleEntry` |
 | `register_mint(mantle_token)` | Admin | 见下 | 创建 `MintState` |
+| `set_default_account_state(frozen)` | Admin | mint 已登记 | 切换合规策略：新账户默认冻结（先审后用）或默认可用（先用后查，当前）。属于策略变更，所以由 Admin（Squads）执行，类似 Mantle 上只有 admin 能调的 `updateCompliance` |
 
 `register_mint` 的 Mint 配置校验（确保代币一上线就处于受控状态）：
 - 属于 Token-2022 程序，精度为 9；
@@ -230,7 +231,7 @@ solana/
 
 ## 8. 测试计划
 
-**Rust 集成测试（`cargo test -p mstocks-core`，19 个，全部通过）：**
+**Rust 集成测试（`cargo test -p mstocks-core`，20 个，全部通过）：**
 
 | 类别 | 覆盖内容 | 状态 |
 | --- | --- | --- |
@@ -239,12 +240,13 @@ solana/
 | `register_mint` | 合规配置通过；精度、冻结权、Hook 程序、Hook 管理权、铸造权、Metadata Pointer 管理权、多余扩展七类错误配置被拒；不能重复登记 | ✅ |
 | multiplier | 范围上下界、通知期、过去时间、最远生效时间；无角色被拒；覆盖未生效值；到点后 UI 数量正确 | ✅ |
 | 暂停 | 暂停后转账、铸造被拒；暂停与恢复角色分离；批量暂停；批量暂停参数不成对被拒 | ✅ |
+| 合规策略 | 只有 Admin 能切换默认账户状态；切换为冻结后新账户默认冻结，切回后新账户默认可用 | ✅ |
 | 合规 | 批量冻结（重复发送不报错）；冻结后不能转出、不能收币、不能收 CCIP 铸币；冻结员不能解冻；其他 mint 的账户被拒；clawback（源账户冻结或未冻结，最终都冻结） | ✅ |
 | 元数据 | 更新名称 | ✅ |
 | 兼容性 | 休眠 Hook 下 4 账户转账成功（模拟 CCIP Router） | ✅ |
 | 交易限制 | 冻结 20 个账户、暂停 8 个 mint 都在 200k CU 和 1232 字节以内 | ✅ |
 
-**本地端到端（`npm run local-e2e`）：** 在本地验证节点上依次运行全部脚本：初始化 → 授予角色 → 创建并登记 mint → 调度 multiplier → 铸币 → 按钱包拉黑 → 强制划转 → 解冻 → 暂停 / 恢复 → 全局暂停 → 更新元数据（含新增字段）→ 撤销角色 → 交出铸造权演练。全部通过。
+**本地端到端（`npm run local-e2e`）：** 在本地验证节点上依次运行全部脚本：初始化 → 授予角色 → 创建并登记 mint → 调度 multiplier → 铸币 → 按钱包拉黑 → 强制划转 → 解冻 → 暂停 / 恢复 → 全局暂停 → 更新元数据（含新增字段）→ 切换默认账户状态 → 撤销角色 → 交出铸造权演练。全部通过。
 
 **对账测试（`scripts/test-check-multiplier.sh`）：** 在 anvil 上部署真实的 `ScaledToken`（ERC1967 代理），在本地 Solana 链上登记对应 mint：两链调度相同的值时结果为 OK（退出码 0）；Solana 单独改值后结果为 MISMATCH（退出码 1）。通过。
 
@@ -261,6 +263,7 @@ solana/
 - multiplier 换算：u128 → f64 的精度损失在链下调度阶段控制（最多 15 位有效数字）。
 - Core 的 upgrade authority 交给 Squads 多签 + Timelock。`initialize` 要求 upgrade authority 签名，所以顺序是：部署者部署 → `init-core` → 移交 upgrade authority。
 - `register_mint` 使用扩展白名单：mint 上任何 Core 不掌控的扩展都会被拒绝，避免留下后门权限。
+- 若将来用 `set_default_account_state` 切换到「先审后用」，每个新账户都需要先解冻；目前解冻权（`UNFREEZER`）在多签手里，日常开户太慢，届时需要为后端新增一个只能解冻新账户的「开户」角色。
 - 上线前做独立的 Solana 审计。
 
 ---

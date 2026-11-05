@@ -80,6 +80,11 @@ pub mod mstocks_core {
         instructions::compliance::clawback(ctx, amount)
     }
 
+    /// Admin-only policy switch: `frozen = true` makes new token accounts start frozen.
+    pub fn set_default_account_state(ctx: Context<SetDefaultAccountState>, frozen: bool) -> Result<()> {
+        instructions::account_state::set_default_account_state(ctx, frozen)
+    }
+
     pub fn update_metadata(ctx: Context<UpdateMetadata>, field: MetadataField, value: String) -> Result<()> {
         instructions::metadata::update_metadata(ctx, field, value)
     }

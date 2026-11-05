@@ -80,6 +80,12 @@ npx tsx scripts/update-metadata.ts --operator "$WORK/ops.json" --mint "$MINT" --
 npx tsx scripts/update-metadata.ts --operator "$WORK/ops.json" --mint "$MINT" --field cusip --value 037833100
 npx tsx scripts/show-mint.ts --mint "$MINT" | grep TokenMetadata
 
+echo "== policy switch: new accounts start frozen, then back to usable"
+npx tsx scripts/set-default-account-state.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$MINT" --frozen
+npx tsx scripts/show-mint.ts --mint "$MINT" | grep DefaultAccountState
+npx tsx scripts/set-default-account-state.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$MINT"
+npx tsx scripts/show-mint.ts --mint "$MINT" | grep DefaultAccountState
+
 echo "== revoke Clawback from ops"
 npx tsx scripts/revoke-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role Clawback --member "$(pk ops)"
 
