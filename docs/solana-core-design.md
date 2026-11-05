@@ -319,4 +319,8 @@ Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ─
 - EVM 回归：`go test -race ./...` 全量通过；Go 1.24（Dockerfile 版本）编译通过。
 - 端到端 `scripts/solana-e2e.sh`：本地验证节点 + Core + 两个 mint + 临时 Postgres + 模拟 AML 网关。覆盖：转给黑名单钱包 → 其账户被冻结；干净钱包不受影响；黑名单钱包在另一个 mint 下新建的账户（模拟 CCIP 铸币）→ 被冻结；向已冻结账户转账被拒；移出黑名单并触发 recheck → 全部账户被解冻。
 
-**上线前需确认：** AML 网关的 Solana 链名（配置项 `indexer.chain_name`）；RPC 服务商支持 `getSignaturesForAddress`、`getTransaction` 和按 Token-2022 过滤的 `getTokenAccountsByOwner`；Freezer 的 KMS 密钥及 SOL 余额；后端是否持有 Unfreezer 密钥。
+**链名：** 配置项 `indexer.chain_name`（数据库与 AML 网关共用）主网为 `solana`，devnet 为 `solana_devnet`。
+
+**RPC：** 已在 Alchemy devnet 上逐个验证服务用到的方法：`getSignaturesForAddress`（limit 1000、`before` / `until` 分页、finalized）、`getTransaction`（v0 交易，余额变化带 owner）、按 Token-2022 过滤的 `getTokenAccountsByOwner`、`getMultipleAccounts`、`getLatestBlockhash`、`getBlockHeight`、`getSignatureStatuses`，均可用。
+
+**上线前需确认：** Freezer 的 KMS 密钥及 SOL 余额；后端是否持有 Unfreezer 密钥。
