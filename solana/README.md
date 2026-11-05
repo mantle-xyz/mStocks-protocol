@@ -5,7 +5,9 @@ Token-2022 mints. Design: [docs/solana-core-design.md](../docs/solana-core-desig
 
 Every privileged Token-2022 authority of an mStocks mint (multiplier, pause, freeze, metadata,
 permanent delegate) is held by Core's authority PDA and exercised only through role-checked
-instructions that mirror the Mantle contracts. Minting belongs to the CCIP BurnMint pool; the
+instructions that mirror the Mantle contracts. Mantle is the issuing chain and CCIP runs lock/mint:
+a LockRelease pool on Mantle locks and releases, and the BurnMint pool on Solana — the only minter
+— mints and burns, so Solana's supply always equals the amount locked on Mantle (÷1e9). The
 Transfer Hook extension is present but dormant and controlled by a Squads multisig.
 
 ## Layout

@@ -10,10 +10,10 @@
 - 发币与配置脚本：创建带扩展的 Mint、接入 Core、注册 CCIP pool。
 - 测试：基于 LiteSVM，加载主网版 Token-2022 运行。
 
-**不在本次范围：** Mantle 侧合约（自定义 Token Pool、multiplier 发送合约）、后端服务（事件监听、黑名单、冻结调用）、前端。
+**不在本次范围：** Mantle 侧的 CCIP LockRelease pool 部署与配置（CCIP 标准合约，无需自研）、后端服务（事件监听、黑名单、冻结调用）、前端。
 
 **已确定的前提：**
-- 精度 9 位；Mantle 为唯一发行链；Solana 上的币只由 CCIP BurnMint pool 铸造。
+- 精度 9 位；Mantle 为唯一发行链；CCIP 采用 lock / mint：Mantle 侧 LockRelease pool 锁定 / 释放，Solana 侧 BurnMint pool 铸造 / 销毁。Solana 上的币只由 CCIP BurnMint pool 铸造，其总量等于 Mantle pool 中锁定的数量（÷1e9）。
 - 合规采用「先用后查」：黑名单在后端，后端调用 Core 冻结账户。
 - 不启用 Transfer Hook；Mint 上预留休眠的 Hook 扩展，其 authority 由 Squads 多签直接持有。
 - multiplier 采用方案 B：两条链各自调度，CCIP 只负责代币跨链。
