@@ -323,6 +323,7 @@ Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ─
 - 单元测试：签名器（含 KMS 模拟：密钥类型、算法、坏签名）、freeze / thaw 指令布局、按 mint 分组和分批、幂等、余额变化还原转账、分页与游标续跑、地址大小写、按目标状态判断。
 - EVM 回归：`go test -race ./...` 全量通过；Go 1.24（Dockerfile 版本）编译通过。
 - 端到端 `scripts/solana-e2e.sh`：本地验证节点 + Core + 两个 mint + 临时 Postgres + 模拟 AML 网关。覆盖：转给黑名单钱包 → 其账户被冻结；干净钱包不受影响；黑名单钱包在另一个 mint 下新建的账户（模拟 CCIP 铸币）→ 被冻结；把有余额的非 ATA 账户所有权转给黑名单钱包 → 对账器将其冻结；向已冻结账户转账被拒；移出黑名单并触发 recheck → 全部账户被解冻；全部 5 笔转账都被索引。
+- devnet 实测：服务连 devnet 上的 Core 和测试 mint，铸币到黑名单钱包的新账户 → 服务自动冻结（[交易](https://explorer.solana.com/tx/vs8J1Kmey8igByecsSKy9TK9ievuaHA35qTKJks4SxNBY8eVyM5RX5EzuNaN22hUPr5ufT15vWeePfAoYBoocqe?cluster=devnet)）；干净钱包不受影响；移出黑名单后自动解冻（[交易](https://explorer.solana.com/tx/3A696z7b6tb1J8PYfxR8my3f3Fu5JmCNTkge29STFY9E2DojZCwkwhyYbBbHooNr8qoXAZt3HDGkCcWCNrDgs2e1?cluster=devnet)）。
 
 **链名：** 配置项 `indexer.chain_name`（数据库与 AML 网关共用）主网为 `solana`，devnet 为 `solana_devnet`。
 
