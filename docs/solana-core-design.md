@@ -184,7 +184,7 @@
 | 第 1–4 步 | `create-mint.ts` |
 | 补调度待生效的 multiplier | `schedule-multiplier.ts` |
 | 核对两链 multiplier（方案 B） | `check-multiplier.ts` |
-| 第 5 步 CCIP 注册 | 按 Chainlink 自助流程操作，未脚本化（devnet ↔ Mantle Sepolia lane 已开通，待验证；参数见下表） |
+| 第 5 步 CCIP 注册 | `ccip-register.ts`：注册 token 管理员（提出 + 接受）、初始化 BurnMint 池、池代币账户、远端链配置（代币、池、精度）、限速、地址查找表、`set_pool`；已完成的步骤自动跳过。主网上之后需把 token 管理员和池的所有权交给 Squads（未脚本化） |
 | 第 6 步 | `handoff-mint-authority.ts`（默认只演练，`--yes` 才执行） |
 | 检查结果 | `show-mint.ts` |
 
@@ -270,7 +270,12 @@ solana/
 
 **合规后端：** 见 §11。
 
-**未覆盖：** 真实 CCIP 环境下的注册、跨链铸币与销毁。Solana devnet ↔ Mantle Sepolia 的 lane 已开通（参数见 §6），待在 devnet 上执行。
+**CCIP 实测（Solana devnet ↔ Mantle Sepolia，2026-11-10）：** 两边各部署一个测试代币：Mantle 上是 ScaledToken + LockRelease 池（v1.6.1），Solana 上是 Core 登记的 mint + BurnMint 池，由 `ccip-register.ts` 注册。
+- Mantle → Solana：1 个代币约 24 分钟到账，主要在等 Mantle 的最终确认（落后链头约 25 分钟）；Solana 侧由 CCIP 执行，经 BurnMint 池铸币（[交易](https://explorer.solana.com/tx/2fsFDo24uLUCbDPj5uP8CQW7MASJqmKuWsNoSXqHLWwbYtdmGsWLAvmHXr6v5KxNhEq3pXeXZSsBaiFKuBZHXnoY?cluster=devnet)），18 位到 9 位的精度换算正确。
+- Solana → Mantle：用 `ccip-send.ts` 发出 0.5 个代币，不到 1 分钟在 Mantle 释放。其中用户转入池的 `TransferChecked` 只带 4 个账户，**在预留但不挂程序的 Transfer Hook 下成功**，验证了 §1 的前提。
+- 发送需要先把 router 的 `fee_billing_signer` 授权为发送者代币账户的 delegate，计算额度约需 40 万（默认 20 万不够）。
+
+**未覆盖：** 主网 token 管理员和池所有权交给 Squads；正式代币的限速参数。
 
 ---
 

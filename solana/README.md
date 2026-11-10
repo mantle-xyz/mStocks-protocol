@@ -54,6 +54,8 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | `schedule-multiplier.ts` | `MultiplierScheduler` | Schedule the same `(multiplier, effectiveAt)` sent to Mantle |
 | `check-multiplier.ts` | — | Reconcile each mint's multiplier with its Mantle `ScaledToken` (address read from Core); exits 1 on mismatch for alerting. Needs `MANTLE_RPC_URL` |
 | `handoff-mint-authority.ts` | Deployer (current mint authority) | Give the mint authority to the CCIP pool signer PDA (dry run unless `--yes`) |
+| `ccip-register.ts` | Deployer (current mint authority) | Register the mint with CCIP for one remote EVM chain: token admin (propose + accept), BurnMint pool, pool token account, remote chain (token, pool, decimals), rate limits, pool lookup table, `set_pool`. Skips steps already done |
+| `ccip-send.ts` | Token holder | Send tokens to an EVM address through CCIP, paying in SOL (testing / ops checks) |
 | `pause.ts` | `Pauser` / `Unpauser` (`--resume`) | Pause or resume one mint |
 | `pause-all.ts` | `Pauser` | Emergency pause of every registered mint, 8 per transaction (`--dry-run` lists them; `--mints` if the RPC rejects `getProgramAccounts`) |
 | `freeze.ts` | `Freezer` / `Unfreezer` (`--thaw`) | Freeze or thaw token accounts, 20 per transaction; `--owner <wallet>` finds every account the wallet holds for the mint (what the backend does on blacklisting) |
@@ -82,18 +84,20 @@ Keep provider URLs with API keys in the environment only. Some providers reject
 
 1. `create-mint.ts` with `--initial-multiplier-1e18` = Mantle `uiMultiplier()`. If Mantle has a
    pending multiplier, run `schedule-multiplier.ts` with the same values right after.
-2. Register the token with CCIP and configure the BurnMint pool, following Chainlink's self-serve
-   flow for Solana. This needs the current mint authority (the deployer) to sign, so it must happen
-   before step 3:
-   - propose the token administrator (Squads) on the CCIP Router and accept it from Squads;
-   - initialize the BurnMint pool for the mint, create the pool signer's token account, and
-     register the pool with the Router;
-   - configure the Mantle remote chain (pool + token address, decimals 18) and rate limits.
+2. `ccip-register.ts` with the Mantle token, its LockRelease pool and the Mantle chain selector.
+   It needs the current mint authority (the deployer) to sign, so it must run before step 3. The
+   deployer ends up as token admin and pool owner; on mainnet, hand both to Squads afterwards
+   (router `transfer_admin_role_token_admin_registry`, pool `transfer_ownership`; not scripted).
+   On Mantle: deploy a LockRelease pool, register it (`registerAccessControlDefaultAdmin`,
+   `acceptAdminRole`, `setPool`) and `applyChainUpdates` with the Solana pool config PDA
+   (`["ccip_tokenpool_config", mint]` under the pool program) and the mint, both as raw 32 bytes.
 3. `handoff-mint-authority.ts --yes`: the CCIP pool signer becomes the only minter.
 4. `show-mint.ts` to confirm the final configuration.
 
-Steps 2–3 have not yet been exercised against a real CCIP deployment. The Solana devnet ↔ Mantle
-Sepolia lane is open (2026-11); both chains use the same onRamp / offRamp for every lane:
+Steps 2–3 ran on Solana devnet ↔ Mantle Sepolia (2026-11-10) with a throwaway token on each side:
+Mantle → Solana delivered 1 token in about 24 minutes (CCIP waits for Mantle finality, about 25
+minutes behind the head); Solana → Mantle released 0.5 in under a minute. Both chains use the same
+onRamp / offRamp for every lane:
 
 | | Solana devnet | Mantle Sepolia |
 | --- | --- | --- |
