@@ -128,6 +128,8 @@
 | `resume(mint)` | `UNPAUSER` | CPI Pausable `resume` |
 | `pause_all` | `PAUSER` | 对 remaining accounts 中所有已登记的 mint 逐个暂停；单笔交易最多约 12 个 mint（每个 mint 占 64 字节），脚本按 8 个一批发送 |
 
+**暂停对 CCIP 的影响：** 暂停后，用户发起的 `ccip_send` 会失败；从 Mantle 跨来的消息也会执行失败（池 MintTo 被拒，整笔回滚，不会少币），而且 DON 不会重试。恢复后，运营需要用 `ccip-manual-exec.ts` 对这类消息逐条手动执行：commit 20 分钟后任何人都可以执行，同一条消息重复执行会被 OffRamp 跳过。
+
 ### 5.4 合规
 
 | 指令 | 签名人 | 动作 |
@@ -213,6 +215,7 @@
 | --- | --- | --- |
 | 暂停 / 恢复 | `pause.ts`（`--resume`） | `PAUSER` / `UNPAUSER` |
 | 全局紧急暂停 | `pause-all.ts`（`--dry-run`） | 从链上找出所有已登记的 mint，8 个一批调用 `pause_all`；RPC 不支持 `getProgramAccounts` 时用 `--mints` 显式传入 |
+| CCIP 入站消息补执行 | `ccip-manual-exec.ts` | 传入执行失败的那笔交易（CCIP Explorer 的消息页上可以找到），复用其中的执行报告和账户，改为调用 OffRamp 的 `manually_execute`；任何人都可以执行，付款人只出手续费 |
 | 拉黑 / 解除 | `freeze.ts`（`--thaw`） | `--owner <钱包>` 会通过 RPC 找出该钱包在此 mint 下的所有余额账户（含非 ATA），每批 20 个发送，即后端拉黑时的流程 |
 | 强制划转 | `clawback.ts` | 划到托管账户，源账户最终保持冻结 |
 | 更新元数据 | `update-metadata.ts` | 字段变长时先给 mint 补足租金，再调用 Core |
