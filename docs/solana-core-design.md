@@ -199,11 +199,13 @@
 | Chain selector | `16423721717087811551` | `8236463271206331221` |
 | Router | `Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C` | `0xFd33fd627017fEf041445FC19a2B6521C9778f86` |
 | OnRamp | Router 本身 | `0xCAC5826F878b3BfEE32404619C762b33ae199c1b` |
-| OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0xeD8abf93091D3F1Bfb6Ce14E9413F02a358A83E3` |
+| OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0x4d8193f845Eb3540e0BdA9451296600362E22B15` |
 | Token pool | BurnMint 程序 `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB`（与主网相同） | LockRelease，经 Token Pool Factory `0x9fCd83bC7F67ADa1fB51a4caBEa333c72B641bd1` 部署 |
 | 注册 | Router 内的 token admin registry | Token Admin Registry `0x0F1eE88A582f31d92510E300fc1330AA5a525D51`，Registry Module `0xf76cE612250eeEb8889F49FBCB11f1c2705305F6` |
 | 其他 | Fee Quoter `FeeQPGkKDeRV1MgoYfMH6L8o3KeuYjwUZrgn4LRKfjHi`，RMN `RmnXLft1mSEwDgMKu2okYuHkiazxntFFcZFrrcXxYg7` | RMN `0xcCB84Ec3F6AFdD2052134f74aaAc95Ae41A7B333` |
 | 手续费代币 | LINK、WSOL | LINK、WMNT |
+
+**Solana → Mantle 的代币 gas 上限（上线前必须处理）：** 我们的 mint 在 Solana Fee Quoter 上没有单独的代币配置，沿用 lane 默认的 `defaultTokenDestGasOverhead = 90000`，即 Mantle 上池的 `releaseOrMint` 最多 9 万 gas。ScaledToken 的转账要做暂停和合规两次外部调用；收款地址第一次持有该代币时余额从 0 写入，总消耗超过 9 万，执行失败，DON 不会重试。只有 Fee Quoter 的 owner（Chainlink）能通过 `set_token_transfer_fee_config` 调高，上线前需请 Chainlink 为每个代币在这条 lane 上设置（建议 150000）。在此之前，失败的消息用 `ccip-manual-exec-evm.sh`（`TOKEN_GAS=150000`）补执行。
 
 **Admin 操作与 Squads：** 需要 Admin 签名的脚本（`grant-role`、`revoke-role`、`create-mint` 中的 `register_mint`）有两种模式：传 keypair 文件时直接签名发送（devnet / 本地）；传 Squads 地址时只打印指令，供提交 Squads 提案。打印模式下付款人也是 vault 本身，因为 Squads 提案只能由 vault 签名，不能夹带本地签名人。
 
@@ -216,6 +218,7 @@
 | 暂停 / 恢复 | `pause.ts`（`--resume`） | `PAUSER` / `UNPAUSER` |
 | 全局紧急暂停 | `pause-all.ts`（`--dry-run`） | 从链上找出所有已登记的 mint，8 个一批调用 `pause_all`；RPC 不支持 `getProgramAccounts` 时用 `--mints` 显式传入 |
 | CCIP 入站消息补执行 | `ccip-manual-exec.ts` | 传入执行失败的那笔交易（CCIP Explorer 的消息页上可以找到），复用其中的执行报告和账户，改为调用 OffRamp 的 `manually_execute`；任何人都可以执行，付款人只出手续费 |
+| CCIP 出站消息在 Mantle 补执行 | `ccip-manual-exec-evm.sh` | Solana → Mantle 的消息在 Mantle 执行失败（代币暂停、收款地址被制裁、限速、gas 不足）时，复用失败交易的执行报告调用 OffRamp 的 `manuallyExecute`；失败状态的消息可立即执行，`TOKEN_GAS` 可调高每个代币的 gas |
 | 拉黑 / 解除 | `freeze.ts`（`--thaw`） | `--owner <钱包>` 会通过 RPC 找出该钱包在此 mint 下的所有余额账户（含非 ATA），每批 20 个发送，即后端拉黑时的流程 |
 | 强制划转 | `clawback.ts` | 划到托管账户，源账户最终保持冻结 |
 | 更新元数据 | `update-metadata.ts` | 字段变长时先给 mint 补足租金，再调用 Core |

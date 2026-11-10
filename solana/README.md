@@ -57,6 +57,7 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | `ccip-register.ts` | Deployer (current mint authority) | Register the mint with CCIP for one remote EVM chain: token admin (propose + accept), BurnMint pool, pool token account, remote chain (token, pool, decimals), rate limits, pool lookup table, `set_pool`. Skips steps already done |
 | `ccip-send.ts` | Token holder | Send tokens to an EVM address through CCIP, paying in SOL (testing / ops checks) |
 | `ccip-manual-exec.ts` | Anyone (pays the fee) | Re-execute an inbound CCIP message whose automatic execution failed (e.g. it arrived while the mint was paused; the DON does not retry), from the failed execution transaction. Allowed 20 minutes after the commit; a second run is skipped by the OffRamp |
+| `ccip-manual-exec-evm.sh` | Anyone (pays the gas) | Same for the Mantle side (Solana → Mantle): re-execute a message whose execution failed (Mantle token paused, receiver sanctioned, inbound rate limit, or out of gas), from the failed execution transaction. `TOKEN_GAS` raises the per-token gas, e.g. 150000 for a receiver that has never held the token |
 | `devnet-ccip-smoke.sh` | Role keys + a holder | Basic-function smoke on a CCIP-connected mint against devnet and Mantle Sepolia: transfer, pause, freeze, clawback, metadata, the same multiplier on both chains, `ccip_send` after it, holder burn |
 | `pause.ts` | `Pauser` / `Unpauser` (`--resume`) | Pause or resume one mint |
 | `pause-all.ts` | `Pauser` | Emergency pause of every registered mint, 8 per transaction (`--dry-run` lists them; `--mints` if the RPC rejects `getProgramAccounts`) |
@@ -106,7 +107,7 @@ onRamp / offRamp for every lane:
 | Chain selector | `16423721717087811551` | `8236463271206331221` |
 | Router | `Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C` | `0xFd33fd627017fEf041445FC19a2B6521C9778f86` |
 | OnRamp | the Router | `0xCAC5826F878b3BfEE32404619C762b33ae199c1b` |
-| OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0xeD8abf93091D3F1Bfb6Ce14E9413F02a358A83E3` |
+| OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0x4d8193f845Eb3540e0BdA9451296600362E22B15` |
 | Token pool | BurnMint program `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB` (same as mainnet) | LockRelease via Token Pool Factory `0x9fCd83bC7F67ADa1fB51a4caBEa333c72B641bd1` |
 | Registry | token admin registry in the Router | Token Admin Registry `0x0F1eE88A582f31d92510E300fc1330AA5a525D51`, Registry Module `0xf76cE612250eeEb8889F49FBCB11f1c2705305F6` |
 | Fee tokens | LINK, WSOL | LINK, WMNT |
