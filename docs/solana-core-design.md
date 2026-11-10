@@ -315,6 +315,7 @@ Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ─
 - **新账户**：钱包被冻结后仍可能出现新的余额账户（另一个 mint 的账户，或 CCIP 跨链铸币自动创建的 ATA）。已冻结的账户不能收币，所以新进来的币一定在新账户里。索引器发现受制裁钱包有资金变动时，把它重新标为待同步，同步器随即冻结新账户。
 - **账户所有权转移**：非 ATA 的余额账户可以用 `SetAuthority` 把所有者改成另一个钱包。这笔交易不带 mint 账户、余额也不变，不会出现在 mint 的交易历史里（已实测），所以别人可以把一个有余额的账户直接「送给」黑名单钱包而不被索引到。已冻结的账户不能转移所有权，所以黑名单钱包只能这样多出账户，不能把账户转走。对策：对账器每隔 `reconcile_interval`（默认 10 分钟）检查全部已拉黑钱包，发现有未冻结账户就重新排队冻结；每轮每个钱包一次 `getTokenAccountsByOwner`。
 - **是否需要上链**：钱包可能部分冻结，同步器按目标状态判断：拉黑要求没有未冻结账户，解除要求没有冻结账户；已满足则不发交易。Core 跳过已处于目标状态的账户，失败重试是安全的。每笔交易 20 个账户，可配置优先费。
+- **AML 网关返回的地址**：线上网关会把返回结果里的地址转成小写。EVM 地址不受影响，但 Solana 地址区分大小写，转小写后会变成无效地址，甚至另一个钱包。服务只用返回结果对应回请求时的地址，入库和查询一律以原地址为准（qa8 上实际踩到后修复）。
 - **解冻**：与 EVM 一致。AML 网关不再命中某地址时（recheck 或新交易触发），数据库把它标为待解除，同步器用后端签名机发 Core `thaw` 解冻其全部账户。默认与冻结使用同一把密钥（需同时持有 `FREEZER` 和 `UNFREEZER`），也可单独配置 `unfreezer`。与 EVM 相同：运营手动冻结、但 AML 判定为干净的地址，如果之后第一次被服务处理（例如出现在新交易中），会被自动解冻。
 - **签名与启动检查**：生产用 AWS KMS Ed25519（`ED25519_SHA_512`，原始消息），签完在本地验签。启动时检查签名者持有对应角色、配置的 mint 已在 Core 登记。签名者自付手续费，需要保持 SOL 余额。
 - **对 EVM 代码的改动**：处理器的地址小写化改为可配置（Solana 地址区分大小写，EVM 仍转小写）；同步器增加一个可选接口用于按目标状态判断（EVM 客户端不实现，行为不变）；数据库迁移 006 加宽地址和交易哈希字段，新增游标表；待处理转账和 recheck 取数按链过滤（单链时结果不变）；启动时为每条启用的链各起一套组件（`evm.enabled` 默认开，现有配置不用改）。
@@ -324,11 +325,12 @@ Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ─
 - EVM 回归：`go test -race ./...` 全量通过；Go 1.24（Dockerfile 版本）编译通过。
 - 端到端 `scripts/solana-e2e.sh`：按部署方式，同一进程、同一数据库跑两条链。本地验证节点 + Core + 两个 mint，anvil + 真实 ComplianceRegistry，临时 Postgres + 模拟 AML 网关。EVM：转给黑名单地址 → 在 ComplianceRegistry 上被制裁，移出后解除。Solana：转给黑名单钱包 → 其账户被冻结；干净钱包不受影响；黑名单钱包在另一个 mint 下新建的账户（模拟 CCIP 铸币）→ 被冻结；把有余额的非 ATA 账户所有权转给黑名单钱包 → 对账器将其冻结；向已冻结账户转账被拒；移出黑名单并触发 recheck → 全部账户被解冻；全部 5 笔转账都被索引。两条链：一次 recheck 同时完成 EVM 解除和 Solana 解冻，数据按链分开，没有混记。
 - devnet 实测：服务连 devnet 上的 Core 和测试 mint，铸币到黑名单钱包的新账户 → 服务自动冻结（[交易](https://explorer.solana.com/tx/vs8J1Kmey8igByecsSKy9TK9ievuaHA35qTKJks4SxNBY8eVyM5RX5EzuNaN22hUPr5ufT15vWeePfAoYBoocqe?cluster=devnet)）；干净钱包不受影响；移出黑名单后自动解冻（[交易](https://explorer.solana.com/tx/3A696z7b6tb1J8PYfxR8my3f3Fu5JmCNTkge29STFY9E2DojZCwkwhyYbBbHooNr8qoXAZt3HDGkCcWCNrDgs2e1?cluster=devnet)）。
+- qa8 实测（devnet，KMS 签名，地址 `E8SV8n…`）：铸币到黑名单钱包的新账户 → 约 4 秒冻结（[交易](https://explorer.solana.com/tx/5jynEk3VtnxE54qWaahozrVGm211CsQUPzcg1DfTPwR6wiJYzx2hEbUhnNsiDWtHWDg1FkiTZwX4LbvDTc5u2Rm7?cluster=devnet)）；黑名单钱包新开的账户收币 → 约 3 秒冻结；有余额的账户所有权转给黑名单钱包 → 由对账器在约 3 分钟内冻结；向已冻结账户转账被拒。
 
 **链名：** 配置项 `solana.chain_name`（数据库与 AML 网关共用）主网为 `solana`，devnet 为 `solana_devnet`。
 
 **RPC：** 已在 Alchemy devnet 上逐个验证服务用到的方法：`getSignaturesForAddress`（limit 1000、`before` / `until` 分页、finalized）、`getTransaction`（v0 交易，余额变化带 owner）、按 Token-2022 过滤的 `getTokenAccountsByOwner`、`getMultipleAccounts`、`getLatestBlockhash`、`getBlockHeight`、`getSignatureStatuses`，均可用。
 
-**qa8 部署：** [mantle-config#17082](https://github.com/mantlenetworkio/mantle-config/pull/17082)，在现有 `mantle-mstocks-aml` 的 sepolia-qa8 上开启 Solana devnet。签名使用和 retry-service 共用的 KMS Ed25519 密钥（`5dc8b92b`，地址 `E8SV8n…`），devnet 上的 `FREEZER` / `UNFREEZER` 已授予。合并后需运维执行 `mantle-manual-awsres --apply`，再部署。
+**qa8 部署（已上线）：** 现有 `mantle-mstocks-aml` 服务的 sepolia-qa8 同时跑 EVM（Mantle 主网镜像，走线上 AML 网关）和 Solana devnet（走 QA AML 网关 `mantle-aml-gateway` sepolia-qa7，用它的测试黑名单测冻结），见 [mantle-config#17082](https://github.com/mantlenetworkio/mantle-config/pull/17082)、[#17092](https://github.com/mantlenetworkio/mantle-config/pull/17092)。签名使用和 retry-service 共用的 KMS Ed25519 密钥（`5dc8b92b`，地址 `E8SV8n…`），devnet 上的 `FREEZER` / `UNFREEZER` 已授予。注意：`mantle-manual-awsres` 不会修改已有服务的 IAM 角色，新增的 KMS 密钥需要运维手动加到角色的 `kmsAccess`；qa8 从功能分支部署，部署工作流的令牌需要 `mantle-xyz/mstocks-aml` 的读权限。
 
 **上线前需准备：** 后端 KMS Ed25519 密钥，由 Admin（Squads）授予 `FREEZER` 和 `UNFREEZER` 两个角色，并保持 SOL 余额支付手续费。
