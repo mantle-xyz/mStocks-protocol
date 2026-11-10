@@ -118,6 +118,8 @@
 
 一致性由运营流程和对账保证：运营在 Mantle 与 Solana 下发同一组参数，`check-multiplier.ts` 比对两链状态（单次运行；定时调度与告警由后端负责，不在本次范围）。方案 A（CCIP 消息同步）本次不实现。
 
+**金额单位：** 链上记账、转账指令和 CCIP 搬运的都是底层数量；显示数量 = 底层数量 × multiplier。两条链的 multiplier 一致时，跨链前后的显示数量一致。钱包和运营工具输入金额时要明确是哪一种（`spl-token` 命令行用的是底层数量）。
+
 ### 5.3 暂停
 
 | 指令 | 签名人 | 动作 |
@@ -262,6 +264,7 @@ solana/
 - `register_mint` 使用扩展白名单：mint 上任何 Core 不掌控的扩展都会被拒绝，避免留下后门权限。
 - 后端 KMS 密钥同时持有 `FREEZER` 和 `UNFREEZER`，与 EVM 上 OPS 既能 sanction 也能 unsanction 一致：密钥泄露时可冻结 / 解冻任意账户，但不能划转资产（`CLAWBACK` 在多签）。Admin 可随时撤销其角色。
 - 若将来用 `set_default_account_state` 切换到「先审后用」，每个新账户都需要先解冻。后端已持有 `UNFREEZER`，技术上可以直接解冻新账户；但该角色能解冻任何账户，若要把开户权限限制为只解冻新账户，届时可新增一个「开户」角色。
+- 持有人可以自行销毁：Token-2022 允许持有人销毁自己的代币，且无法关闭（Mantle 上销毁需要 `BURN_ROLE`）。在 Solana 上销毁的数量对应的代币会永久锁在 Mantle 的 LockRelease 池里，只影响持有人自己，不影响安全；供应对账应校验 Solana 总供应 ≤ Mantle 池锁定量，而不是两者严格相等。
 - 上线前做独立的 Solana 审计。
 
 ---
