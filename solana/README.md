@@ -92,4 +92,17 @@ Keep provider URLs with API keys in the environment only. Some providers reject
 3. `handoff-mint-authority.ts --yes`: the CCIP pool signer becomes the only minter.
 4. `show-mint.ts` to confirm the final configuration.
 
-Steps 2–3 have not yet been exercised against a real CCIP deployment (devnet).
+Steps 2–3 have not yet been exercised against a real CCIP deployment. The Solana devnet ↔ Mantle
+Sepolia lane is open (2026-11); both chains use the same onRamp / offRamp for every lane:
+
+| | Solana devnet | Mantle Sepolia |
+| --- | --- | --- |
+| Chain selector | `16423721717087811551` | `8236463271206331221` |
+| Router | `Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C` | `0xFd33fd627017fEf041445FC19a2B6521C9778f86` |
+| OnRamp | the Router | `0xCAC5826F878b3BfEE32404619C762b33ae199c1b` |
+| OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0xeD8abf93091D3F1Bfb6Ce14E9413F02a358A83E3` |
+| Token pool | BurnMint program `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB` (same as mainnet) | LockRelease via Token Pool Factory `0x9fCd83bC7F67ADa1fB51a4caBEa333c72B641bd1` |
+| Registry | token admin registry in the Router | Token Admin Registry `0x0F1eE88A582f31d92510E300fc1330AA5a525D51`, Registry Module `0xf76cE612250eeEb8889F49FBCB11f1c2705305F6` |
+| Fee tokens | LINK, WSOL | LINK, WMNT |
+
+Source: the [CCIP directory](https://docs.chain.link/ccip/directory/testnet/chain/solana-devnet).

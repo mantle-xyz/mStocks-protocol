@@ -6,7 +6,7 @@ import { address, getAddressEncoder, getProgramDerivedAddress, getUtf8Encoder } 
 import { AuthorityType, getSetAuthorityInstruction } from "@solana-program/token-2022";
 import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
 
-/** CCIP's shared BurnMint token pool program (mainnet). */
+/** CCIP's shared BurnMint token pool program (same program id on mainnet and devnet). */
 const DEFAULT_POOL_PROGRAM = "41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB";
 
 const args = parseArgs();

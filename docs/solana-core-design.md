@@ -184,9 +184,22 @@
 | 第 1–4 步 | `create-mint.ts` |
 | 补调度待生效的 multiplier | `schedule-multiplier.ts` |
 | 核对两链 multiplier（方案 B） | `check-multiplier.ts` |
-| 第 5 步 CCIP 注册 | 按 Chainlink 自助流程操作，未脚本化（等 CCIP 就绪后在 devnet 验证） |
+| 第 5 步 CCIP 注册 | 按 Chainlink 自助流程操作，未脚本化（devnet ↔ Mantle Sepolia lane 已开通，待验证；参数见下表） |
 | 第 6 步 | `handoff-mint-authority.ts`（默认只演练，`--yes` 才执行） |
 | 检查结果 | `show-mint.ts` |
+
+**CCIP 测试网（Solana devnet ↔ Mantle Sepolia，2026-11 已开通）：** 两条链的 onRamp / offRamp 都是各 lane 共用的同一组地址。
+
+| | Solana devnet | Mantle Sepolia |
+| --- | --- | --- |
+| Chain selector | `16423721717087811551` | `8236463271206331221` |
+| Router | `Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C` | `0xFd33fd627017fEf041445FC19a2B6521C9778f86` |
+| OnRamp | Router 本身 | `0xCAC5826F878b3BfEE32404619C762b33ae199c1b` |
+| OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0xeD8abf93091D3F1Bfb6Ce14E9413F02a358A83E3` |
+| Token pool | BurnMint 程序 `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB`（与主网相同） | LockRelease，经 Token Pool Factory `0x9fCd83bC7F67ADa1fB51a4caBEa333c72B641bd1` 部署 |
+| 注册 | Router 内的 token admin registry | Token Admin Registry `0x0F1eE88A582f31d92510E300fc1330AA5a525D51`，Registry Module `0xf76cE612250eeEb8889F49FBCB11f1c2705305F6` |
+| 其他 | Fee Quoter `FeeQPGkKDeRV1MgoYfMH6L8o3KeuYjwUZrgn4LRKfjHi`，RMN `RmnXLft1mSEwDgMKu2okYuHkiazxntFFcZFrrcXxYg7` | RMN `0xcCB84Ec3F6AFdD2052134f74aaAc95Ae41A7B333` |
+| 手续费代币 | LINK、WSOL | LINK、WMNT |
 
 **Admin 操作与 Squads：** 需要 Admin 签名的脚本（`grant-role`、`revoke-role`、`create-mint` 中的 `register_mint`）有两种模式：传 keypair 文件时直接签名发送（devnet / 本地）；传 Squads 地址时只打印指令，供提交 Squads 提案。打印模式下付款人也是 vault 本身，因为 Squads 提案只能由 vault 签名，不能夹带本地签名人。
 
@@ -257,7 +270,7 @@ solana/
 
 **合规后端：** 见 §11。
 
-**未覆盖：** 真实 CCIP 环境下的注册、跨链铸币与销毁（等 CCIP 就绪后在 devnet 验证）。
+**未覆盖：** 真实 CCIP 环境下的注册、跨链铸币与销毁。Solana devnet ↔ Mantle Sepolia 的 lane 已开通（参数见 §6），待在 devnet 上执行。
 
 ---
 
