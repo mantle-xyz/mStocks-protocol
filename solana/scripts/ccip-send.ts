@@ -3,7 +3,7 @@
 // router's fee billing signer as delegate for the amount first. The transaction uses the token's
 // pool lookup table to stay under the size limit. Prints the CCIP message id.
 //   tsx scripts/ccip-send.ts --sender <keypair> --mint <mint> --amount <raw u64> --dest-selector <u64>
-//     --receiver <0x evm address> [--router <id>] [--compute-units 400000]
+//     --receiver <0x evm address> [--router <id>] [--compute-units 400000] [--gas-limit 0]
 import { createHash } from "node:crypto";
 import {
   AccountRole,
@@ -99,8 +99,10 @@ const tokenAccounts = [
 ];
 
 // SVM2AnyMessage { receiver, data, token_amounts, fee_token, extra_args } with GenericExtraArgsV2
-// (tag 0x181dcf10, gas_limit u128 = 0 for a plain token transfer, allow_out_of_order_execution).
-const extraArgs = concat(Uint8Array.from([0x18, 0x1d, 0xcf, 0x10]), u128(0n), Uint8Array.of(1));
+// (tag 0x181dcf10, gas_limit u128, allow_out_of_order_execution). gas_limit is the receiver's
+// ccipReceive gas, 0 for a plain token transfer; it does not change the per-token destGasAmount,
+// which the fee quoter sets.
+const extraArgs = concat(Uint8Array.from([0x18, 0x1d, 0xcf, 0x10]), u128(BigInt(args["gas-limit"] ?? 0)), Uint8Array.of(1));
 const message = concat(
   vec(concat(new Uint8Array(12), receiver)),
   vec(new Uint8Array()),
