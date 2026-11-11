@@ -1,5 +1,5 @@
 // Admin-only compliance policy switch for one mint: new token accounts start frozen (--frozen,
-// "先审后用") or usable (default, today's "先用后查").
+// screen before use) or usable (default, today's screen after use).
 //   tsx scripts/set-default-account-state.ts --payer <keypair> --admin <keypair.json|squads pubkey> --mint <mint> [--frozen]
 import { address } from "@solana/kit";
 import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";

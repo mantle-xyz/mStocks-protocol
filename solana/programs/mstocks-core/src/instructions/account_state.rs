@@ -5,9 +5,10 @@ use crate::events::DefaultAccountStateSet;
 use crate::state::*;
 use crate::token2022::{self, Authority};
 
-/// Switches a mint between "accounts start usable" (today's 先用后查 compliance) and "accounts start
-/// frozen" (先审后用: every new account must be thawed before use). A compliance-policy change,
-/// so it is the admin's (Squads) call, like Mantle's admin-only `updateCompliance`.
+/// Switches a mint between "accounts start usable" (today's screen-after-use compliance) and
+/// "accounts start frozen" (screen before use: every new account must be thawed before use). A
+/// compliance-policy change, so it is the admin's (Squads) call, like Mantle's admin-only
+/// `updateCompliance`.
 #[derive(Accounts)]
 pub struct SetDefaultAccountState<'info> {
     pub admin: Signer<'info>,

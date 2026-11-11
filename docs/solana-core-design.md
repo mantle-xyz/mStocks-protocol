@@ -1,328 +1,329 @@
-# mStocks Solana Core 程序设计文档
+# mStocks Solana Core Program Design
 
-> 状态：已评审（决策见 §10），首版已实现 · 2026-11-05 · 分支 `feat/solana-core`
-> 背景与选型见 [solana-research-report.md](solana-research-report.md)，本文只讲实现。
+> Status: reviewed (decisions in §10), first version implemented · 2026-11-05 · branch `feat/solana-core`
+> Background and option analysis are in the Solana research report; this document covers the implementation only.
 
-## 1. 范围
+## 1. Scope
 
-**本次实现：**
-- `mstocks-core`：Solana 上唯一的自研程序（Anchor）。
-- 发币与配置脚本：创建带扩展的 Mint、接入 Core、注册 CCIP pool。
-- 测试：基于 LiteSVM，加载主网版 Token-2022 运行。
-- 配套合规后端 `mstocks-aml` 的 Solana 适配：监听转账、查黑名单、调用 Core 冻结 / 解冻（§11）。
+**In scope:**
+- `mstocks-core`: the only in-house program on Solana (Anchor).
+- Issuance and setup scripts: create a mint with extensions, hook it up to Core, register the CCIP pool.
+- Tests: LiteSVM, running against the mainnet Token-2022 build.
+- Solana support in the compliance backend `mstocks-aml`: watch transfers, check the blacklist, call Core to freeze / thaw (§11).
 
-**不在本次范围：** Mantle 侧的 CCIP LockRelease pool 部署与配置（CCIP 标准合约，无需自研）、multiplier 对账的定时调度与告警、前端。
+**Out of scope:** deploying and configuring the CCIP LockRelease pool on Mantle (standard CCIP contracts, nothing to build), scheduling and alerting for multiplier reconciliation, frontend.
 
-**已确定的前提：**
-- 精度 9 位；Mantle 为唯一发行链；CCIP 采用 lock / mint：Mantle 侧 LockRelease pool 锁定 / 释放，Solana 侧 BurnMint pool 铸造 / 销毁。Solana 上的币只由 CCIP BurnMint pool 铸造，其总量等于 Mantle pool 中锁定的数量（÷1e9）。
-- 合规采用「先用后查」：黑名单在后端，后端调用 Core 冻结账户。
-- 不启用 Transfer Hook；Mint 上预留休眠的 Hook 扩展，其 authority 由 Squads 多签直接持有。
-- multiplier 采用方案 B：两条链各自调度，CCIP 只负责代币跨链。
-- 开启 Permanent Delegate（delegate = Authority PDA），用于强制划转。
+**Settled assumptions:**
+- 9 decimals; Mantle is the only issuing chain; CCIP uses lock / mint: the LockRelease pool on Mantle locks / releases, the BurnMint pool on Solana mints / burns. Tokens on Solana are minted only by the CCIP BurnMint pool, so the Solana supply equals the amount locked in the Mantle pool (÷1e9).
+- Compliance is "screen after use": the blacklist lives in the backend, which calls Core to freeze accounts.
+- No Transfer Hook; the mint carries a dormant Hook extension whose authority is held directly by the Squads multisig.
+- Multiplier option B: each chain schedules its own; CCIP only moves tokens.
+- Permanent Delegate enabled (delegate = Authority PDA), for clawback.
 
 ---
 
-## 2. 总体结构
+## 2. Overall structure
 
 ```
-          Squads 多签（Admin）        后端 / 运营（各角色密钥）
+          Squads multisig (Admin)     Backend / ops (one key per role)
                  │                            │
                  ▼                            ▼
           ┌────────────────── mstocks-core ──────────────────┐
-          │ Config · 角色 · MintState                        │
-          │ Authority PDA（代币各项权限的持有者，CPI 签名）    │
+          │ Config · roles · MintState                        │
+          │ Authority PDA (holds the token authorities, signs  │
+          │ the CPIs)                                         │
           └───────────────────────┬──────────────────────────┘
                                   ▼ CPI
-                          Token-2022 Mint（每个股票一个）
+                          Token-2022 mint (one per stock)
                                   ▲
-                    CCIP BurnMint pool（持有铸造权）
+                    CCIP BurnMint pool (holds the mint authority)
 ```
 
-**核心原则：** 代币的每项管理权限（multiplier、暂停、冻结、元数据、强制划转）都交给 Core 的 Authority PDA。任何私钥都不能直接操作代币，只能调用 Core；Core 先检查角色和规则，通过后再 CPI 到 Token-2022。
+**Core principle:** every token authority (multiplier, pause, freeze, metadata, clawback) is given to Core's Authority PDA. No private key can act on the token directly, only through Core; Core checks roles and rules first, then CPIs into Token-2022.
 
 ---
 
-## 3. 账户模型
+## 3. Account model
 
-| 账户 | PDA seeds | 字段 | 说明 |
+| Account | PDA seeds | Fields | Notes |
 | --- | --- | --- | --- |
-| `Config` | `["config"]` | `admin`、`pending_admin`、`hook_authority`（Squads，用于 `register_mint` 校验）、`min_notice`（默认 300s）、`max_horizon`（默认 365 天）、`bump` | 全局唯一 |
-| `RoleEntry` | `["role", role_id, member]` | `role`、`member`、`bump` | 账户存在即表示拥有该角色，对应 Mantle 的 `AccessControl`，支持一个角色多个成员 |
-| `MintState` | `["mint", mint]` | `mint`、`mantle_token`（20 字节）、`bump` | 登记过的股票才能被 Core 操作 |
-| Authority PDA | `["authority"]` | 无数据 | 作为各项 Token-2022 权限的持有者，用于 CPI 签名 |
+| `Config` | `["config"]` | `admin`, `pending_admin`, `hook_authority` (Squads, checked by `register_mint`), `min_notice` (default 300 s), `max_horizon` (default 365 days), `bump` | Singleton |
+| `RoleEntry` | `["role", role_id, member]` | `role`, `member`, `bump` | The account existing means the member holds the role; mirrors Mantle's `AccessControl`, several members per role |
+| `MintState` | `["mint", mint]` | `mint`, `mantle_token` (20 bytes), `bump` | Only registered stocks can be operated by Core |
+| Authority PDA | `["authority"]` | No data | Holds the Token-2022 authorities and signs the CPIs |
 
-**为什么 Authority PDA 是全局一个，不是每个 mint 一个：** 所有操作都要经过同一套角色检查，按 mint 拆分并不能减少风险，只会让配置更复杂。各 mint 之间的隔离由 `MintState` 登记和账户校验来保证。
+**Why one global Authority PDA instead of one per mint:** every operation goes through the same role checks, so splitting by mint does not reduce risk, it only complicates setup. Isolation between mints comes from `MintState` registration and account checks.
 
 ---
 
-## 4. 角色
+## 4. Roles
 
-沿用 Mantle 的职责分离：
+Same separation of duties as on Mantle:
 
-| 角色 | 持有者 | 能做什么 | 对应 Mantle |
+| Role | Holder | Can do | Mantle equivalent |
 | --- | --- | --- | --- |
-| Admin | Squads 多签 | 授予 / 撤销角色、登记 mint、修改配置；**不能做任何运营操作** | `DEFAULT_ADMIN_ROLE` |
-| `MULTIPLIER_SCHEDULER` | 调度 KMS | 调度 multiplier | `MULTIPLIER_SCHEDULER_ROLE` |
-| `PAUSER` | 运营 EOA / KMS | 暂停 | `PAUSE_ROLE` |
-| `UNPAUSER` | 多签 | 恢复 | `UNPAUSE_ROLE` |
-| `FREEZER` | 后端 KMS | 冻结账户（拉黑） | `ComplianceRegistry` OPS（`sanctionUsers`） |
-| `UNFREEZER` | 后端 KMS（默认与 `FREEZER` 同一密钥） | 解冻账户（移出黑名单后自动解除） | `ComplianceRegistry` OPS（`unsanctionUsers`） |
-| `CLAWBACK` | 多签 | 强制划转（Permanent Delegate） | — |
-| `METADATA_OPS` | 运营 | 更新名称、代码、ISIN | `ScaledToken` OPS |
+| Admin | Squads multisig | Grant / revoke roles, register mints, change config; **no operational actions** | `DEFAULT_ADMIN_ROLE` |
+| `MULTIPLIER_SCHEDULER` | Scheduling KMS | Schedule the multiplier | `MULTIPLIER_SCHEDULER_ROLE` |
+| `PAUSER` | Ops EOA / KMS | Pause | `PAUSE_ROLE` |
+| `UNPAUSER` | Multisig | Resume | `UNPAUSE_ROLE` |
+| `FREEZER` | Backend KMS | Freeze accounts (blacklist) | `ComplianceRegistry` OPS (`sanctionUsers`) |
+| `UNFREEZER` | Backend KMS (same key as `FREEZER` by default) | Thaw accounts (automatically after removal from the blacklist) | `ComplianceRegistry` OPS (`unsanctionUsers`) |
+| `CLAWBACK` | Multisig | Clawback (Permanent Delegate) | — |
+| `METADATA_OPS` | Ops | Update name, symbol, ISIN | `ScaledToken` OPS |
 
-**沿用的防护规则：**
-- 禁止自授权：Admin 不能把角色授予自己。
-- 运营指令拒绝 Admin 签名，即使 Admin 也持有该角色。
-- Admin 变更分两步：`propose_admin` → `accept_admin`。
-- 角色成员可以自行放弃角色；Admin 不能放弃。
+**Guards carried over:**
+- No self-grant: the Admin cannot grant a role to itself.
+- Operational instructions reject an Admin signature, even if the Admin also holds the role.
+- Admin changes take two steps: `propose_admin` → `accept_admin`.
+- Role members can renounce their own role; the Admin cannot.
 
 ---
 
-## 5. 指令
+## 5. Instructions
 
-### 5.1 管理类
+### 5.1 Administration
 
-| 指令 | 签名人 | 校验 | 动作 |
+| Instruction | Signer | Checks | Action |
 | --- | --- | --- | --- |
-| `initialize(admin, hook_authority)` | 程序 upgrade authority | 只能执行一次；签名人必须是程序的 upgrade authority，防止部署后被抢先初始化 | 创建 `Config` |
-| `propose_admin(new)` / `accept_admin` | 当前 Admin / 新 Admin | 两步确认 | 更换 Admin |
-| `grant_role(role, member)` | Admin | `member != admin` | 创建 `RoleEntry` |
-| `revoke_role(role, member)` | Admin | — | 关闭 `RoleEntry` |
-| `renounce_role(role)` | 角色成员本人 | — | 关闭自己的 `RoleEntry` |
-| `register_mint(mantle_token)` | Admin | 见下 | 创建 `MintState` |
-| `set_default_account_state(frozen)` | Admin | mint 已登记 | 切换合规策略：新账户默认冻结（先审后用）或默认可用（先用后查，当前）。属于策略变更，所以由 Admin（Squads）执行，类似 Mantle 上只有 admin 能调的 `updateCompliance` |
+| `initialize(admin, hook_authority)` | Program upgrade authority | Once only; the signer must be the program's upgrade authority, so nobody can initialize first after deployment | Create `Config` |
+| `propose_admin(new)` / `accept_admin` | Current Admin / new Admin | Two-step confirmation | Change the Admin |
+| `grant_role(role, member)` | Admin | `member != admin` | Create `RoleEntry` |
+| `revoke_role(role, member)` | Admin | — | Close `RoleEntry` |
+| `renounce_role(role)` | The member | — | Close their own `RoleEntry` |
+| `register_mint(mantle_token)` | Admin | See below | Create `MintState` |
+| `set_default_account_state(frozen)` | Admin | Mint registered | Switch the compliance policy: new accounts start frozen (screen before use) or usable (screen after use, current). A policy change, so it is the Admin's (Squads) call, like the admin-only `updateCompliance` on Mantle |
 
-`register_mint` 的 Mint 配置校验（确保代币一上线就处于受控状态）：
-- 属于 Token-2022 程序，精度为 9；
-- **只能带以下扩展**：Scaled UI Amount、Pausable、Metadata Pointer、Token Metadata、Default Account State、Transfer Hook、Permanent Delegate。其他扩展（如 MintCloseAuthority、转账手续费、机密转账）会引入 Core 控制不了的权限，一律拒绝；
-- Scaled UI Amount、Pausable、Metadata Pointer、Token Metadata 的 authority 都是 Authority PDA（Metadata Pointer 若归他人，可被改指向别的元数据）；
-- freeze authority 是 Authority PDA；
-- Transfer Hook 扩展存在，**未挂程序**，authority 为配置中登记的 Squads 地址；
-- Default Account State 扩展存在，状态为「正常」；
-- Permanent Delegate 扩展存在，delegate 是 Authority PDA；
-- mint authority **不是** Authority PDA（铸造权属于 CCIP pool）。
+Mint checks in `register_mint` (so a token is under control from launch):
+- Owned by the Token-2022 program, 9 decimals;
+- **Only these extensions**: Scaled UI Amount, Pausable, Metadata Pointer, Token Metadata, Default Account State, Transfer Hook, Permanent Delegate. Any other extension (e.g. MintCloseAuthority, transfer fees, confidential transfers) brings an authority Core does not control and is rejected;
+- The authorities of Scaled UI Amount, Pausable, Metadata Pointer and Token Metadata are the Authority PDA (a Metadata Pointer held by someone else could be pointed at other metadata);
+- The freeze authority is the Authority PDA;
+- The Transfer Hook extension is present **with no program**, and its authority is the Squads address recorded in the config;
+- The Default Account State extension is present with state "initialized";
+- The Permanent Delegate extension is present and the delegate is the Authority PDA;
+- The mint authority is **not** the Authority PDA (minting belongs to the CCIP pool).
 
 ### 5.2 Multiplier
 
-**`schedule_multiplier(multiplier_1e18: u128, effective_at: i64)`**（方案 B）
+**`schedule_multiplier(multiplier_1e18: u128, effective_at: i64)`** (option B)
 
-| 项 | 内容 |
+| Item | Detail |
 | --- | --- |
-| 签名人 | `MULTIPLIER_SCHEDULER`（非 Admin） |
-| 校验 | `1e9 ≤ multiplier_1e18 ≤ 1e27`；`now + min_notice ≤ effective_at ≤ now + max_horizon` |
-| 换算 | `multiplier_f64 = multiplier_1e18 / 1e18`（链下调度时限制最多 15 位有效数字） |
-| 动作 | CPI `UpdateMultiplier(multiplier_f64, effective_at)`，由 Authority PDA 签名 |
-| 事件 | `MultiplierScheduled { mint, multiplier_1e18, effective_at }` |
+| Signer | `MULTIPLIER_SCHEDULER` (not the Admin) |
+| Checks | `1e9 ≤ multiplier_1e18 ≤ 1e27`; `now + min_notice ≤ effective_at ≤ now + max_horizon` |
+| Conversion | `multiplier_f64 = multiplier_1e18 / 1e18` (off-chain scheduling limits it to 15 significant digits) |
+| Action | CPI `UpdateMultiplier(multiplier_f64, effective_at)`, signed by the Authority PDA |
+| Event | `MultiplierScheduled { mint, multiplier_1e18, effective_at }` |
 
-参数直接沿用 Mantle `setUIMultiplier` 的单位（1e18 定点 + Unix 秒），两边下发同一组值。
+The parameters use the same units as Mantle's `setUIMultiplier` (1e18 fixed point + Unix seconds), so both chains get the same values.
 
-一致性由运营流程和对账保证：运营在 Mantle 与 Solana 下发同一组参数，`check-multiplier.ts` 比对两链状态（单次运行；定时调度与告警由后端负责，不在本次范围）。方案 A（CCIP 消息同步）本次不实现。
+Consistency comes from the operating process and reconciliation: ops send the same parameters on Mantle and Solana, and `check-multiplier.ts` compares the two chains (one-shot; scheduled runs and alerting belong to the backend and are out of scope). Option A (sync via CCIP messages) is not implemented.
 
-**金额单位：** 链上记账、转账指令和 CCIP 搬运的都是底层数量；显示数量 = 底层数量 × multiplier。两条链的 multiplier 一致时，跨链前后的显示数量一致。钱包和运营工具输入金额时要明确是哪一种（`spl-token` 命令行用的是底层数量）。
+**Amount units:** balances, transfer instructions and CCIP transfers all use the raw amount; the displayed amount = raw amount × multiplier. With the same multiplier on both chains, the displayed amount is the same before and after a transfer. Wallets and ops tools must be clear about which one an input means (the `spl-token` CLI uses raw amounts).
 
-### 5.3 暂停
+### 5.3 Pause
 
-| 指令 | 签名人 | 动作 |
+| Instruction | Signer | Action |
 | --- | --- | --- |
 | `pause(mint)` | `PAUSER` | CPI Pausable `pause` |
 | `resume(mint)` | `UNPAUSER` | CPI Pausable `resume` |
-| `pause_all` | `PAUSER` | 对 remaining accounts 中所有已登记的 mint 逐个暂停；单笔交易最多约 12 个 mint（每个 mint 占 64 字节），脚本按 8 个一批发送 |
+| `pause_all` | `PAUSER` | Pause every registered mint passed as remaining accounts; up to about 12 mints per transaction (64 bytes each), the script sends batches of 8 |
 
-**暂停对 CCIP 的影响：** 暂停后，用户发起的 `ccip_send` 会失败；从 Mantle 跨来的消息也会执行失败（池 MintTo 被拒，整笔回滚，不会少币），而且 DON 不会重试。恢复后，运营需要用 `ccip-manual-exec.ts` 对这类消息逐条手动执行：commit 20 分钟后任何人都可以执行，同一条消息重复执行会被 OffRamp 跳过。
+**Effect of a pause on CCIP:** while paused, a user's `ccip_send` fails, and messages arriving from Mantle fail to execute too (the pool's MintTo is rejected and the whole execution rolls back, so no tokens are lost); the DON does not retry them. After resuming, ops must execute those messages manually with `ccip-manual-exec.ts`, one by one: anyone can do so 20 minutes after the commit, and a repeated execution of the same message is skipped by the OffRamp.
 
-### 5.4 合规
+### 5.4 Compliance
 
-| 指令 | 签名人 | 动作 |
+| Instruction | Signer | Action |
 | --- | --- | --- |
-| `freeze(mint, token_accounts…)` | `FREEZER` | 校验每个账户属于该已登记 mint，批量 CPI `FreezeAccount`；已冻结的跳过，便于后端重发。单笔最多约 23 个账户，脚本按 20 个一批（实测 92k CU、1132 字节） |
-| `thaw(mint, token_accounts…)` | `UNFREEZER` | 批量 CPI `ThawAccount`；已解冻的跳过 |
-| `clawback(source, destination, amount)` | `CLAWBACK` | 在同一条指令里：解冻 source → 以 Permanent Delegate 身份 `transfer_checked` 到 destination → 重新冻结 source |
+| `freeze(mint, token_accounts…)` | `FREEZER` | Check that each account belongs to the registered mint, then batch CPI `FreezeAccount`; accounts already frozen are skipped, so the backend can resend. Up to about 23 accounts per transaction; the script sends batches of 20 (measured 92k CU, 1132 bytes) |
+| `thaw(mint, token_accounts…)` | `UNFREEZER` | Batch CPI `ThawAccount`; accounts already thawed are skipped |
+| `clawback(source, destination, amount)` | `CLAWBACK` | In one instruction: thaw source → `transfer_checked` to destination as Permanent Delegate → freeze source again |
 
-`clawback` 需要先解冻，是因为冻结账户即使由 Permanent Delegate 发起也转不出（已实测：直接划转报 `AccountFrozen`；同一笔交易里「解冻 → 划转 → 重新冻结」成功）。destination 应为托管账户。
+`clawback` thaws first because a frozen account cannot send even when the Permanent Delegate initiates the transfer (tested: a direct transfer fails with `AccountFrozen`; "thaw → transfer → freeze" in one transaction succeeds). The destination should be a custody account.
 
-### 5.5 元数据
+### 5.5 Metadata
 
-| 指令 | 签名人 | 动作 |
+| Instruction | Signer | Action |
 | --- | --- | --- |
-| `update_metadata(field, value)` | `METADATA_OPS` | CPI Token Metadata `update_field`（name / symbol / ISIN 等）；值变长时，客户端需在同一笔交易里先给 mint 补足租金 |
+| `update_metadata(field, value)` | `METADATA_OPS` | CPI Token Metadata `update_field` (name / symbol / ISIN, etc.); when a value gets longer, the client tops up the mint's rent in the same transaction first |
 
-### 5.6 事件
+### 5.6 Events
 
-每条运营指令都 `emit!` 事件（`RoleGranted`、`MultiplierScheduled`、`Paused`、`Resumed`、`Frozen`、`Thawed`、`ClawedBack`、`MetadataUpdated` 等），供后端索引和审计。
+Every operational instruction emits an event (`RoleGranted`, `MultiplierScheduled`, `Paused`, `Resumed`, `Frozen`, `Thawed`, `ClawedBack`, `MetadataUpdated`, etc.) for backend indexing and audit.
 
 ---
 
-## 6. 发币与配置流程（脚本）
+## 6. Issuance and setup (scripts)
 
-每上一个股票执行一次，顺序不能乱：
+Run once per stock, in this order:
 
 ```
-1. 创建 Mint 账户，初始化扩展：
-     Scaled UI Amount（authority = Authority PDA，初始 multiplier = Mantle 当前值）
-     Pausable（authority = Authority PDA）
-     Metadata Pointer（指向自身）
-     Default Account State（正常）
-     Transfer Hook（authority = Squads，program = 无）
-     Permanent Delegate（= Authority PDA）
-2. InitializeMint2：精度 9；mint authority = 部署者（临时）；freeze authority = Authority PDA
-3. 初始化 Token Metadata（update authority 先为部署者）→ 写入 ISIN 等附加字段
-     → update authority 移交给 Authority PDA
+1. Create the mint account and initialize its extensions:
+     Scaled UI Amount (authority = Authority PDA, initial multiplier = Mantle's current value)
+     Pausable (authority = Authority PDA)
+     Metadata Pointer (points to itself)
+     Default Account State (initialized)
+     Transfer Hook (authority = Squads, program = none)
+     Permanent Delegate (= Authority PDA)
+2. InitializeMint2: 9 decimals; mint authority = deployer (temporary); freeze authority = Authority PDA
+3. Initialize Token Metadata (update authority = deployer at first) → write ISIN and other fields
+     → hand the update authority to the Authority PDA
 4. Core.register_mint(mantle_token)
-5. CCIP：用部署者（当前 mint authority）自助注册 → Squads 接受 token admin
-     → 初始化 BurnMint pool → 配置 Mantle 远端链与限流
-6. 把 mint authority 移交给 CCIP pool signer PDA
+5. CCIP: self-register with the deployer (current mint authority) → Squads accepts the token admin role
+     → initialize the BurnMint pool → configure the Mantle remote chain and rate limits
+6. Hand the mint authority to the CCIP pool signer PDA
 ```
 
-**为什么第 5 步必须在第 6 步之前：** CCIP 自助注册需要 mint authority 签名，移交给 PDA 之后就签不了了。
+**Why step 5 must come before step 6:** CCIP self-registration needs the mint authority's signature, which is no longer possible once it belongs to a PDA.
 
-**初始 multiplier：** 新 Mint 的初始值必须等于 Mantle 当前的 `uiMultiplier()`。如果 Mantle 上有待生效值，上线后要立即补调度一次。
+**Initial multiplier:** a new mint's initial value must equal Mantle's current `uiMultiplier()`. If Mantle has a pending value, schedule it on Solana right after launch.
 
-**为什么元数据先由部署者写：** ISIN 等附加字段只能通过 `update_field` 写入，需要 update authority 签名。先由部署者写完再移交给 Core，就不需要为上线专门走一次 `METADATA_OPS`。
+**Why the deployer writes the metadata first:** extra fields such as the ISIN can only be written with `update_field`, which needs the update authority's signature. Writing them with the deployer before handing the authority to Core avoids a separate `METADATA_OPS` step at launch.
 
-**脚本对应关系（`solana/scripts/`）：**
+**Scripts (`solana/scripts/`):**
 
-| 步骤 | 脚本 |
+| Step | Script |
 | --- | --- |
-| 部署与初始化 Core（一次性） | 用部署者作为 upgrade authority 部署 → `init-core.ts`（upgrade authority 签名）→ 将 upgrade authority 移交 Squads + Timelock |
-| 授予角色 | `grant-role.ts` / `revoke-role.ts` |
-| 第 1–4 步 | `create-mint.ts` |
-| 补调度待生效的 multiplier | `schedule-multiplier.ts` |
-| 核对两链 multiplier（方案 B） | `check-multiplier.ts` |
-| 第 5 步 CCIP 注册 | `ccip-register.ts`：注册 token 管理员（提出 + 接受）、初始化 BurnMint 池、池代币账户、远端链配置（代币、池、精度）、限速、地址查找表、`set_pool`；已完成的步骤自动跳过。主网上之后需把 token 管理员和池的所有权交给 Squads（未脚本化） |
-| 第 6 步 | `handoff-mint-authority.ts`（默认只演练，`--yes` 才执行） |
-| 检查结果 | `show-mint.ts` |
+| Deploy and initialize Core (once) | Deploy with the deployer as upgrade authority → `init-core.ts` (signed by the upgrade authority) → hand the upgrade authority to Squads + Timelock |
+| Grant roles | `grant-role.ts` / `revoke-role.ts` |
+| Steps 1–4 | `create-mint.ts` |
+| Schedule a pending multiplier | `schedule-multiplier.ts` |
+| Compare the multiplier on both chains (option B) | `check-multiplier.ts` |
+| Step 5, CCIP registration | `ccip-register.ts`: token admin registration (propose + accept), BurnMint pool initialization, pool token account, remote chain config (token, pool, decimals), rate limits, address lookup table, `set_pool`; steps already done are skipped. On mainnet the token admin role and pool ownership must then be handed to Squads (not scripted) |
+| Step 6 | `handoff-mint-authority.ts` (dry run by default, `--yes` to execute) |
+| Check the result | `show-mint.ts` |
 
-**CCIP 测试网（Solana devnet ↔ Mantle Sepolia，2026-11 已开通）：** 两条链的 onRamp / offRamp 都是各 lane 共用的同一组地址。
+**CCIP testnet (Solana devnet ↔ Mantle Sepolia, open since 2026-11):** on both chains the OnRamp / OffRamp addresses are shared by all lanes.
 
 | | Solana devnet | Mantle Sepolia |
 | --- | --- | --- |
 | Chain selector | `16423721717087811551` | `8236463271206331221` |
 | Router | `Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C` | `0xFd33fd627017fEf041445FC19a2B6521C9778f86` |
-| OnRamp | Router 本身 | `0xCAC5826F878b3BfEE32404619C762b33ae199c1b` |
+| OnRamp | The Router itself | `0xCAC5826F878b3BfEE32404619C762b33ae199c1b` |
 | OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0x4d8193f845Eb3540e0BdA9451296600362E22B15` |
-| Token pool | BurnMint 程序 `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB`（与主网相同） | LockRelease，经 Token Pool Factory `0x9fCd83bC7F67ADa1fB51a4caBEa333c72B641bd1` 部署 |
-| 注册 | Router 内的 token admin registry | Token Admin Registry `0x0F1eE88A582f31d92510E300fc1330AA5a525D51`，Registry Module `0xf76cE612250eeEb8889F49FBCB11f1c2705305F6` |
-| 其他 | Fee Quoter `FeeQPGkKDeRV1MgoYfMH6L8o3KeuYjwUZrgn4LRKfjHi`，RMN `RmnXLft1mSEwDgMKu2okYuHkiazxntFFcZFrrcXxYg7` | RMN `0xcCB84Ec3F6AFdD2052134f74aaAc95Ae41A7B333` |
-| 手续费代币 | LINK、WSOL | LINK、WMNT |
+| Token pool | BurnMint program `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB` (same as mainnet) | LockRelease, deployed through Token Pool Factory `0x9fCd83bC7F67ADa1fB51a4caBEa333c72B641bd1` |
+| Registration | Token admin registry inside the Router | Token Admin Registry `0x0F1eE88A582f31d92510E300fc1330AA5a525D51`, Registry Module `0xf76cE612250eeEb8889F49FBCB11f1c2705305F6` |
+| Other | Fee Quoter `FeeQPGkKDeRV1MgoYfMH6L8o3KeuYjwUZrgn4LRKfjHi`, RMN `RmnXLft1mSEwDgMKu2okYuHkiazxntFFcZFrrcXxYg7` | RMN `0xcCB84Ec3F6AFdD2052134f74aaAc95Ae41A7B333` |
+| Fee tokens | LINK, WSOL | LINK, WMNT |
 
-**Solana → Mantle 的代币 gas 上限（上线前必须处理）：** 我们的 mint 在 Solana Fee Quoter 上没有单独的代币配置，沿用 lane 默认的 `defaultTokenDestGasOverhead = 90000`，即 Mantle 上池的 `releaseOrMint` 最多 9 万 gas。ScaledToken 的转账要做暂停和合规两次外部调用；收款地址第一次持有该代币时余额从 0 写入，总消耗超过 9 万，执行失败，DON 不会重试。只有 Fee Quoter 的 owner（Chainlink）能通过 `set_token_transfer_fee_config` 调高，上线前需请 Chainlink 为每个代币在这条 lane 上设置（建议 150000）。在此之前，失败的消息用 `ccip-manual-exec-evm.sh`（`TOKEN_GAS=150000`）补执行。
+**Per-token gas on Solana → Mantle (must be handled before launch):** our mints have no per-token config on the Solana Fee Quoter, so they use the lane default `defaultTokenDestGasOverhead = 90000`, i.e. the pool's `releaseOrMint` on Mantle gets at most 90,000 gas. A ScaledToken transfer makes two external calls (pause and compliance checks); when the receiver holds the token for the first time, its balance is written from zero, the total goes over 90,000 and the execution fails, and the DON does not retry it. Only the Fee Quoter owner (Chainlink) can raise it with `set_token_transfer_fee_config`, so Chainlink has to set it for this lane before launch (150,000 suggested). Until then, failed messages are executed manually with `ccip-manual-exec-evm.sh` (`TOKEN_GAS=150000`).
 
-**Admin 操作与 Squads：** 需要 Admin 签名的脚本（`grant-role`、`revoke-role`、`create-mint` 中的 `register_mint`）有两种模式：传 keypair 文件时直接签名发送（devnet / 本地）；传 Squads 地址时只打印指令，供提交 Squads 提案。打印模式下付款人也是 vault 本身，因为 Squads 提案只能由 vault 签名，不能夹带本地签名人。
+**Admin actions and Squads:** scripts that need the Admin's signature (`grant-role`, `revoke-role`, `register_mint` in `create-mint`) have two modes: given a keypair file they sign and send (devnet / local); given a Squads address they only print the instruction for a Squads proposal. In print mode the payer is the vault itself, because a Squads proposal can only be signed by the vault and cannot carry local signers.
 
-### 6.1 运营脚本
+### 6.1 Operations scripts
 
-上线后的日常操作，后端服务可直接参考其调用方式：
+Day-to-day operations after launch; backend services can follow how they call Core:
 
-| 操作 | 脚本 | 说明 |
+| Operation | Script | Notes |
 | --- | --- | --- |
-| 暂停 / 恢复 | `pause.ts`（`--resume`） | `PAUSER` / `UNPAUSER` |
-| 全局紧急暂停 | `pause-all.ts`（`--dry-run`） | 从链上找出所有已登记的 mint，8 个一批调用 `pause_all`；RPC 不支持 `getProgramAccounts` 时用 `--mints` 显式传入 |
-| CCIP 入站消息补执行 | `ccip-manual-exec.ts` | 传入执行失败的那笔交易（CCIP Explorer 的消息页上可以找到），复用其中的执行报告和账户，改为调用 OffRamp 的 `manually_execute`；任何人都可以执行，付款人只出手续费 |
-| CCIP 出站消息在 Mantle 补执行 | `ccip-manual-exec-evm.sh` | Solana → Mantle 的消息在 Mantle 执行失败（代币暂停、收款地址被制裁、限速、gas 不足）时，复用失败交易的执行报告调用 OffRamp 的 `manuallyExecute`；失败状态的消息可立即执行，`TOKEN_GAS` 可调高每个代币的 gas |
-| 拉黑 / 解除 | `freeze.ts`（`--thaw`） | `--owner <钱包>` 会通过 RPC 找出该钱包在此 mint 下的所有余额账户（含非 ATA），每批 20 个发送，即后端拉黑时的流程 |
-| 强制划转 | `clawback.ts` | 划到托管账户，源账户最终保持冻结 |
-| 更新元数据 | `update-metadata.ts` | 字段变长时先给 mint 补足租金，再调用 Core |
-| multiplier 对账 | `check-multiplier.ts` | 方案 B 的对账工具：Mantle token 地址从 Core 的登记信息读取，按同一时刻比对两链的当前值和待生效值（数值 + 生效时间）；不一致时退出码为 1，便于定时任务告警；生效时间前后 60 秒内的不一致只告警，因为两链时钟可能有几秒差 |
-| 查看账户 | `show-account.ts` | 余额与冻结状态 |
-| 测试铸币 | `dev-mint-to.ts` | 仅限本地 / devnet，在交出铸造权之前使用 |
+| Pause / resume | `pause.ts` (`--resume`) | `PAUSER` / `UNPAUSER` |
+| Global emergency pause | `pause-all.ts` (`--dry-run`) | Finds every registered mint on chain and calls `pause_all` in batches of 8; pass `--mints` explicitly when the RPC does not support `getProgramAccounts` |
+| Execute an inbound CCIP message manually | `ccip-manual-exec.ts` | Takes the failed execution transaction (linked from the message page in the CCIP Explorer), reuses its execution report and accounts, and calls the OffRamp's `manually_execute` instead; anyone can run it, the payer only pays the fee |
+| Execute an outbound CCIP message on Mantle manually | `ccip-manual-exec-evm.sh` | For a Solana → Mantle message that failed on Mantle (token paused, receiver sanctioned, rate limit, out of gas): reuses the failed transaction's execution report and calls the OffRamp's `manuallyExecute`; a failed message can be executed right away, and `TOKEN_GAS` raises the gas for each token |
+| Blacklist / unblacklist | `freeze.ts` (`--thaw`) | `--owner <wallet>` finds all of the wallet's token accounts for this mint over RPC (including non-ATAs) and sends batches of 20, the same flow the backend uses |
+| Clawback | `clawback.ts` | To a custody account; the source account stays frozen |
+| Update metadata | `update-metadata.ts` | Tops up the mint's rent when a field gets longer, then calls Core |
+| Multiplier reconciliation | `check-multiplier.ts` | Option B reconciliation: reads the Mantle token address from Core's registration and compares the current and pending values (value + effective time) on both chains at the same moment; exits with 1 on a mismatch so a scheduled job can alert; a mismatch within 60 seconds of the effective time only warns, since the two chains' clocks can differ by a few seconds |
+| Inspect an account | `show-account.ts` | Balance and freeze state |
+| Test minting | `dev-mint-to.ts` | Local / devnet only, before the mint authority is handed off |
 
 ---
 
-## 7. 目录结构
+## 7. Directory layout
 
 ```
 solana/
-  Anchor.toml / Cargo.toml / rust-toolchain.toml   工具链：Anchor 1.2.2、Agave 4.4.0、Rust 1.97.1
+  Anchor.toml / Cargo.toml / rust-toolchain.toml   toolchain: Anchor 1.2.2, Agave 4.4.0, Rust 1.97.1
   programs/mstocks-core/
     src/
-      lib.rs              指令入口
-      state.rs            Config / RoleEntry / MintState、角色定义、常量
+      lib.rs              instruction entry points
+      state.rs            Config / RoleEntry / MintState, role definitions, constants
       errors.rs
       events.rs
-      token2022.rs        CPI 封装（UpdateMultiplier / Pause / Freeze / Transfer / Metadata）
+      token2022.rs        CPI wrappers (UpdateMultiplier / Pause / Freeze / Transfer / Metadata)
       instructions/       admin / register_mint / multiplier / pause / compliance / metadata
-    tests/core.rs         LiteSVM 集成测试（加载主网版 Token-2022）
-  scripts/                发币、配置与运营脚本（TypeScript，@solana/kit；Core 指令按 IDL 构造）
-  tests/fixtures/         主网版 Token-2022 二进制（脚本拉取，不入库）
-  README.md               构建、测试、脚本用法
+    tests/core.rs         LiteSVM integration tests (mainnet Token-2022 build)
+  scripts/                issuance, setup and ops scripts (TypeScript, @solana/kit; Core instructions built from the IDL)
+  tests/fixtures/         mainnet Token-2022 binary (fetched by a script, not committed)
+  README.md               build, test and script usage
 ```
 
-放在本仓库 `solana/` 子目录下，与 EVM 代码隔离，各自独立构建。
+It lives in this repo's `solana/` directory, separate from the EVM code, and builds on its own.
 
 ---
 
-## 8. 测试
+## 8. Testing
 
-测试过程与结果记录在单独的[测试报告](https://skfc4x16la.larksuite.com/wiki/Sohpww2abiDlMUkSCoXu4lvfshg)，本文不重复。测试入口：
+Test runs and results are recorded in a separate [test report](https://skfc4x16la.larksuite.com/wiki/Sohpww2abiDlMUkSCoXu4lvfshg) and not repeated here. Entry points:
 
-- 程序：`cargo test -p mstocks-core`（LiteSVM，加载主网版 Token-2022）；CI 见 `.github/workflows/solana.yml`。
-- 脚本：`npm run local-e2e`（本地验证节点）、`scripts/test-check-multiplier.sh`（与 anvil 上的 ScaledToken 对账）、`scripts/devnet-smoke.sh`（devnet）。
-- 合规后端：mstocks-aml 的 `scripts/solana-e2e.sh`（本地双链）、`scripts/solana-devnet-check.sh`（devnet）。
-
----
-
-## 9. 安全要点
-
-- 每个账户都校验 owner 和 PDA seeds：Token-2022 程序 ID、`MintState` 是否属于该 mint、token account 的 mint 是否已登记。
-- Authority PDA 只在 Core 内部签名，不暴露通用 CPI 入口。
-- multiplier 换算：u128 → f64 的精度损失在链下调度阶段控制（最多 15 位有效数字）。
-- Core 的 upgrade authority 交给 Squads 多签 + Timelock。`initialize` 要求 upgrade authority 签名，所以顺序是：部署者部署 → `init-core` → 移交 upgrade authority。
-- `register_mint` 使用扩展白名单：mint 上任何 Core 不掌控的扩展都会被拒绝，避免留下后门权限。
-- 后端 KMS 密钥同时持有 `FREEZER` 和 `UNFREEZER`，与 EVM 上 OPS 既能 sanction 也能 unsanction 一致：密钥泄露时可冻结 / 解冻任意账户，但不能划转资产（`CLAWBACK` 在多签）。Admin 可随时撤销其角色。
-- 若将来用 `set_default_account_state` 切换到「先审后用」，每个新账户都需要先解冻。后端已持有 `UNFREEZER`，技术上可以直接解冻新账户；但该角色能解冻任何账户，若要把开户权限限制为只解冻新账户，届时可新增一个「开户」角色。
-- 持有人可以自行销毁：Token-2022 允许持有人销毁自己的代币，且无法关闭（Mantle 上销毁需要 `BURN_ROLE`）。在 Solana 上销毁的数量对应的代币会永久锁在 Mantle 的 LockRelease 池里，只影响持有人自己，不影响安全；供应对账应校验 Solana 总供应 ≤ Mantle 池锁定量，而不是两者严格相等。
-- 上线前做独立的 Solana 审计。
+- Program: `cargo test -p mstocks-core` (LiteSVM, mainnet Token-2022 build); CI in `.github/workflows/solana.yml`.
+- Scripts: `npm run local-e2e` (local validator), `scripts/test-check-multiplier.sh` (reconciliation against a ScaledToken on anvil), `scripts/devnet-smoke.sh` (devnet).
+- Compliance backend: mstocks-aml's `scripts/solana-e2e.sh` (both chains locally) and `scripts/solana-devnet-check.sh` (devnet).
 
 ---
 
-## 10. 评审决策
+## 9. Security notes
 
-| # | 事项 | 决策 |
+- Every account's owner and PDA seeds are checked: the Token-2022 program ID, that `MintState` belongs to the mint, that a token account's mint is registered.
+- The Authority PDA only signs inside Core; there is no generic CPI entry point.
+- Multiplier conversion: the u128 → f64 precision loss is controlled at off-chain scheduling (at most 15 significant digits).
+- Core's upgrade authority goes to the Squads multisig + Timelock. `initialize` requires the upgrade authority's signature, so the order is: deployer deploys → `init-core` → hand off the upgrade authority.
+- `register_mint` uses an extension allowlist: any extension on the mint that Core does not control is rejected, so no back-door authority is left behind.
+- The backend KMS key holds both `FREEZER` and `UNFREEZER`, matching OPS on EVM, which can both sanction and unsanction: a leaked key can freeze / thaw any account but cannot move assets (`CLAWBACK` is with the multisig). The Admin can revoke its roles at any time.
+- If `set_default_account_state` is later used to switch to "screen before use", every new account has to be thawed first. The backend already holds `UNFREEZER` and could thaw new accounts directly, but that role can thaw any account; to limit it to opening new accounts, a separate "account opening" role can be added then.
+- Holders can burn their own tokens: Token-2022 allows it and it cannot be turned off (on Mantle burning needs `BURN_ROLE`). Tokens burned on Solana stay locked in Mantle's LockRelease pool for good. This only affects the holder and is not a security issue; supply reconciliation should check Solana total supply ≤ the amount locked in the Mantle pool rather than strict equality.
+- An independent Solana audit before launch.
+
+---
+
+## 10. Review decisions
+
+| # | Topic | Decision |
 | --- | --- | --- |
-| 1 | multiplier 同步方案 | 方案 B：两条链各自调度，CCIP 只负责代币跨链 |
-| 2 | Permanent Delegate | 开启，delegate = Authority PDA；实现 `clawback` |
-| 3 | Transfer Hook | 休眠（不挂程序），authority 由 Squads 多签直接持有 |
-| 4 | 代码位置 | 本仓库 `solana/` 子目录 |
-| 5 | 工具链 | 升级到 Agave + Anchor 1.x |
-| 6 | 角色密钥 | 后端 KMS 支持 Ed25519，各运营角色使用 KMS 密钥 |
-| 7 | 合规后端 | 在现有 `mstocks-aml` 中兼容 Solana，尽量不改 EVM 逻辑（§11） |
-| 8 | 解冻 | 与 EVM 一致：移出黑名单后由后端签名机自动解冻，`UNFREEZER` 由后端 KMS 持有 |
+| 1 | Multiplier sync | Option B: each chain schedules its own; CCIP only moves tokens |
+| 2 | Permanent Delegate | Enabled, delegate = Authority PDA; `clawback` implemented |
+| 3 | Transfer Hook | Dormant (no program), authority held directly by the Squads multisig |
+| 4 | Code location | This repo, `solana/` directory |
+| 5 | Toolchain | Upgrade to Agave + Anchor 1.x |
+| 6 | Role keys | The backend KMS supports Ed25519; each operational role uses a KMS key |
+| 7 | Compliance backend | Add Solana to the existing `mstocks-aml`, changing the EVM logic as little as possible (§11) |
+| 8 | Thaw | Same as EVM: after removal from the blacklist the backend signer thaws automatically; `UNFREEZER` is held by the backend KMS |
 
 ---
 
-## 11. 配套服务：合规后端（mstocks-aml）
+## 11. Companion service: compliance backend (mstocks-aml)
 
-「先用后查」的后端部分。仓库 `mstocks-aml`（Go，原先只支持 EVM），分支 `feat/solana-support`。同一个进程同时跑 EVM 和 Solana，共用一个数据库：每条链有自己的索引器、处理器、同步器和 recheck，数据按链名区分；数据库、AML 客户端、HTTP 接口共用，一次 recheck 请求扫所有链。部署上就是现有的 `mantle-mstocks-aml` 服务，不新建服务。
+The backend half of "screen after use". Repo `mstocks-aml` (Go, previously EVM only), branch `feat/solana-support`. One process runs EVM and Solana with one database: each chain has its own indexer, processor, syncer and recheck, and data is keyed by chain name; the database, AML client and HTTP API are shared, and one recheck request sweeps every chain. It deploys as the existing `mantle-mstocks-aml` service, not a new one.
 
 ```
-Solana RPC ──► 索引器 ──► transfer_events ──► 处理器 ──► aml-gateway（黑名单）
+Solana RPC ──► indexer ──► transfer_events ──► processor ──► aml-gateway (blacklist)
                                                   │
                                                   ▼
-                                    sanctioned_addresses（目标状态，待同步）
+                                    sanctioned_addresses (target state, pending sync)
                                                   │
                                                   ▼
-                       同步器 ──► Core freeze / thaw（FREEZER / UNFREEZER 签名）
+                       syncer ──► Core freeze / thaw (signed by FREEZER / UNFREEZER)
 ```
 
-| | EVM（不变） | Solana |
+| | EVM (unchanged) | Solana |
 | --- | --- | --- |
-| 索引 | ERC20 `Transfer` 日志 | 按 mint 拉交易历史（`getSignaturesForAddress`），用交易前后的余额变化还原转账；每个 mint 一个签名游标 |
-| 拉黑 | `ComplianceRegistry.sanctionUsers` | Core `freeze`：冻结该钱包在所有已登记 mint 下的全部余额账户 |
-| 解除 | `unsanctionUsers` | Core `thaw`：解冻该钱包的全部余额账户 |
-| 签名 | secp256k1（本地 / AWS KMS） | Ed25519（本地 keypair / AWS KMS `ECC_NIST_EDWARDS25519`） |
+| Indexing | ERC20 `Transfer` logs | Transaction history per mint (`getSignaturesForAddress`); transfers rebuilt from pre / post token balances; one signature cursor per mint |
+| Blacklist | `ComplianceRegistry.sanctionUsers` | Core `freeze`: freeze all of the wallet's token accounts under every registered mint |
+| Unblacklist | `unsanctionUsers` | Core `thaw`: thaw all of the wallet's token accounts |
+| Signing | secp256k1 (local / AWS KMS) | Ed25519 (local keypair / AWS KMS `ECC_NIST_EDWARDS25519`) |
 
-**要点：**
-- **索引完整性**：Token-2022 对带这些扩展的 mint 拒绝不带 mint 账户的旧版 `Transfer`（测试 `transfers_must_carry_the_mint_account`），所以 mint 的交易历史覆盖全部转账、CCIP 铸币 / 销毁和 clawback。记录的是钱包（owner），不是余额账户。默认按 finalized 读取，无需处理回滚。
-- **新账户**：钱包被冻结后仍可能出现新的余额账户（另一个 mint 的账户，或 CCIP 跨链铸币自动创建的 ATA）。已冻结的账户不能收币，所以新进来的币一定在新账户里。索引器发现受制裁钱包有资金变动时，把它重新标为待同步，同步器随即冻结新账户。
-- **账户所有权转移**：非 ATA 的余额账户可以用 `SetAuthority` 把所有者改成另一个钱包。这笔交易不带 mint 账户、余额也不变，不会出现在 mint 的交易历史里（已实测），所以别人可以把一个有余额的账户直接「送给」黑名单钱包而不被索引到。已冻结的账户不能转移所有权，所以黑名单钱包只能这样多出账户，不能把账户转走。对策：对账器每隔 `reconcile_interval`（默认 10 分钟）检查全部已拉黑钱包，发现有未冻结账户就重新排队冻结；每轮每个钱包一次 `getTokenAccountsByOwner`。
-- **是否需要上链**：钱包可能部分冻结，同步器按目标状态判断：拉黑要求没有未冻结账户，解除要求没有冻结账户；已满足则不发交易。Core 跳过已处于目标状态的账户，失败重试是安全的。每笔交易 20 个账户，可配置优先费。
-- **AML 网关返回的地址**：线上网关会把返回结果里的地址转成小写。EVM 地址不受影响，但 Solana 地址区分大小写，转小写后会变成无效地址，甚至另一个钱包。服务只用返回结果对应回请求时的地址，入库和查询一律以原地址为准。
-- **解冻**：与 EVM 一致。AML 网关不再命中某地址时（recheck 或新交易触发），数据库把它标为待解除，同步器用后端签名机发 Core `thaw` 解冻其全部账户。默认与冻结使用同一把密钥（需同时持有 `FREEZER` 和 `UNFREEZER`），也可单独配置 `unfreezer`。与 EVM 相同：运营手动冻结、但 AML 判定为干净的地址，如果之后第一次被服务处理（例如出现在新交易中），会被自动解冻。
-- **签名与启动检查**：生产用 AWS KMS Ed25519（`ED25519_SHA_512`，原始消息），签完在本地验签。启动时检查签名者持有对应角色、配置的 mint 已在 Core 登记。签名者自付手续费，需要保持 SOL 余额。
-- **对 EVM 代码的改动**：处理器的地址小写化改为可配置（Solana 地址区分大小写，EVM 仍转小写）；同步器增加一个可选接口用于按目标状态判断（EVM 客户端不实现，行为不变）；数据库迁移 006 加宽地址和交易哈希字段，新增游标表；待处理转账和 recheck 取数按链过滤（单链时结果不变）；启动时为每条启用的链各起一套组件（`evm.enabled` 默认开，现有配置不用改）。
+**Key points:**
+- **Complete indexing**: for a mint with these extensions, Token-2022 rejects the legacy `Transfer` that omits the mint account (test `transfers_must_carry_the_mint_account`), so the mint's transaction history covers every transfer, CCIP mint / burn and clawback. Wallets (owners) are recorded, not token accounts. Reads are finalized by default, so no rollback handling is needed.
+- **New accounts**: a frozen wallet can still gain new token accounts (one under another mint, or an ATA created by a CCIP mint). A frozen account cannot receive, so new tokens always land in a new account. When the indexer sees funds move for a sanctioned wallet, it marks the wallet pending again and the syncer freezes the new account.
+- **Account ownership transfer**: a non-ATA token account's owner can be changed to another wallet with `SetAuthority`. That transaction carries no mint account and changes no balance, so it does not appear in the mint's history (tested); someone could "give" an account with a balance to a blacklisted wallet without it being indexed. A frozen account cannot change owner, so a blacklisted wallet can only gain accounts this way, never move them out. Countermeasure: every `reconcile_interval` (default 10 minutes) the reconciler checks all blacklisted wallets and requeues any with unfrozen accounts; one `getTokenAccountsByOwner` per wallet per round.
+- **Whether to send a transaction**: a wallet can be partly frozen, so the syncer checks against the target state: blacklisting requires no unfrozen accounts, unblacklisting requires no frozen ones; if already satisfied, nothing is sent. Core skips accounts already in the target state, so retries are safe. 20 accounts per transaction; priority fees configurable.
+- **Addresses returned by the AML gateway**: the production gateway lowercases the addresses in its results. EVM addresses are unaffected, but Solana addresses are case-sensitive and become invalid, or even another wallet, when lowercased. The service only uses the result to map back to the address it requested, and always stores and queries the original address.
+- **Thaw**: same as EVM. When the AML gateway no longer flags an address (on a recheck or a new transaction), the database marks it pending removal and the syncer thaws all its accounts with Core `thaw`, signed by the backend signer. By default the same key as freezing (it must hold both `FREEZER` and `UNFREEZER`); a separate `unfreezer` can be configured. As on EVM: an address frozen manually by ops but judged clean by AML is thawed automatically the next time the service processes it (e.g. when it appears in a new transaction).
+- **Signing and startup checks**: production uses AWS KMS Ed25519 (`ED25519_SHA_512`, raw message), verified locally after signing. At startup the service checks that the signer holds the roles and that the configured mints are registered in Core. The signer pays its own fees and needs a SOL balance.
+- **Changes to EVM code**: lowercasing addresses in the processor is now configurable (Solana addresses are case-sensitive, EVM still lowercases); the syncer gains an optional interface for target-state checks (the EVM client does not implement it, behavior unchanged); database migration 006 widens the address and transaction hash columns and adds a cursor table; pending transfers and recheck queries filter by chain (same results with a single chain); at startup a set of components runs for each enabled chain (`evm.enabled` defaults to on, existing configs need no change).
 
-**链名：** 配置项 `solana.chain_name`（数据库与 AML 网关共用）主网为 `solana`，devnet 为 `solana_devnet`。
+**Chain name:** the `solana.chain_name` setting (shared by the database and the AML gateway) is `solana` on mainnet and `solana_devnet` on devnet.
 
-**qa8 部署（已上线）：** 现有 `mantle-mstocks-aml` 服务的 sepolia-qa8 同时跑 EVM（Mantle 主网镜像，走线上 AML 网关）和 Solana devnet（走 QA AML 网关 `mantle-aml-gateway` sepolia-qa7，用它的测试黑名单测冻结），见 [mantle-config#17082](https://github.com/mantlenetworkio/mantle-config/pull/17082)、[#17092](https://github.com/mantlenetworkio/mantle-config/pull/17092)。签名使用和 retry-service 共用的 KMS Ed25519 密钥（`5dc8b92b`，地址 `E8SV8n…`），devnet 上的 `FREEZER` / `UNFREEZER` 已授予。注意：`mantle-manual-awsres` 不会修改已有服务的 IAM 角色，新增的 KMS 密钥需要运维手动加到角色的 `kmsAccess`；qa8 从功能分支部署，部署工作流的令牌需要 `mantle-xyz/mstocks-aml` 的读权限。
+**qa8 deployment (live):** the existing `mantle-mstocks-aml` service on sepolia-qa8 runs EVM (Mantle mainnet mirror, production AML gateway) and Solana devnet (QA AML gateway `mantle-aml-gateway` sepolia-qa7, whose test blacklist drives the freeze tests); see [mantle-config#17082](https://github.com/mantlenetworkio/mantle-config/pull/17082) and [#17092](https://github.com/mantlenetworkio/mantle-config/pull/17092). Signing uses the KMS Ed25519 key shared with retry-service (`5dc8b92b`, address `E8SV8n…`), which holds `FREEZER` / `UNFREEZER` on devnet. Note: `mantle-manual-awsres` does not update the IAM role of an existing service, so ops must add a new KMS key to the role's `kmsAccess` by hand; qa8 deploys from the feature branch, and the deploy workflow's token needs read access to `mantle-xyz/mstocks-aml`.
 
-**上线前需准备：** 后端 KMS Ed25519 密钥，由 Admin（Squads）授予 `FREEZER` 和 `UNFREEZER` 两个角色，并保持 SOL 余额支付手续费。
+**Before launch:** a backend KMS Ed25519 key, granted `FREEZER` and `UNFREEZER` by the Admin (Squads), with a SOL balance for fees.
