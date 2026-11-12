@@ -597,6 +597,12 @@ fn schedule_multiplier_enforces_mantle_rules() {
 
     assert_err(env.schedule(&op, &m.mint, 1_000_000_000 - 1, NOW + 3600), "MultiplierOutOfRange");
     assert_err(env.schedule(&op, &m.mint, 1_000_000_000 * ONE + 1, NOW + 3600), "MultiplierOutOfRange");
+    // Token-2022 keeps the multiplier as an f64: more than 15 significant digits would be rounded.
+    assert_err(env.schedule(&op, &m.mint, ONE + 1, NOW + 3600), "MultiplierTooPrecise");
+    assert_err(env.schedule(&op, &m.mint, 1_234_567_890_123_456_789, NOW + 3600), "MultiplierTooPrecise");
+    env.schedule(&op, &m.mint, 1_234_567_890_123_450_000, NOW + 3600).unwrap();
+    env.schedule(&op, &m.mint, 1_000_000_000, NOW + 3600).unwrap();
+    env.schedule(&op, &m.mint, 1_000_000_000 * ONE, NOW + 3600).unwrap();
     assert_err(env.schedule(&op, &m.mint, 2 * ONE, NOW + 299), "NoticeTooShort");
     assert_err(env.schedule(&op, &m.mint, 2 * ONE, NOW - 10), "NoticeTooShort");
     assert_err(env.schedule(&op, &m.mint, 2 * ONE, NOW + 365 * 86_400 + 1), "EffectiveTooFar");
@@ -620,6 +626,20 @@ fn rescheduling_overwrites_pending_value() {
     env.schedule(&op, &m.mint, 5 * ONE / 2, NOW + 2000).unwrap();
     assert_eq!(env.ui_amount(&m.mint, 100_000_000_000, NOW + 1000), "100");
     assert_eq!(env.ui_amount(&m.mint, 100_000_000_000, NOW + 2000), "250");
+}
+
+/// A multiplier that is already live stays live while the next one is pending, as on Mantle.
+#[test]
+fn scheduling_after_a_change_took_effect_keeps_the_live_value() {
+    let mut env = Env::new();
+    let m = env.registered_mint();
+    let op = env.operator(Role::MultiplierScheduler);
+    env.schedule(&op, &m.mint, 2 * ONE, NOW + 1000).unwrap();
+    env.set_time(NOW + 1001);
+    env.schedule(&op, &m.mint, 3 * ONE, NOW + 5000).unwrap();
+    assert_eq!(env.ui_amount(&m.mint, 100_000_000_000, NOW + 1002), "200");
+    assert_eq!(env.ui_amount(&m.mint, 100_000_000_000, NOW + 4999), "200");
+    assert_eq!(env.ui_amount(&m.mint, 100_000_000_000, NOW + 5000), "300");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -678,14 +698,33 @@ fn freezer_freezes_batch_and_only_unfreezer_thaws() {
     assert_eq!(env.token(&blocked_a).1, AccountState::Initialized);
 }
 
+/// A wallet can close an empty account, or pass off another mint's account, between the backend's
+/// lookup and the freeze. Such accounts are left alone and the rest of the batch still freezes.
 #[test]
-fn freeze_rejects_accounts_of_another_mint() {
+fn freeze_skips_accounts_that_are_not_token_accounts_of_the_mint() {
     let mut env = Env::new();
     let m1 = env.registered_mint();
     let m2 = env.registered_mint();
-    let other = env.token_account(&m2.mint, &Pubkey::new_unique());
+    let wallet = Keypair::new();
+    env.svm.airdrop(&wallet.pubkey(), 1_000_000_000).unwrap();
+    let funded = env.token_account(&m1.mint, &wallet.pubkey());
+    let closed = env.token_account(&m1.mint, &wallet.pubkey());
+    let other_mint = env.token_account(&m2.mint, &wallet.pubkey());
+    env.mint_to(&m1, &funded, 1_000).unwrap();
+    let close = token_ix::close_account(&TOKEN_2022, &closed, &wallet.pubkey(), &wallet.pubkey(), &[]).unwrap();
+    env.send(&[close], &[&wallet]).unwrap();
+
     let freezer = env.operator(Role::Freezer);
-    assert_err(env.set_frozen(&freezer, &m1.mint, &[other], true), "MintMismatch");
+    env.set_frozen(&freezer, &m1.mint, &[closed, other_mint, funded], true).unwrap();
+    assert_eq!(env.token(&funded), (1_000, AccountState::Frozen));
+    assert_eq!(env.token(&other_mint).1, AccountState::Initialized, "another mint's account is never touched");
+    assert!(env.svm.get_account(&closed).is_none_or(|a| a.data.is_empty()));
+
+    // Thaw is equally tolerant, and an empty batch is still rejected.
+    let unfreezer = env.operator(Role::Unfreezer);
+    env.set_frozen(&unfreezer, &m1.mint, &[closed, other_mint, funded], false).unwrap();
+    assert_eq!(env.token(&funded), (1_000, AccountState::Initialized));
+    assert_err(env.set_frozen(&freezer, &m1.mint, &[], true), "BadRemainingAccounts");
 }
 
 #[test]

@@ -14,6 +14,9 @@ pub const REQUIRED_DECIMALS: u8 = 9;
 pub const MULTIPLIER_ONE: u128 = 1_000_000_000_000_000_000;
 pub const MULTIPLIER_MIN: u128 = 1_000_000_000;
 pub const MULTIPLIER_MAX: u128 = 1_000_000_000_000_000_000_000_000_000;
+/// Token-2022 stores the multiplier as an f64, which holds 15 significant decimal digits exactly.
+/// Anything finer would be rounded here while Mantle keeps it, so it is rejected instead.
+pub const MULTIPLIER_MAX_SIGNIFICANT_DIGITS: u32 = 15;
 
 /// Mirrors Mantle `minMultiplierNotice` (config.toml) and the 365-day scheduling horizon.
 pub const DEFAULT_MIN_NOTICE: i64 = 300;
@@ -61,9 +64,10 @@ pub enum Role {
     Pauser,
     /// Resumes mints (Mantle `UNPAUSE_ROLE`).
     Unpauser,
-    /// Freezes token accounts of blacklisted wallets — backend KMS, optimised for speed.
+    /// Freezes token accounts of blacklisted wallets — compliance backend KMS.
     Freezer,
-    /// Thaws token accounts — multisig, optimised for care.
+    /// Thaws token accounts once a wallet leaves the blacklist — the same backend KMS by default,
+    /// like the Mantle `ComplianceRegistry` OPS role, which both sanctions and unsanctions.
     Unfreezer,
     /// Moves tokens out of an account via the permanent delegate — multisig.
     Clawback,

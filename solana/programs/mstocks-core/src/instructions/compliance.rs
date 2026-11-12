@@ -52,8 +52,11 @@ pub fn thaw<'info>(ctx: Context<'info, Thaw<'info>>) -> Result<()> {
     set_frozen(&a.token_program, &a.mint, &a.authority, a.config.authority_bump, ctx.remaining_accounts, false)
 }
 
-/// Freezes (or thaws) every given token account. Accounts already in the target state are
-/// skipped, so the backend can resend a batch safely.
+/// Freezes (or thaws) every given token account of `mint`. Accounts already in the target state
+/// are skipped, so the backend can resend a batch safely. So are accounts that are not, or no
+/// longer, token accounts of this mint: a wallet can close an empty account, or re-create it for
+/// another mint, between the backend's lookup and this instruction, and one such account must not
+/// fail the whole batch and leave the wallet's funded accounts usable.
 fn set_frozen<'info>(
     token_program: &Program<'info, Token2022>,
     mint: &UncheckedAccount<'info>,
@@ -69,8 +72,9 @@ fn set_frozen<'info>(
     let authority = Authority { account: &authority_info, bump };
 
     for account in accounts {
-        if account_state(account, mint.key)? == target_state(frozen) {
-            continue;
+        match account_state(account, mint.key) {
+            Ok(state) if state != target_state(frozen) => {}
+            _ => continue,
         }
         token2022::set_frozen(&token_program, account, &mint, &authority, frozen)?;
         if frozen {

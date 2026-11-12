@@ -47,7 +47,7 @@
 
 | Account | PDA seeds | Fields | Notes |
 | --- | --- | --- | --- |
-| `Config` | `["config"]` | `admin`, `pending_admin`, `hook_authority` (Squads, checked by `register_mint`), `min_notice` (default 300 s), `max_horizon` (default 365 days), `bump` | Singleton |
+| `Config` | `["config"]` | `admin`, `pending_admin`, `hook_authority` (Squads, checked by `register_mint`), `min_notice` (300 s), `max_horizon` (365 days), `bump` | Singleton. `hook_authority`, `min_notice` and `max_horizon` are set at `initialize` and have no setter (on Mantle the notice period is fixed per implementation too) |
 | `RoleEntry` | `["role", role_id, member]` | `role`, `member`, `bump` | The account existing means the member holds the role; mirrors Mantle's `AccessControl`, several members per role |
 | `MintState` | `["mint", mint]` | `mint`, `mantle_token` (20 bytes), `bump` | Only registered stocks can be operated by Core |
 | Authority PDA | `["authority"]` | No data | Holds the Token-2022 authorities and signs the CPIs |
@@ -62,7 +62,7 @@ Same separation of duties as on Mantle:
 
 | Role | Holder | Can do | Mantle equivalent |
 | --- | --- | --- | --- |
-| Admin | Squads multisig | Grant / revoke roles, register mints, change config; **no operational actions** | `DEFAULT_ADMIN_ROLE` |
+| Admin | Squads multisig | Grant / revoke roles, register mints, switch the default account state, hand over the admin; **no operational actions** | `DEFAULT_ADMIN_ROLE` |
 | `MULTIPLIER_SCHEDULER` | Scheduling KMS | Schedule the multiplier | `MULTIPLIER_SCHEDULER_ROLE` |
 | `PAUSER` | Ops EOA / KMS | Pause | `PAUSE_ROLE` |
 | `UNPAUSER` | Multisig | Resume | `UNPAUSE_ROLE` |
@@ -110,8 +110,8 @@ Mint checks in `register_mint` (so a token is under control from launch):
 | Item | Detail |
 | --- | --- |
 | Signer | `MULTIPLIER_SCHEDULER` (not the Admin) |
-| Checks | `1e9 ≤ multiplier_1e18 ≤ 1e27`; `now + min_notice ≤ effective_at ≤ now + max_horizon` |
-| Conversion | `multiplier_f64 = multiplier_1e18 / 1e18` (off-chain scheduling limits it to 15 significant digits) |
+| Checks | `1e9 ≤ multiplier_1e18 ≤ 1e27`; at most 15 significant decimal digits; `now + min_notice ≤ effective_at ≤ now + max_horizon` |
+| Conversion | `multiplier_f64 = multiplier_1e18 / 1e18`. Token-2022 stores an f64, which holds 15 significant digits exactly; a finer value would be rounded on Solana but kept on Mantle, so Core rejects it (`MultiplierTooPrecise`) and operations send both chains a value within that precision |
 | Action | CPI `UpdateMultiplier(multiplier_f64, effective_at)`, signed by the Authority PDA |
 | Event | `MultiplierScheduled { mint, multiplier_1e18, effective_at }` |
 
@@ -135,11 +135,11 @@ Consistency comes from the operating process and reconciliation: ops send the sa
 
 | Instruction | Signer | Action |
 | --- | --- | --- |
-| `freeze(mint, token_accounts…)` | `FREEZER` | Check that each account belongs to the registered mint, then batch CPI `FreezeAccount`; accounts already frozen are skipped, so the backend can resend. Up to about 23 accounts per transaction; the script sends batches of 20 (measured 92k CU, 1132 bytes) |
-| `thaw(mint, token_accounts…)` | `UNFREEZER` | Batch CPI `ThawAccount`; accounts already thawed are skipped |
+| `freeze(mint, token_accounts…)` | `FREEZER` | Batch CPI `FreezeAccount` on every given token account of the registered mint. Skipped without failing the batch: accounts already frozen (so the backend can resend), and accounts that are not, or no longer, token accounts of this mint (a wallet can close an empty account or re-create it for another mint between the backend's lookup and the freeze; that must not leave its funded accounts usable). Up to about 23 accounts per transaction; the script sends batches of 20 (measured 92k CU, 1132 bytes) |
+| `thaw(mint, token_accounts…)` | `UNFREEZER` | Batch CPI `ThawAccount`; same skipping rules as `freeze` |
 | `clawback(source, destination, amount)` | `CLAWBACK` | In one instruction: thaw source → `transfer_checked` to destination as Permanent Delegate → freeze source again |
 
-`clawback` thaws first because a frozen account cannot send even when the Permanent Delegate initiates the transfer (tested: a direct transfer fails with `AccountFrozen`; "thaw → transfer → freeze" in one transaction succeeds). The destination should be a custody account.
+`clawback` thaws first because a frozen account cannot send even when the Permanent Delegate initiates the transfer (tested: a direct transfer fails with `AccountFrozen`; "thaw → transfer → freeze" in one transaction succeeds). The destination should be a custody account. Three consequences of how Token-2022 works: `clawback` fails while the mint is paused (a pause rejects every transfer, including the permanent delegate's; freeze and thaw still work, so freeze first and claw back after resuming); it fails if the Transfer Hook is ever given a program (the CPI passes no hook accounts; Core would need an upgrade first); and with `amount = 0` it succeeds and leaves the source frozen.
 
 ### 5.5 Metadata
 
@@ -266,12 +266,15 @@ Test runs and results are recorded in a separate [test report](https://skfc4x16l
 
 - Every account's owner and PDA seeds are checked: the Token-2022 program ID, that `MintState` belongs to the mint, that a token account's mint is registered.
 - The Authority PDA only signs inside Core; there is no generic CPI entry point.
-- Multiplier conversion: the u128 → f64 precision loss is controlled at off-chain scheduling (at most 15 significant digits).
+- Multiplier conversion: Core rejects multipliers with more than 15 significant digits, so the f64 Token-2022 stores carries the same value as Mantle.
 - Core's upgrade authority goes to the Squads multisig + Timelock. `initialize` requires the upgrade authority's signature, so the order is: deployer deploys → `init-core` → hand off the upgrade authority.
 - `register_mint` uses an extension allowlist: any extension on the mint that Core does not control is rejected, so no back-door authority is left behind.
 - The backend KMS key holds both `FREEZER` and `UNFREEZER`, matching OPS on EVM, which can both sanction and unsanction: a leaked key can freeze / thaw any account but cannot move assets (`CLAWBACK` is with the multisig). The Admin can revoke its roles at any time.
 - If `set_default_account_state` is later used to switch to "screen before use", every new account has to be thawed first. The backend already holds `UNFREEZER` and could thaw new accounts directly, but that role can thaw any account; to limit it to opening new accounts, a separate "account opening" role can be added then.
 - Holders can burn their own tokens: Token-2022 allows it and it cannot be turned off (on Mantle burning needs `BURN_ROLE`). Tokens burned on Solana stay locked in Mantle's LockRelease pool for good. This only affects the holder and is not a security issue; supply reconciliation should check Solana total supply ≤ the amount locked in the Mantle pool rather than strict equality.
+- Privileged roles are trusted with every token account of a mint, including the CCIP pool's own token account: freezing it (or clawing back from it, which leaves it frozen) stops Solana → Mantle transfers until it is thawed.
+- Registration is permanent: there is no instruction to unregister a mint or change its `mantle_token`. `register_mint` checks the mint's configuration, not its initial multiplier or supply; the launch procedure sets the initial multiplier to Mantle's and hands the mint authority to the CCIP pool.
+- A proposed admin cannot be withdrawn, only replaced by proposing another address. If the new admin already holds a role, its role account remains but every operational instruction rejects the admin (`AdminCannotOperate`).
 - An independent Solana audit before launch.
 
 ---

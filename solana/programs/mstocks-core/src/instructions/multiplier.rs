@@ -33,13 +33,13 @@ pub struct ScheduleMultiplier<'info> {
 /// value and apply past timestamps immediately, so all checks live here.
 pub fn schedule_multiplier(ctx: Context<ScheduleMultiplier>, multiplier_1e18: u128, effective_at: i64) -> Result<()> {
     require!((MULTIPLIER_MIN..=MULTIPLIER_MAX).contains(&multiplier_1e18), CoreError::MultiplierOutOfRange);
+    require!(fits_f64(multiplier_1e18), CoreError::MultiplierTooPrecise);
     let config = &ctx.accounts.config;
     let now = Clock::get()?.unix_timestamp;
     require!(effective_at >= now.saturating_add(config.min_notice), CoreError::NoticeTooShort);
     require!(effective_at <= now.saturating_add(config.max_horizon), CoreError::EffectiveTooFar);
 
-    // Off-chain scheduling limits values to 15 significant digits so this conversion is exact
-    // enough for both chains to display the same UI amount.
+    // At most 15 significant digits (checked above), so the f64 holds the same value as Mantle.
     let multiplier = multiplier_1e18 as f64 / MULTIPLIER_ONE as f64;
     token2022::update_multiplier(
         &ctx.accounts.token_program.to_account_info(),
@@ -51,4 +51,13 @@ pub fn schedule_multiplier(ctx: Context<ScheduleMultiplier>, multiplier_1e18: u1
 
     emit!(MultiplierScheduled { mint: ctx.accounts.mint.key(), multiplier_1e18, effective_at });
     Ok(())
+}
+
+/// Whether `multiplier_1e18` (non-zero) has at most 15 significant decimal digits.
+fn fits_f64(multiplier_1e18: u128) -> bool {
+    let mut digits = multiplier_1e18;
+    while digits.is_multiple_of(10) {
+        digits /= 10;
+    }
+    digits < 10u128.pow(MULTIPLIER_MAX_SIGNIFICANT_DIGITS)
 }

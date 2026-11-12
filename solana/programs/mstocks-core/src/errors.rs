@@ -40,10 +40,12 @@ pub enum CoreError {
     WrongPermanentDelegate,
     #[msg("Account does not belong to the given registered mint")]
     MintMismatch,
-    #[msg("Remaining accounts must be (mint, mint_state) pairs")]
+    #[msg("Remaining accounts are missing or malformed")]
     BadRemainingAccounts,
     #[msg("Source and destination must differ")]
     SameAccount,
     #[msg("Mint carries an extension mStocks does not allow")]
     UnexpectedExtension,
+    #[msg("Multiplier has more than 15 significant digits")]
+    MultiplierTooPrecise,
 }
