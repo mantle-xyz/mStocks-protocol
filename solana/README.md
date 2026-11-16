@@ -56,6 +56,8 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | `schedule-multiplier.ts` | `MultiplierScheduler` | Schedule the same `(multiplier, effectiveAt)` sent to Mantle |
 | `check-multiplier.ts` | — | Reconcile each mint's multiplier with its Mantle `ScaledToken` (address read from Core); exits 1 on mismatch for alerting. Needs `MANTLE_RPC_URL` |
 | `check-supply.ts` | — | Check each mint's Solana supply against the tokens locked in its Mantle pool (token from Core, pool from `--registry`, the Mantle TokenAdminRegistry); exits 1 if Solana holds more than is locked. Needs `MANTLE_RPC_URL` |
+| `ccip-mantle-setup.sh` | Deployer, then the multisigs | Mantle side of CCIP for one token: `deploy` the LockRelease pool (pinned CCIP 1.6.4) and point it at Solana; `multisig` writes Safe Transaction Builder files for the token admin's timelock (CCIP admin registration, `setPool`) and the pool owner; `verify`. `NETWORK=mainnet` (default) or `testnet`; needs `MANTLE_RPC_URL` |
+| `ccip-handoff.ts` | Deployer, then Squads | Hand a mint's CCIP token admin and BurnMint pool ownership to the Squads vault: proposes, then signs the acceptance (keypair) or prints it for a Squads proposal (vault address) |
 | `handoff-mint-authority.ts` | Deployer (current mint authority) | Give the mint authority to the CCIP pool signer PDA (dry run unless `--yes`) |
 | `ccip-register.ts` | Deployer (current mint authority) | Register the mint with CCIP for one remote EVM chain: token admin (propose + accept), BurnMint pool, pool token account, remote chain (token, pool, decimals), rate limits, pool lookup table, `set_pool`. Skips steps already done |
 | `ccip-send.ts` | Token holder | Send tokens to an EVM address through CCIP, paying in SOL (testing / ops checks) |
@@ -91,15 +93,22 @@ Keep provider URLs with API keys in the environment only. Some providers reject
 
 1. `create-mint.ts` with `--initial-multiplier-1e18` = Mantle `uiMultiplier()`. If Mantle has a
    pending multiplier, run `schedule-multiplier.ts` with the same values right after.
-2. `ccip-register.ts` with the Mantle token, its LockRelease pool and the Mantle chain selector.
-   It needs the current mint authority (the deployer) to sign, so it must run before step 3. The
-   deployer ends up as token admin and pool owner; on mainnet, hand both to Squads afterwards
-   (router `transfer_admin_role_token_admin_registry`, pool `transfer_ownership`; not scripted).
-   On Mantle: deploy a LockRelease pool, register it (`registerAccessControlDefaultAdmin`,
-   `acceptAdminRole`, `setPool`) and `applyChainUpdates` with the Solana pool config PDA
-   (`["ccip_tokenpool_config", mint]` under the pool program) and the mint, both as raw 32 bytes.
-3. `handoff-mint-authority.ts --yes`: the CCIP pool signer becomes the only minter.
-4. `show-mint.ts` to confirm the final configuration.
+2. Mantle pool: `ccip-mantle-setup.sh deploy <deployer key> <token> <mint> <pool-owner multisig>
+   --rate-capacity … --rate-per-second …` deploys the LockRelease pool, points it at the Solana pool
+   and mint, sets rate limits and proposes the multisig as owner.
+3. `ccip-register.ts` with the Mantle token, the pool from step 2 and the Mantle chain selector. It
+   needs the current mint authority (the deployer) to sign, so it must run before step 5.
+4. Multisigs. Mantle: `ccip-mantle-setup.sh multisig <token> <pool> <pool-owner>` writes the Safe
+   Transaction Builder files: the token admin's timelock registers the token's CCIP admin and sets
+   the pool (schedule, then execute after the delay), and the pool owner accepts ownership. Solana:
+   `ccip-handoff.ts --to <Squads vault>` proposes the vault as CCIP token admin and pool owner and
+   prints the two acceptances for a Squads proposal; re-run it once executed to confirm.
+5. `handoff-mint-authority.ts --yes`: the CCIP pool signer becomes the only minter.
+6. `ccip-mantle-setup.sh verify <token> <pool> <mint>` and `show-mint.ts` to confirm the final
+   configuration.
+
+The whole sequence was rehearsed on Mantle Sepolia ↔ Solana devnet (2026-11-16) with a token whose
+admin is a timelock, as on mainnet (TD §6.2).
 
 Steps 2–3 ran on Solana devnet ↔ Mantle Sepolia (2026-11-10) with a throwaway token on each side:
 Mantle → Solana delivered 1 token in about 24 minutes (CCIP waits for Mantle finality, about 25

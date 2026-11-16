@@ -8,10 +8,11 @@
 **In scope:**
 - `mstocks-core`: the only in-house program on Solana (Anchor).
 - Issuance and setup scripts: create a mint with extensions, hook it up to Core, register the CCIP pool.
+- The Mantle side of CCIP for each token: deploy and configure the LockRelease pool, and produce the multisig transactions that register it (§6.2).
 - Tests: LiteSVM, running against the mainnet Token-2022 build.
 - Solana support in the compliance backend `mstocks-aml`: watch transfers, check the blacklist, call Core to freeze / thaw (§11).
 
-**Out of scope:** deploying and configuring the CCIP LockRelease pool on Mantle (standard CCIP contracts, nothing to build), scheduling and alerting for multiplier reconciliation, frontend.
+**Out of scope:** changes to the Mantle contracts (the CCIP pool is a standard Chainlink contract and ScaledToken needs no change), scheduling and alerting for multiplier reconciliation, frontend.
 
 **Settled assumptions:**
 - 9 decimals; Mantle is the only issuing chain; CCIP uses lock / mint: the LockRelease pool on Mantle locks / releases, the BurnMint pool on Solana mints / burns. Tokens on Solana are minted only by the CCIP BurnMint pool, so the Solana supply equals the amount locked in the Mantle pool (÷1e9).
@@ -59,19 +60,31 @@
 
 ## 4. Roles
 
-Same separation of duties as on Mantle:
+Same separation of duties as on Mantle. The Mantle column is the production configuration in `config.toml`; Mantle's admin addresses are OpenZeppelin `TimelockController`s whose proposers are 3/6 multisigs.
 
-| Role | Holder | Can do | Mantle equivalent |
-| --- | --- | --- | --- |
-| Admin | Squads multisig | Grant / revoke roles, unregister an empty mint registered in error, switch the default account state, hand over the admin; **no operational actions** | `DEFAULT_ADMIN_ROLE` |
-| `MULTIPLIER_SCHEDULER` | Scheduling KMS | Schedule the multiplier | `MULTIPLIER_SCHEDULER_ROLE` |
-| `PAUSER` | Ops EOA / KMS | Pause | `PAUSE_ROLE` |
-| `UNPAUSER` | Multisig | Resume | `UNPAUSE_ROLE` |
-| `FREEZER` | Backend KMS | Freeze accounts (blacklist) | `ComplianceRegistry` OPS (`sanctionUsers`) |
-| `UNFREEZER` | Backend KMS (same key as `FREEZER` by default) | Thaw accounts (automatically after removal from the blacklist) | `ComplianceRegistry` OPS (`unsanctionUsers`) |
-| `CLAWBACK` | Multisig | Clawback (Permanent Delegate) | — |
-| `METADATA_OPS` | Ops | Update name, symbol, ISIN | `ScaledToken` OPS |
-| `MINT_REGISTRAR` | Operations KMS | Register new mints | `ScaledTokenFactory` `OPS_ROLE` (`createToken`) |
+| Solana role | Can do | Solana holder | Mantle equivalent | Mantle holder |
+| --- | --- | --- | --- | --- |
+| Program upgrade authority | Upgrade Core; run `initialize` once | Squads multisig + time lock | Beacon / ProxyAdmin owner | Multisig 2, 3/6 + 24 h timelock |
+| Admin | Grant / revoke roles, unregister an empty mint registered in error, switch the default account state, hand over the admin; **no operational actions** | Squads multisig | `DEFAULT_ADMIN_ROLE` of each contract | Split by contract, each 3/6 + 12 h timelock: multisig 1 (factory, ScaledToken), multisig 3 (TokenIssuer), multisig 4 (compliance and pause registries) |
+| `MINT_REGISTRAR` | Register new mints | Operations key | Factory `OPS_ROLE` (`createToken`) | EOA1 (RWA-Bycustody) |
+| `MULTIPLIER_SCHEDULER` | Schedule the multiplier | Operations key | `MULTIPLIER_SCHEDULER_ROLE` | EOA3 (RWA-Bycustody) |
+| `METADATA_OPS` | Update name, symbol, ISIN | Operations key | ScaledToken `OPS_ROLE` | EOA2 (RWA-Bycustody) |
+| `PAUSER` | Pause | Operations key | `PAUSE_ROLE` | EOA6 (RWA-Bycustody) |
+| `UNPAUSER` | Resume | Multisig, no time lock (resuming must be fast) | `UNPAUSE_ROLE` | Multisig 5, no timelock |
+| `FREEZER` | Freeze accounts (blacklist) | Compliance backend KMS | `ComplianceRegistry` `OPS_ROLE` (`sanctionUsers`) | EOA5 (Mantle) |
+| `UNFREEZER` | Thaw accounts (automatically after removal from the blacklist) | Compliance backend KMS (same key as `FREEZER` by default) | `ComplianceRegistry` `OPS_ROLE` (`unsanctionUsers`) | EOA5 (Mantle) |
+| `CLAWBACK` | Clawback (Permanent Delegate) | Multisig | — (no equivalent) | — |
+| Transfer Hook authority (Token-2022, not Core) | Attach / remove a program that checks every transfer | Squads multisig | ScaledToken admin's `updateCompliance` / `updatePauseManager` (replace the transfer checks) | Multisig 1, 3/6 + 12 h timelock |
+| CCIP token admin, per mint (router's token admin registry) | Point the mint at a different pool | Squads multisig (`ccip-handoff.ts`) | CCIP token admin (`TokenAdminRegistry`) | The token's `DEFAULT_ADMIN_ROLE`: multisig 1, 3/6 + 12 h timelock (§6.2) |
+| CCIP pool owner (BurnMint pool) | Remote chains and pools, rate limits | Squads multisig (`ccip-handoff.ts`) | LockRelease pool owner | Multisig (§6.2) |
+| — | Rate limits only | Pool owner | Pool `rateLimitAdmin` (optional) | Operations multisig, or unset |
+| — | — | — | Pool `rebalancer` (can withdraw every locked token) | **Unset** |
+
+**Open decisions (to settle before mainnet, then reflected here):**
+- One Admin or several: Mantle splits its admins by contract (multisigs 1, 3, 4); on Solana one Squads Admin grants every role, freeze roles included.
+- Squads threshold and time lock for the Admin, the upgrade authority, the Transfer Hook authority and the CCIP roles (Mantle: 3/6 with 12 h, 24 h for upgrades); Squads v4 supports a time lock per multisig.
+- Who holds the operations keys: on Mantle most are RWA-Bycustody EOAs and the compliance key is Mantle's; review decision 6 put Solana's operations roles on KMS keys.
+- Which multisig holds `CLAWBACK`, the Mantle CCIP pool owner and the Solana CCIP roles (one multisig per chain, or the token admin's).
 
 **Guards carried over:**
 - No self-grant: the Admin cannot grant a role to itself.
@@ -172,12 +185,17 @@ Run once per stock, in this order:
 3. Initialize Token Metadata (update authority = deployer at first) → write ISIN and other fields
      → hand the update authority to the Authority PDA
 4. Core.register_mint(mantle_token), signed by the MINT_REGISTRAR (operations KMS)
-5. CCIP: self-register with the deployer (current mint authority) → Squads accepts the token admin role
-     → initialize the BurnMint pool → configure the Mantle remote chain and rate limits
-6. Hand the mint authority to the CCIP pool signer PDA
+5. Mantle: deploy the LockRelease pool, point it at the Solana pool and mint, set rate limits,
+     propose the pool owner (multisig)                                                 (§6.2)
+6. Solana CCIP: self-register with the deployer (current mint authority) → initialize the BurnMint
+     pool → configure the Mantle remote chain and rate limits
+7. Multisigs: on Mantle the token admin's timelock registers the token's CCIP admin and sets the
+     pool, and the pool owner accepts; on Solana the CCIP token admin and the pool owner move to Squads
+8. Hand the mint authority to the CCIP pool signer PDA
+9. Verify both sides
 ```
 
-**Why step 5 must come before step 6:** CCIP self-registration needs the mint authority's signature, which is no longer possible once it belongs to a PDA.
+**Why step 6 must come before step 8:** CCIP self-registration needs the mint authority's signature, which is no longer possible once it belongs to a PDA.
 
 **Initial multiplier:** a new mint's initial value must equal Mantle's current `uiMultiplier()`. If Mantle has a pending value, schedule it on Solana right after launch.
 
@@ -192,8 +210,11 @@ Run once per stock, in this order:
 | Steps 1–4 | `create-mint.ts` |
 | Schedule a pending multiplier | `schedule-multiplier.ts` |
 | Compare the multiplier on both chains (option B) | `check-multiplier.ts` |
-| Step 5, CCIP registration | `ccip-register.ts`: token admin registration (propose + accept), BurnMint pool initialization, pool token account, remote chain config (token, pool, decimals), rate limits, address lookup table, `set_pool`; steps already done are skipped. On mainnet the token admin role and pool ownership must then be handed to Squads (not scripted) |
-| Step 6 | `handoff-mint-authority.ts` (dry run by default, `--yes` to execute) |
+| Step 6, CCIP registration | `ccip-register.ts`: token admin registration (propose + accept), BurnMint pool initialization, pool token account, remote chain config (token, pool, decimals), rate limits, address lookup table, `set_pool`; steps already done are skipped. On mainnet the token admin role and pool ownership must then be handed to Squads (not scripted) |
+| Step 5, Mantle pool | `ccip-mantle-setup.sh deploy` (deployer key) |
+| Step 7, multisigs | Mantle: `ccip-mantle-setup.sh multisig` writes Safe Transaction Builder files (timelock schedule, then execute after the delay; pool owner acceptance). Solana: `ccip-handoff.ts` proposes the Squads vault and prints the acceptance for a Squads proposal |
+| Step 8 | `handoff-mint-authority.ts` (dry run by default, `--yes` to execute) |
+| Step 9 | `ccip-mantle-setup.sh verify` (exits 1 on a problem), `show-mint.ts` |
 | Check the result | `show-mint.ts` |
 
 **CCIP testnet (Solana devnet ↔ Mantle Sepolia, open since 2026-11):** on both chains the OnRamp / OffRamp addresses are shared by all lanes.
@@ -204,7 +225,7 @@ Run once per stock, in this order:
 | Router | `Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C` | `0xFd33fd627017fEf041445FC19a2B6521C9778f86` |
 | OnRamp | The Router itself | `0xCAC5826F878b3BfEE32404619C762b33ae199c1b` |
 | OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0x4d8193f845Eb3540e0BdA9451296600362E22B15` |
-| Token pool | BurnMint program `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB` (same as mainnet) | LockRelease, deployed through Token Pool Factory `0x9fCd83bC7F67ADa1fB51a4caBEa333c72B641bd1` |
+| Token pool | BurnMint program `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB` (same as mainnet) | LockReleaseTokenPool per token, deployed by `ccip-mantle-setup.sh` |
 | Registration | Token admin registry inside the Router | Token Admin Registry `0x0F1eE88A582f31d92510E300fc1330AA5a525D51`, Registry Module `0xf76cE612250eeEb8889F49FBCB11f1c2705305F6` |
 | Other | Fee Quoter `FeeQPGkKDeRV1MgoYfMH6L8o3KeuYjwUZrgn4LRKfjHi`, RMN `RmnXLft1mSEwDgMKu2okYuHkiazxntFFcZFrrcXxYg7` | RMN `0xcCB84Ec3F6AFdD2052134f74aaAc95Ae41A7B333` |
 | Fee tokens | LINK, WSOL | LINK, WMNT |
@@ -230,6 +251,32 @@ Day-to-day operations after launch; backend services can follow how they call Co
 | Multiplier reconciliation | `check-multiplier.ts` | Option B reconciliation: reads the Mantle token address from Core's registration and compares the current and pending values (value + effective time) on both chains at the same moment; exits with 1 on a mismatch so a scheduled job can alert; a mismatch within 60 seconds of the effective time only warns, since the two chains' clocks can differ by a few seconds |
 | Inspect an account | `show-account.ts` | Balance and freeze state |
 | Test minting | `dev-mint-to.ts` | Local / devnet only, before the mint authority is handed off |
+
+### 6.2 CCIP on the Mantle side
+
+Mantle is the issuing chain, so each token gets a **LockReleaseTokenPool**: sending to Solana locks the token in the pool, receiving from Solana releases it. The pool only calls `transfer`, so ScaledToken needs no change and no new role; `ISSUER_ROLE` / `BURN_ROLE` are never granted to it. The pool is pinned to `@chainlink/contracts-ccip` 1.6.4 (the version mantle-cross uses for its pools) and compiled with the mStocks contracts' settings (solc 0.8.24, cancun, via-IR, 200 runs).
+
+**What the token's code implies:**
+- `ScaledToken._update` checks the pause state and the sanctions of `from`, `to` and, for a third-party `transferFrom`, the caller. Sending to Solana is a `transferFrom` by the CCIP Router into the pool, so **the Router and the pool must never be sanctioned**. A sanctioned receiver makes the release fail until it is unsanctioned; a paused token blocks both directions (tested on testnet).
+- ScaledToken has neither `owner()` nor `getCCIPAdmin()`. The only way to become its CCIP token admin is `RegistryModuleOwnerCustom.registerAccessControlDefaultAdmin(token)`, called by the holder of the token's `DEFAULT_ADMIN_ROLE` — on mainnet multisig 1's 12 h timelock. It then calls `acceptAdminRole` and `setPool`; the script puts the three calls in one timelock batch. The admin can later move the role with `transferAdminRole`.
+
+**Pool permissions:**
+
+| Permission | Can do | Holder |
+| --- | --- | --- |
+| Owner | Add / remove remote chains and pools (`applyChainUpdates`), rate limits, set the other admins. A wrong remote pool would let another chain release tokens locked on Mantle | Multisig; proposed by the deployer, accepted by the multisig (two-step ownership) |
+| `rateLimitAdmin` | Rate limits only | Optional, an operations multisig for fast reaction |
+| `rebalancer` | `withdrawLiquidity` can take every locked token | **Never set**; the issuing chain needs no external liquidity. `verify` fails if it is set |
+
+**Steps (`ccip-mantle-setup.sh`, `NETWORK=mainnet` by default):**
+1. `deploy` (deployer key): deploys the pool, `applyChainUpdates` for Solana (remote pool = the Solana pool config PDA `["ccip_tokenpool_config", mint]`, remote token = the mint, both as 32 bytes), rate limits both ways in 18-decimal units, optional `setRateLimitAdmin`, and `transferOwnership(<multisig>)`.
+2. `multisig`: writes Safe Transaction Builder JSON. For a timelock it wraps the calls as `scheduleBatch` (file 1) and `executeBatch` (file 2, after the delay; the operation id is printed); for a Safe or EOA they are plain calls. Steps already done on chain are left out.
+3. Solana: `ccip-register.ts` with this pool, `ccip-handoff.ts --to <Squads vault>`, then `handoff-mint-authority.ts --yes`.
+4. `verify`: pool token, router, RMN, remote pool and token, rebalancer unset, allowlist off, registry admin = token admin, registry pool = this pool, Router and pool not sanctioned.
+
+**Mantle mainnet CCIP addresses** (Chainlink CCIP directory, checked on chain): chain selector `1556008542357238666`; Router `0x670052635a9850bb45882Cb2eCcF66bCff0F41B7`; RMN proxy `0x91E2186E93F0ECeDDCdf9850078F104daB085E79`; TokenAdminRegistry `0x000A744940eB5D857c0d61d97015DFc83107404F`; RegistryModuleOwnerCustom `0xf49f81b3d2F2a79b706621FA2D5934136352140c`. The Mantle mainnet Router supports the Solana mainnet lane (selector `124615329519749607`).
+
+**Rehearsal (2026-11-16, Mantle Sepolia ↔ Solana devnet):** a new ScaledToken whose admin is a TimelockController (60 s delay standing in for 12 h), a separate pool owner standing in for a Safe, and a key standing in for the Squads vault. The deploy, the timelock batch (an early execute was rejected; it executed after the delay), the pool owner acceptance, the Solana handoff in both modes (printing the Squads instructions, then signing them), the mint authority handoff and `verify` all passed. Then 0.01 went Mantle → Solana (delivered in about 26 minutes) and 0.005 came back (released on Mantle within a minute), and `check-supply.ts` reconciled exactly (0.005 on Solana, 0.005 locked).
 
 ---
 
