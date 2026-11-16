@@ -1,21 +1,29 @@
-// Moves tokens out of a (blacklisted) account into custody as the permanent delegate (Clawback role).
-// The source always ends frozen.
-//   tsx scripts/clawback.ts --operator <keypair> --mint <mint> --source <token account> --destination <custody token account> --amount <raw>
+// Moves tokens out of a (blacklisted) account into custody as the permanent delegate. Signed by the
+// compliance admin: a keypair signs and sends (devnet / local), a Squads address prints the
+// instruction for a Squads proposal (mainnet). The source always ends frozen; freeze it first.
+//   tsx scripts/clawback.ts --payer <keypair> --compliance-admin <keypair.json|squads pubkey> --mint <mint>
+//     --source <token account> --destination <custody token account> --amount <raw>
 import { address } from "@solana/kit";
-import { coreInstruction, encodeU64, mintOpAccounts } from "./lib/core.ts";
-import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
+import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
+import { authorityPda, configPda, coreInstruction, encodeU64, mintStatePda } from "./lib/core.ts";
+import { loadKeypair, parseArgs, required } from "./lib/env.ts";
 
 const args = parseArgs();
-const operator = await loadKeypair(required(args, "operator"));
+const payer = await loadKeypair(required(args, "payer"));
+const complianceAdmin = await resolveAdmin(required(args, "compliance-admin"));
 const mint = address(required(args, "mint"));
 
 const ix = coreInstruction(
   "clawback",
   {
-    ...(await mintOpAccounts("Clawback", operator, mint)),
+    compliance_admin: complianceAdmin,
+    config: await configPda(),
+    mint,
+    mint_state: await mintStatePda(mint),
     source: address(required(args, "source")),
     destination: address(required(args, "destination")),
+    authority: await authorityPda(),
   },
   encodeU64(BigInt(required(args, "amount"))),
 );
-console.log(`clawback: ${await send(operator, [ix])}`);
+await sendOrPrint(payer, complianceAdmin, ix, `clawback (compliance admin ${adminAddress(complianceAdmin)})`);

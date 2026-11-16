@@ -50,7 +50,7 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | Script | Who signs | Purpose |
 | --- | --- | --- |
 | `init-core.ts` | Program upgrade authority | One-time setup: admin (Squads, Mantle multisig 1's role), compliance admin (Squads, multisig 4's role) and hook authority (Squads). On mainnet: deploy with the deployer as upgrade authority, run this, then transfer the upgrade authority to Squads + Timelock |
-| `grant-role.ts` | Admin or compliance admin | Grant a role. The admin grants `MultiplierScheduler`, `MetadataOps`, `MintRegistrar`; the compliance admin grants `Pauser`, `Unpauser`, `Freezer`, `Unfreezer`, `Clawback` |
+| `grant-role.ts` | Admin or compliance admin | Grant a role. The admin grants `MultiplierScheduler`, `MetadataOps`, `MintRegistrar`; the compliance admin grants `Pauser`, `Unpauser`, `Freezer`, `Unfreezer` |
 | `create-mint.ts` | Deployer + `MintRegistrar` (`--registrar`, defaults to the deployer) | Create a mint with all extensions and metadata (incl. ISIN), then `register_mint`. A Mantle token can be registered for one mint only |
 | `unregister-mint.ts` | Admin | Undo a registration made in error (wrong mint or Mantle token) so it can be redone; only while the mint's supply is 0 |
 | `schedule-multiplier.ts` | `MultiplierScheduler` | Schedule the same `(multiplier, effectiveAt)` sent to Mantle |
@@ -68,7 +68,7 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | `pause.ts` | `Pauser` / `Unpauser` (`--resume`) | Pause or resume one mint |
 | `pause-all.ts` | `Pauser` | Emergency pause of every registered mint, 8 per transaction (`--dry-run` lists them; `--mints` if the RPC rejects `getProgramAccounts`) |
 | `freeze.ts` | `Freezer` / `Unfreezer` (`--thaw`) | Freeze or thaw token accounts, 20 per transaction; `--owner <wallet>` finds every account the wallet holds for the mint (what the backend does on blacklisting) |
-| `clawback.ts` | `Clawback` | Move tokens from an account to custody as permanent delegate; the source ends frozen |
+| `clawback.ts` | Compliance admin (`--compliance-admin`; a Squads address prints the instruction for a proposal) | Move tokens from an account to custody as permanent delegate; the source ends frozen. Freeze the account first |
 | `update-metadata.ts` | `MetadataOps` | Update name / symbol / uri / any key (e.g. isin); tops up the mint's rent first |
 | `revoke-role.ts` | Admin or compliance admin | Revoke a role (the admin that governs it) |
 | `set-default-account-state.ts` | Admin | Compliance policy switch: new token accounts start frozen (`--frozen`) or usable (default) |

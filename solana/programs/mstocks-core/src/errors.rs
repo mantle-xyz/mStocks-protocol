@@ -56,4 +56,8 @@ pub enum CoreError {
     NotRoleAdmin,
     #[msg("The admin and the compliance admin must be different")]
     AdminsMustDiffer,
+    #[msg("This role is retired and cannot be granted")]
+    RoleRetired,
+    #[msg("Only the compliance admin can do this")]
+    NotComplianceAdmin,
 }

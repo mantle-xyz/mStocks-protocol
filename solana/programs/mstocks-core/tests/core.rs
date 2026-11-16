@@ -148,6 +148,30 @@ impl Env {
         self.grant_as(&admin, role, member)
     }
 
+    fn clawback_ix(
+        &self,
+        signer: &Keypair,
+        mint: &Pubkey,
+        source: Pubkey,
+        destination: Pubkey,
+        amount: u64,
+    ) -> Instruction {
+        self.core_ix(
+            mstocks_core::accounts::Clawback {
+                compliance_admin: signer.pubkey(),
+                config: self.config,
+                mint: *mint,
+                mint_state: pda(&[MINT_SEED, mint.as_ref()]),
+                source,
+                destination,
+                authority: self.authority,
+                token_program: TOKEN_2022,
+            },
+            mstocks_core::instruction::Clawback { amount },
+            vec![],
+        )
+    }
+
     fn role_admin(&self, role: Role) -> Keypair {
         if role.is_compliance() {
             self.compliance_admin.insecure_clone()
@@ -787,23 +811,9 @@ fn clawback_moves_frozen_balance_to_custody_and_refreezes() {
     let freezer = env.operator(Role::Freezer);
     env.set_frozen(&freezer, &m.mint, &[source], true).unwrap();
 
-    let clawer = env.operator(Role::Clawback);
-    let ix = env.core_ix(
-        mstocks_core::accounts::Clawback {
-            operator: clawer.pubkey(),
-            config: env.config,
-            role_entry: role_pda(Role::Clawback, &clawer.pubkey()),
-            mint: m.mint,
-            mint_state: pda(&[MINT_SEED, m.mint.as_ref()]),
-            source,
-            destination: custody,
-            authority: env.authority,
-            token_program: TOKEN_2022,
-        },
-        mstocks_core::instruction::Clawback { amount: 1_000 },
-        vec![],
-    );
-    env.send(&[ix], &[&clawer]).unwrap();
+    let compliance = env.compliance_admin.insecure_clone();
+    let ix = env.clawback_ix(&compliance, &m.mint, source, custody, 1_000);
+    env.send(&[ix], &[&compliance]).unwrap();
     assert_eq!(env.token(&source), (0, AccountState::Frozen));
     assert_eq!(env.token(&custody).0, 1_000);
 }
@@ -1041,23 +1051,9 @@ fn clawback_from_unfrozen_account_still_ends_frozen() {
     let source = env.token_account(&m.mint, &Pubkey::new_unique());
     let custody = env.token_account(&m.mint, &Pubkey::new_unique());
     env.mint_to(&m, &source, 500).unwrap();
-    let clawer = env.operator(Role::Clawback);
-    let ix = env.core_ix(
-        mstocks_core::accounts::Clawback {
-            operator: clawer.pubkey(),
-            config: env.config,
-            role_entry: role_pda(Role::Clawback, &clawer.pubkey()),
-            mint: m.mint,
-            mint_state: pda(&[MINT_SEED, m.mint.as_ref()]),
-            source,
-            destination: custody,
-            authority: env.authority,
-            token_program: TOKEN_2022,
-        },
-        mstocks_core::instruction::Clawback { amount: 200 },
-        vec![],
-    );
-    env.send(&[ix], &[&clawer]).unwrap();
+    let compliance = env.compliance_admin.insecure_clone();
+    let ix = env.clawback_ix(&compliance, &m.mint, source, custody, 200);
+    env.send(&[ix], &[&compliance]).unwrap();
     assert_eq!(env.token(&source), (300, AccountState::Frozen));
     assert_eq!(env.token(&custody).0, 200);
 }
@@ -1189,10 +1185,11 @@ fn each_admin_governs_only_its_own_roles() {
     let mut env = Env::new();
     let (admin, compliance) = (env.admin.insecure_clone(), env.compliance_admin.insecure_clone());
     let member = Pubkey::new_unique();
-    for role in [Role::Pauser, Role::Unpauser, Role::Freezer, Role::Unfreezer, Role::Clawback] {
+    for role in [Role::Pauser, Role::Unpauser, Role::Freezer, Role::Unfreezer] {
         assert_err(env.grant_as(&admin, role, &member), "NotRoleAdmin");
         env.grant_as(&compliance, role, &member).unwrap();
     }
+    assert_err(env.grant_as(&compliance, Role::Clawback, &member), "RoleRetired");
     for role in [Role::MultiplierScheduler, Role::MetadataOps, Role::MintRegistrar] {
         assert_err(env.grant_as(&compliance, role, &member), "NotRoleAdmin");
         env.grant_as(&admin, role, &member).unwrap();
@@ -1259,4 +1256,24 @@ fn compliance_admin_handover_is_two_step_and_never_operates() {
     assert_err(env.set_frozen(&freezer, &m.mint, &[account], true), "AdminCannotOperate");
     // The former compliance admin has lost its powers.
     assert_err(env.grant_as(&compliance, Role::Freezer, &Pubkey::new_unique()), "NotRoleAdmin");
+}
+
+/// Clawback is signed by the compliance admin directly; nobody else can, whatever role they hold.
+#[test]
+fn only_the_compliance_admin_claws_back() {
+    let mut env = Env::new();
+    let m = env.registered_mint();
+    let source = env.token_account(&m.mint, &Pubkey::new_unique());
+    let custody = env.token_account(&m.mint, &Pubkey::new_unique());
+    env.mint_to(&m, &source, 1_000).unwrap();
+    let admin = env.admin.insecure_clone();
+    let freezer = env.operator(Role::Freezer);
+    for signer in [&admin, &freezer] {
+        let ix = env.clawback_ix(signer, &m.mint, source, custody, 100);
+        assert_err(env.send(&[ix], &[signer]).map(|_| ()), "NotComplianceAdmin");
+    }
+    let compliance = env.compliance_admin.insecure_clone();
+    let ix = env.clawback_ix(&compliance, &m.mint, source, custody, 100);
+    env.send(&[ix], &[&compliance]).unwrap();
+    assert_eq!(env.token(&source), (900, AccountState::Frozen));
 }

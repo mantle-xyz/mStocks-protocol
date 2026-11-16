@@ -1,6 +1,6 @@
 // One-time Core initialization. Must be signed by the program's upgrade authority.
 // Two admins, split like Mantle's: --admin governs the token roles and the mint registry (Mantle
-// multisig 1), --compliance-admin the pause / freeze / clawback roles (Mantle multisig 4).
+// multisig 1), --compliance-admin the pause / freeze roles and clawback (Mantle multisig 4).
 //   tsx scripts/init-core.ts --upgrade-authority ~/.config/solana/id.json --admin <squads> \
 //     --compliance-admin <squads> --hook-authority <squads>
 import { address } from "@solana/kit";

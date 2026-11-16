@@ -86,17 +86,14 @@ fn set_frozen<'info>(
     Ok(())
 }
 
+/// Clawback moves a holder's tokens without their signature, so it is not an operations role: the
+/// compliance admin (a Squads multisig with a time lock, like Mantle's multisig 4) signs it
+/// directly. In practice the account is frozen first (instantly, by the Freezer), then clawed back.
 #[derive(Accounts)]
 pub struct Clawback<'info> {
-    #[account(constraint = !config.is_admin(&operator.key()) @ CoreError::AdminCannotOperate)]
-    pub operator: Signer<'info>,
-    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    pub compliance_admin: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = compliance_admin @ CoreError::NotComplianceAdmin)]
     pub config: Account<'info, Config>,
-    #[account(
-        seeds = [ROLE_SEED, &Role::Clawback.seed(), operator.key().as_ref()],
-        bump = role_entry.bump,
-    )]
-    pub role_entry: Account<'info, RoleEntry>,
     /// CHECK: registered Token-2022 mint (enforced by `mint_state` seeds).
     #[account(owner = spl_token_2022::ID)]
     pub mint: UncheckedAccount<'info>,

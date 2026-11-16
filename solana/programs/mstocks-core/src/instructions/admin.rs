@@ -144,6 +144,7 @@ pub struct GrantRole<'info> {
 }
 
 pub fn grant_role(ctx: Context<GrantRole>, role: Role, member: Pubkey) -> Result<()> {
+    require!(role != Role::Clawback, CoreError::RoleRetired);
     ctx.accounts.role_entry.set_inner(RoleEntry { role, member, bump: ctx.bumps.role_entry });
     emit!(RoleGranted { role, member });
     Ok(())

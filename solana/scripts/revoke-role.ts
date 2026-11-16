@@ -1,7 +1,7 @@
 // Revokes a Core role (admin; the role account's rent returns to the admin).
 //   tsx scripts/revoke-role.ts --payer <keypair> --admin <keypair.json|squads pubkey> --role Freezer --member <pubkey>
 // --admin is the admin that governs the role: the compliance admin for Pauser, Unpauser, Freezer,
-// Unfreezer and Clawback, the admin for the others.
+// Unfreezer and the retired Clawback, the admin for the others.
 import { address } from "@solana/kit";
 import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
 import { configPda, coreInstruction, concat, encodePubkey, encodeU8, roleIndex, rolePda } from "./lib/core.ts";

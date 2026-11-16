@@ -34,7 +34,7 @@ fi
 
 echo "== grant roles (scheduler + ops)"
 npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --role MultiplierScheduler --member "$(pk scheduler)" || true
-for r in Pauser Unpauser Freezer Unfreezer Clawback; do
+for r in Pauser Unpauser Freezer Unfreezer; do
   npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/compliance-admin.json" --role $r --member "$(pk ops)" >/dev/null 2>&1 || true
 done
 npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --role MetadataOps --member "$(pk ops)" >/dev/null 2>&1 || true
@@ -60,7 +60,7 @@ CUSTODY_ATA=$(npx tsx scripts/dev-mint-to.ts --mint-authority "$DEPLOYER" --mint
 
 echo "== blacklist user → clawback 2 → thaw"
 npx tsx scripts/freeze.ts --operator "$KEYS/ops.json" --mint "$MINT" --owner "$(pk user)"
-npx tsx scripts/clawback.ts --operator "$KEYS/ops.json" --mint "$MINT" --source "$USER_ATA" --destination "$CUSTODY_ATA" --amount 2000000000
+npx tsx scripts/clawback.ts --payer "$DEPLOYER" --compliance-admin "$KEYS/compliance-admin.json" --mint "$MINT" --source "$USER_ATA" --destination "$CUSTODY_ATA" --amount 2000000000
 npx tsx scripts/show-account.ts --account "$USER_ATA"
 npx tsx scripts/show-account.ts --account "$CUSTODY_ATA"
 npx tsx scripts/freeze.ts --operator "$KEYS/ops.json" --mint "$MINT" --owner "$(pk user)" --thaw

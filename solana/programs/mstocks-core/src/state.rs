@@ -104,7 +104,8 @@ pub enum Role {
     /// Thaws token accounts once a wallet leaves the blacklist — the same backend KMS by default,
     /// like the Mantle `ComplianceRegistry` OPS role, which both sanctions and unsanctions.
     Unfreezer,
-    /// Moves tokens out of an account via the permanent delegate — multisig.
+    /// Retired: clawback is signed by the compliance admin and cannot be granted (`RoleRetired`).
+    /// Kept so the roles after it keep their seeds; existing entries can still be revoked.
     Clawback,
     /// Updates name / symbol / ISIN metadata.
     MetadataOps,

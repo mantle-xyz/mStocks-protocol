@@ -14,7 +14,8 @@
 #   MANTLE_SCHEDULER_KEY             file with the hex key holding MULTIPLIER_SCHEDULER_ROLE on MANTLE_TOKEN
 #   MANTLE_RECEIVER                  EVM address for the ccip_send in G
 #   KEYS                             devnet Core role keys (ops.json: Pauser/Unpauser/Freezer/Unfreezer/
-#                                    Clawback/MetadataOps, scheduler.json: MultiplierScheduler);
+#                                    MetadataOps, scheduler.json: MultiplierScheduler,
+#                                    compliance-admin.json: the compliance admin, which signs clawback);
 #                                    default ~/.config/solana/mstocks-devnet
 #   MULTIPLIER_1E18                  default 2000000000000000000 (2x)
 set -euo pipefail
@@ -76,7 +77,7 @@ run npx tsx scripts/freeze.ts --operator "$KEYS/ops.json" --mint "$MINT" --owner
 run st transfer "$MINT" 0.01 "$H" --owner "$WORK/user2.json" --fee-payer "$WORK/user2.json" && echo "   transfer after thaw ok"
 
 echo "== D: clawback 0.05 from user2 to holder (source ends frozen)"
-run npx tsx scripts/clawback.ts --operator "$KEYS/ops.json" --mint "$MINT" --source "$U2_ATA" --destination "$H_ATA" --amount 50000000
+run npx tsx scripts/clawback.ts --payer "$PAYER" --compliance-admin "$KEYS/compliance-admin.json" --mint "$MINT" --source "$U2_ATA" --destination "$H_ATA" --amount 50000000
 echo "   user2: $(amount "$U2_ATA"); state $(st display "$U2_ATA" | awk '/State/{print $2}')"
 run npx tsx scripts/freeze.ts --operator "$KEYS/ops.json" --mint "$MINT" --owner "$U2" --thaw
 

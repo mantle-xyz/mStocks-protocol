@@ -52,7 +52,7 @@ echo "== show-mint"
 npx tsx scripts/show-mint.ts --mint "$MINT"
 
 echo "== grant operational roles to ops"
-for r in Pauser Unpauser Freezer Unfreezer Clawback; do
+for r in Pauser Unpauser Freezer Unfreezer; do
   npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/compliance.json" --role $r --member "$(pk ops)" >/dev/null
 done
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MetadataOps --member "$(pk ops)" >/dev/null
@@ -69,7 +69,7 @@ npx tsx scripts/freeze.ts --operator "$WORK/ops.json" --mint "$MINT" --owner "$(
 npx tsx scripts/show-account.ts --account "$USER_ATA"
 
 echo "== clawback 2 tokens to custody (source stays frozen)"
-npx tsx scripts/clawback.ts --operator "$WORK/ops.json" --mint "$MINT" --source "$USER_ATA" --destination "$CUSTODY_ATA" --amount 2000000000
+npx tsx scripts/clawback.ts --payer "$WORK/deployer.json" --compliance-admin "$WORK/compliance.json" --mint "$MINT" --source "$USER_ATA" --destination "$CUSTODY_ATA" --amount 2000000000
 npx tsx scripts/show-account.ts --account "$USER_ATA"
 npx tsx scripts/show-account.ts --account "$CUSTODY_ATA"
 
@@ -100,8 +100,8 @@ npx tsx scripts/show-mint.ts --mint "$MINT" | grep DefaultAccountState
 npx tsx scripts/set-default-account-state.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$MINT"
 npx tsx scripts/show-mint.ts --mint "$MINT" | grep DefaultAccountState
 
-echo "== revoke Clawback from ops"
-npx tsx scripts/revoke-role.ts --payer "$WORK/deployer.json" --admin "$WORK/compliance.json" --role Clawback --member "$(pk ops)"
+echo "== revoke MetadataOps from ops"
+npx tsx scripts/revoke-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MetadataOps --member "$(pk ops)"
 
 echo "== handoff dry run"
 npx tsx scripts/handoff-mint-authority.ts --mint-authority "$WORK/deployer.json" --mint "$MINT"

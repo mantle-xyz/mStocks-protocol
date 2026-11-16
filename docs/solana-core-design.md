@@ -66,7 +66,7 @@ Same separation of duties, admins and time locks as on Mantle (decided 2026-11-1
 | --- | --- | --- | --- | --- |
 | Program upgrade authority | Upgrade Core; run `initialize` once | Squads mirroring multisig 2: 3/6 + 24 h time lock | Beacon / ProxyAdmin owner | Multisig 2, 3/6 + 24 h timelock |
 | Admin (`Config.admin`) | Grant / revoke `MINT_REGISTRAR`, `MULTIPLIER_SCHEDULER`, `METADATA_OPS`; unregister an empty mint registered in error; switch the default account state; **no operational actions** | Squads mirroring multisig 1: 3/6 + 12 h time lock | `DEFAULT_ADMIN_ROLE` of the factory and ScaledToken | Multisig 1, 3/6 + 12 h timelock |
-| Compliance admin (`Config.compliance_admin`) | Grant / revoke `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`, `CLAWBACK`; **no operational actions** | Squads mirroring multisig 4: 3/6 + 12 h time lock | `DEFAULT_ADMIN_ROLE` of the compliance and pause registries | Multisig 4, 3/6 + 12 h timelock |
+| Compliance admin (`Config.compliance_admin`) | Grant / revoke `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`; **clawback** (signed directly, no role); otherwise no operational actions | Squads mirroring multisig 4: 3/6 + 12 h time lock | `DEFAULT_ADMIN_ROLE` of the compliance and pause registries | Multisig 4, 3/6 + 12 h timelock |
 | `MINT_REGISTRAR` | Register new mints | RWA-Bycustody key (as EOA1) | Factory `OPS_ROLE` (`createToken`) | EOA1 (RWA-Bycustody) |
 | `MULTIPLIER_SCHEDULER` | Schedule the multiplier | RWA-Bycustody key (as EOA3) | `MULTIPLIER_SCHEDULER_ROLE` | EOA3 (RWA-Bycustody) |
 | `METADATA_OPS` | Update name, symbol, ISIN | RWA-Bycustody key (as EOA2) | ScaledToken `OPS_ROLE` | EOA2 (RWA-Bycustody) |
@@ -74,14 +74,13 @@ Same separation of duties, admins and time locks as on Mantle (decided 2026-11-1
 | `UNPAUSER` | Resume | Squads mirroring multisig 5, no time lock (resuming must be fast) | `UNPAUSE_ROLE` | Multisig 5, no timelock |
 | `FREEZER` | Freeze accounts (blacklist) | Mantle's compliance backend KMS (as EOA5) | `ComplianceRegistry` `OPS_ROLE` (`sanctionUsers`) | EOA5 (Mantle) |
 | `UNFREEZER` | Thaw accounts (automatically after removal from the blacklist) | Same key as `FREEZER` | `ComplianceRegistry` `OPS_ROLE` (`unsanctionUsers`) | EOA5 (Mantle) |
-| `CLAWBACK` | Clawback (Permanent Delegate) | A multisig other than the two admins (no Mantle equivalent) | — | — |
 | Transfer Hook authority (Token-2022, not Core) | Attach / remove a program that checks every transfer | The admin's Squads (multisig 1's group, 12 h) | ScaledToken admin's `updateCompliance` / `updatePauseManager` | Multisig 1, 3/6 + 12 h timelock |
 | CCIP token admin, per mint (router's token admin registry) | Point the mint at a different pool | The admin's Squads (`ccip-handoff.ts`) | CCIP token admin (`TokenAdminRegistry`) | The token's `DEFAULT_ADMIN_ROLE`: multisig 1 (§6.2) |
 | CCIP pool owner (BurnMint pool) | Remote chains and pools, rate limits | The admin's Squads (`ccip-handoff.ts`) | LockRelease pool owner | Multisig 1 (§6.2) |
 | — | Rate limits only | Pool owner | Pool `rateLimitAdmin` (optional) | Operations multisig, or unset |
 | — | — | — | Pool `rebalancer` (can withdraw every locked token) | **Unset** |
 
-Mantle's multisig 3 (TokenIssuer admin) has no Solana counterpart: minting on Solana belongs only to the CCIP pool. Still open: which multisig holds `CLAWBACK` (it cannot be either admin).
+Mantle's multisig 3 (TokenIssuer admin) has no Solana counterpart: minting on Solana belongs only to the CCIP pool. Clawback has no Mantle counterpart either; it moves a holder's tokens without their signature, so it is signed by the compliance admin itself (3/6 + 12 h) rather than delegated to an operations role. The `Clawback` role value is retired: it cannot be granted (`RoleRetired`) and stays in the enum only so later roles keep their seeds.
 
 **Guards carried over:**
 - Each admin grants and revokes only its own roles (`NotRoleAdmin`).
@@ -101,7 +100,7 @@ Mantle's multisig 3 (TokenIssuer admin) has no Solana counterpart: minting on So
 | `initialize(admin, compliance_admin, hook_authority)` | Program upgrade authority | Once only; the signer must be the program's upgrade authority, so nobody can initialize first after deployment | Create `Config` |
 | `propose_admin(new)` / `accept_admin` | Current admin / new admin | Two-step confirmation; `new` ≠ compliance admin | Change the admin |
 | `propose_compliance_admin(new)` / `accept_compliance_admin` | Current compliance admin / new one | Two-step confirmation; `new` ≠ admin | Change the compliance admin |
-| `grant_role(role, member)` | The role's admin (compliance admin for `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`, `CLAWBACK`; admin for the others) | `member` is neither admin | Create `RoleEntry` |
+| `grant_role(role, member)` | The role's admin (compliance admin for `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`; admin for the others); the retired `Clawback` cannot be granted | `member` is neither admin | Create `RoleEntry` |
 | `revoke_role(role, member)` | The role's admin | — | Close `RoleEntry` |
 | `renounce_role(role)` | The member | — | Close their own `RoleEntry` |
 | `register_mint(mantle_token)` | `MINT_REGISTRAR` | See below; `mantle_token` non-zero and not yet registered for another mint | Create `MintState` and `MantleTokenIndex` |
@@ -152,7 +151,7 @@ Consistency comes from the operating process and reconciliation: ops send the sa
 | --- | --- | --- |
 | `freeze(mint, token_accounts…)` | `FREEZER` | Batch CPI `FreezeAccount` on every given token account of the registered mint. Skipped without failing the batch: accounts already frozen (so the backend can resend), and accounts that are not, or no longer, token accounts of this mint (a wallet can close an empty account or re-create it for another mint between the backend's lookup and the freeze; that must not leave its funded accounts usable). Up to about 23 accounts per transaction; the script sends batches of 20 (measured 92k CU, 1132 bytes) |
 | `thaw(mint, token_accounts…)` | `UNFREEZER` | Batch CPI `ThawAccount`; same skipping rules as `freeze` |
-| `clawback(source, destination, amount)` | `CLAWBACK` | In one instruction: thaw source → `transfer_checked` to destination as Permanent Delegate → freeze source again |
+| `clawback(source, destination, amount)` | Compliance admin | In one instruction: thaw source → `transfer_checked` to destination as Permanent Delegate → freeze source again |
 
 `clawback` thaws first because a frozen account cannot send even when the Permanent Delegate initiates the transfer (tested: a direct transfer fails with `AccountFrozen`; "thaw → transfer → freeze" in one transaction succeeds). The destination should be a custody account. Three consequences of how Token-2022 works: `clawback` fails while the mint is paused (a pause rejects every transfer, including the permanent delegate's; freeze and thaw still work, so freeze first and claw back after resuming); it fails if the Transfer Hook is ever given a program (the CPI passes no hook accounts; Core would need an upgrade first); and with `amount = 0` it succeeds and leaves the source frozen.
 
@@ -319,7 +318,7 @@ Test runs and results are recorded in a separate [test report](https://skfc4x16l
 - Multiplier conversion: Core rejects multipliers with more than 15 significant digits, so the f64 Token-2022 stores carries the same value as Mantle.
 - Core's upgrade authority goes to the Squads multisig + Timelock. `initialize` requires the upgrade authority's signature, so the order is: deployer deploys → `init-core` → hand off the upgrade authority.
 - `register_mint` uses an extension allowlist: any extension on the mint that Core does not control is rejected, so no back-door authority is left behind.
-- The backend KMS key holds both `FREEZER` and `UNFREEZER`, matching OPS on EVM, which can both sanction and unsanction: a leaked key can freeze / thaw any account but cannot move assets (`CLAWBACK` is with the multisig). The Admin can revoke its roles at any time.
+- The backend KMS key holds both `FREEZER` and `UNFREEZER`, matching OPS on EVM, which can both sanction and unsanction: a leaked key can freeze / thaw any account but cannot move assets (clawback is signed by the compliance admin multisig). The compliance admin can revoke its roles at any time.
 - If `set_default_account_state` is later used to switch to "screen before use", every new account has to be thawed first. The backend already holds `UNFREEZER` and could thaw new accounts directly, but that role can thaw any account; to limit it to opening new accounts, a separate "account opening" role can be added then. It also stops CCIP deliveries to new wallets (tested on devnet): the executor creates the receiver's token account, which starts frozen, so the pool's MintTo fails (`Account is frozen`) and the message waits for a manual execution. Nothing thaws that account automatically, because the backend only learns about a wallet from a successful transfer. Before switching a CCIP-connected mint to screen before use, the backend needs a way to screen and thaw new accounts (for example by watching the mint's account creations), and failed deliveries need `ccip-manual-exec.ts` after the thaw.
 - Holders can burn their own tokens: Token-2022 allows it and it cannot be turned off (on Mantle burning needs `BURN_ROLE`). Tokens burned on Solana stay locked in Mantle's LockRelease pool for good. This only affects the holder and is not a security issue; supply reconciliation therefore checks Solana total supply ≤ the amount locked in the Mantle pool rather than strict equality (`check-supply.ts`).
 - Privileged roles are trusted with every token account of a mint, including the CCIP pool's own token account: freezing it (or clawing back from it, which leaves it frozen) stops Solana → Mantle transfers until it is thawed.
@@ -334,7 +333,7 @@ Test runs and results are recorded in a separate [test report](https://skfc4x16l
 | # | Topic | Decision |
 | --- | --- | --- |
 | 1 | Multiplier sync | Option B: each chain schedules its own; CCIP only moves tokens |
-| 2 | Permanent Delegate | Enabled, delegate = Authority PDA; `clawback` implemented |
+| 2 | Permanent Delegate | Enabled, delegate = Authority PDA; `clawback` implemented, signed by the compliance admin (decided 2026-11-16) |
 | 3 | Transfer Hook | Dormant (no program), authority held directly by the Squads multisig |
 | 4 | Code location | This repo, `solana/` directory |
 | 5 | Toolchain | Upgrade to Agave + Anchor 1.x |
