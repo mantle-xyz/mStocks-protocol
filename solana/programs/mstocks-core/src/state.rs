@@ -3,6 +3,8 @@ use anchor_lang::prelude::*;
 pub const CONFIG_SEED: &[u8] = b"config";
 pub const ROLE_SEED: &[u8] = b"role";
 pub const MINT_SEED: &[u8] = b"mint";
+/// Seed of the index that maps one Mantle token to the one mint registered for it.
+pub const MANTLE_TOKEN_SEED: &[u8] = b"mantle_token";
 /// Seed of the PDA that holds every Token-2022 authority (multiplier, pause, freeze, metadata,
 /// permanent delegate) of every registered mint. Only this program can sign for it.
 pub const AUTHORITY_SEED: &[u8] = b"authority";
@@ -25,7 +27,7 @@ pub const DEFAULT_MAX_HORIZON: i64 = 365 * 24 * 60 * 60;
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
-    /// Squads multisig. Only grants/revokes roles and registers mints; never operates.
+    /// Squads multisig. Grants/revokes roles and governs the mint registry; never operates.
     pub admin: Pubkey,
     /// Two-step admin handover target.
     pub pending_admin: Option<Pubkey>,
@@ -56,6 +58,15 @@ pub struct MintState {
     pub bump: u8,
 }
 
+/// `["mantle_token", mantle_token]`: the mint registered for a Mantle token. Its existence is what
+/// stops a second mint from being registered for the same token.
+#[account]
+#[derive(InitSpace)]
+pub struct MantleTokenIndex {
+    pub mint: Pubkey,
+    pub bump: u8,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq, Debug, InitSpace)]
 pub enum Role {
     /// Schedules multiplier changes (Mantle `MULTIPLIER_SCHEDULER_ROLE`).
@@ -73,6 +84,10 @@ pub enum Role {
     Clawback,
     /// Updates name / symbol / ISIN metadata.
     MetadataOps,
+    /// Registers new mints — operations KMS, like the `OPS_ROLE` that deploys tokens through
+    /// Mantle's `ScaledTokenFactory`. Appended last: a role's seed is its index, so existing
+    /// role accounts keep their addresses.
+    MintRegistrar,
 }
 
 impl Role {

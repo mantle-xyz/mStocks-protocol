@@ -47,7 +47,8 @@ until solana -u l cluster-version >/dev/null 2>&1; do sleep 1; done
 for k in deployer admin scheduler; do solana -u l airdrop 100 "$(pk $k)" >/dev/null; done
 npx tsx scripts/init-core.ts --upgrade-authority "$WORK/deployer.json" --admin "$(pk admin)" --hook-authority "$(pk hook)" >/dev/null
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MultiplierScheduler --member "$(pk scheduler)" >/dev/null
-MINT=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --hook-authority "$(pk hook)" \
+npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MintRegistrar --member "$(pk deployer)" >/dev/null
+MINT=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
   --name "Apple mStock" --symbol AAPLm --uri https://example.com --mantle-token "$TOKEN" --initial-multiplier-1e18 1000000000000000000 \
   | awk '/^mint: /{print $2}')
 echo "solana mint: $MINT"

@@ -48,4 +48,8 @@ pub enum CoreError {
     UnexpectedExtension,
     #[msg("Multiplier has more than 15 significant digits")]
     MultiplierTooPrecise,
+    #[msg("Mantle token address must not be zero")]
+    ZeroMantleToken,
+    #[msg("Only a mint with zero supply can be unregistered")]
+    MintHasSupply,
 }

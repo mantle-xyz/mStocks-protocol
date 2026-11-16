@@ -8,7 +8,7 @@ use anchor_lang::{prelude::Pubkey, AccountDeserialize, InstructionData, ToAccoun
 use litesvm::LiteSVM;
 use mstocks_core::{
     instructions::MetadataField,
-    state::{Config, Role, AUTHORITY_SEED, CONFIG_SEED, MINT_SEED, ROLE_SEED},
+    state::{Config, Role, AUTHORITY_SEED, CONFIG_SEED, MANTLE_TOKEN_SEED, MINT_SEED, ROLE_SEED},
 };
 use solana_clock::Clock;
 use solana_keypair::Keypair;
@@ -26,7 +26,6 @@ use spl_token_2022_interface::{
 
 const NOW: i64 = 1_800_000_000;
 const ONE: u128 = 1_000_000_000_000_000_000;
-const MANTLE_TOKEN: [u8; 20] = [7u8; 20];
 
 fn program_so() -> String {
     format!("{}/../../target/deploy/mstocks_core.so", env!("CARGO_MANIFEST_DIR"))
@@ -51,6 +50,10 @@ struct Env {
     hook_admin: Keypair,
     config: Pubkey,
     authority: Pubkey,
+    /// Holds `MintRegistrar` (granted in `new`).
+    registrar: Option<Keypair>,
+    /// Each registration gets its own Mantle token: one token maps to one mint.
+    next_mantle_token: u8,
 }
 
 impl Env {
@@ -59,6 +62,7 @@ impl Env {
         let mut env = Self::bare();
         let (admin, hook) = (env.admin.pubkey(), env.hook_admin.pubkey());
         env.initialize(&env.payer.insecure_clone(), admin, hook).expect("initialize");
+        env.registrar = Some(env.operator(Role::MintRegistrar));
         env
     }
 
@@ -81,6 +85,8 @@ impl Env {
             hook_admin: Keypair::new(),
             config: pda(&[CONFIG_SEED]),
             authority: pda(&[AUTHORITY_SEED]),
+            registrar: None,
+            next_mantle_token: 1,
         }
     }
 
@@ -232,22 +238,46 @@ impl Env {
         TestMint { mint: m, mint_authority }
     }
 
+    /// Registers `mint` for a Mantle token no other mint uses, signed by the registrar.
     fn register(&mut self, mint: &Pubkey) -> Result<(), String> {
-        let admin = self.admin.insecure_clone();
+        let token = [self.next_mantle_token; 20];
+        self.next_mantle_token += 1;
+        let registrar = self.registrar.as_ref().expect("registrar").insecure_clone();
+        self.register_as(&registrar, mint, token)
+    }
+
+    fn register_as(&mut self, registrar: &Keypair, mint: &Pubkey, mantle_token: [u8; 20]) -> Result<(), String> {
         let ix = self.core_ix(
             mstocks_core::accounts::RegisterMint {
                 payer: self.payer.pubkey(),
+                registrar: registrar.pubkey(),
+                config: self.config,
+                role_entry: role_pda(Role::MintRegistrar, &registrar.pubkey()),
+                mint: *mint,
+                mint_state: pda(&[MINT_SEED, mint.as_ref()]),
+                mantle_index: pda(&[MANTLE_TOKEN_SEED, &mantle_token]),
+                authority: self.authority,
+                system_program: system_program(),
+            },
+            mstocks_core::instruction::RegisterMint { mantle_token },
+            vec![],
+        );
+        self.send(&[ix], &[registrar]).map(|_| ())
+    }
+
+    fn unregister_as(&mut self, admin: &Keypair, mint: &Pubkey, mantle_token: [u8; 20]) -> Result<(), String> {
+        let ix = self.core_ix(
+            mstocks_core::accounts::UnregisterMint {
                 admin: admin.pubkey(),
                 config: self.config,
                 mint: *mint,
                 mint_state: pda(&[MINT_SEED, mint.as_ref()]),
-                authority: self.authority,
-                system_program: system_program(),
+                mantle_index: pda(&[MANTLE_TOKEN_SEED, &mantle_token]),
             },
-            mstocks_core::instruction::RegisterMint { mantle_token: MANTLE_TOKEN },
+            mstocks_core::instruction::UnregisterMint {},
             vec![],
         );
-        self.send(&[ix], &[&admin]).map(|_| ())
+        self.send(&[ix], &[admin]).map(|_| ())
     }
 
     /// A registered mint configured exactly as the design requires.
@@ -873,6 +903,97 @@ fn a_mint_registers_only_once() {
     let mut env = Env::new();
     let m = env.registered_mint();
     assert!(env.register(&m.mint).is_err());
+}
+
+#[test]
+fn registration_needs_the_registrar_role_and_never_the_admin() {
+    let mut env = Env::new();
+    let m = env.create_mint(MintOpts::valid());
+    let stranger = Keypair::new();
+    env.svm.airdrop(&stranger.pubkey(), 1_000_000_000).unwrap();
+    assert!(env.register_as(&stranger, &m.mint, [1u8; 20]).is_err(), "no role, no registration");
+    let admin = env.admin.insecure_clone();
+    assert!(env.register_as(&admin, &m.mint, [1u8; 20]).is_err(), "the admin holds no registrar role");
+    let pauser = env.operator(Role::Pauser);
+    assert!(env.register_as(&pauser, &m.mint, [1u8; 20]).is_err(), "another role does not register");
+    let registrar = env.registrar.as_ref().unwrap().insecure_clone();
+    env.register_as(&registrar, &m.mint, [1u8; 20]).unwrap();
+
+    // A registrar that becomes the admin keeps its role account but can no longer register.
+    let ix = env.core_ix(
+        mstocks_core::accounts::AdminOnly { admin: admin.pubkey(), config: env.config },
+        mstocks_core::instruction::ProposeAdmin { new_admin: registrar.pubkey() },
+        vec![],
+    );
+    env.send(&[ix], &[&admin]).unwrap();
+    let ix = env.core_ix(
+        mstocks_core::accounts::AcceptAdmin { new_admin: registrar.pubkey(), config: env.config },
+        mstocks_core::instruction::AcceptAdmin {},
+        vec![],
+    );
+    env.send(&[ix], &[&registrar]).unwrap();
+    let next = env.create_mint(MintOpts::valid());
+    assert_err(env.register_as(&registrar, &next.mint, [2u8; 20]), "AdminCannotOperate");
+}
+
+#[test]
+fn one_mantle_token_maps_to_one_mint() {
+    let mut env = Env::new();
+    let registrar = env.registrar.as_ref().unwrap().insecure_clone();
+    let (a, b) = (env.create_mint(MintOpts::valid()), env.create_mint(MintOpts::valid()));
+    env.register_as(&registrar, &a.mint, [9u8; 20]).unwrap();
+    assert!(env.register_as(&registrar, &b.mint, [9u8; 20]).is_err(), "token already has a mint");
+    assert_err(env.register_as(&registrar, &b.mint, [0u8; 20]), "ZeroMantleToken");
+    env.register_as(&registrar, &b.mint, [10u8; 20]).unwrap();
+}
+
+/// A registration made in error can be undone while the mint is empty, then redone correctly;
+/// once the mint has supply it stays registered.
+#[test]
+fn admin_unregisters_only_an_empty_mint() {
+    let mut env = Env::new();
+    let registrar = env.registrar.as_ref().unwrap().insecure_clone();
+    let admin = env.admin.insecure_clone();
+    let m = env.create_mint(MintOpts::valid());
+    env.register_as(&registrar, &m.mint, [20u8; 20]).unwrap();
+
+    assert!(env.unregister_as(&registrar, &m.mint, [20u8; 20]).is_err(), "only the admin unregisters");
+    env.unregister_as(&admin, &m.mint, [20u8; 20]).unwrap();
+    assert!(env.svm.get_account(&pda(&[MINT_SEED, m.mint.as_ref()])).is_none_or(|a| a.data.is_empty()));
+    let pauser = env.operator(Role::Pauser);
+    assert!(env.set_paused(&pauser, &m.mint, true).is_err(), "an unregistered mint cannot be operated");
+
+    // Registered again for the right token; the wrong token is free for another mint.
+    env.register_as(&registrar, &m.mint, [21u8; 20]).unwrap();
+    let other = env.create_mint(MintOpts::valid());
+    env.register_as(&registrar, &other.mint, [20u8; 20]).unwrap();
+    env.set_paused(&pauser, &m.mint, true).unwrap();
+    let unpauser = env.operator(Role::Unpauser);
+    env.set_paused(&unpauser, &m.mint, false).unwrap();
+
+    let account = env.token_account(&m.mint, &Pubkey::new_unique());
+    env.mint_to(&m, &account, 1).unwrap();
+    assert_err(env.unregister_as(&admin, &m.mint, [21u8; 20]), "MintHasSupply");
+}
+
+/// A role's seed is its enum index; new roles are appended so existing role accounts keep their
+/// addresses across upgrades.
+#[test]
+fn role_seeds_are_stable() {
+    let seeds: Vec<u8> = [
+        Role::MultiplierScheduler,
+        Role::Pauser,
+        Role::Unpauser,
+        Role::Freezer,
+        Role::Unfreezer,
+        Role::Clawback,
+        Role::MetadataOps,
+        Role::MintRegistrar,
+    ]
+    .iter()
+    .map(|r| r.seed()[0])
+    .collect();
+    assert_eq!(seeds, (0..8).collect::<Vec<u8>>());
 }
 
 #[test]

@@ -50,6 +50,11 @@ pub mod mstocks_core {
         instructions::register_mint::register_mint(ctx, mantle_token)
     }
 
+    /// Admin-only correction of a registration made in error; only while the mint has no supply.
+    pub fn unregister_mint(ctx: Context<UnregisterMint>) -> Result<()> {
+        instructions::register_mint::unregister_mint(ctx)
+    }
+
     pub fn schedule_multiplier(
         ctx: Context<ScheduleMultiplier>,
         multiplier_1e18: u128,

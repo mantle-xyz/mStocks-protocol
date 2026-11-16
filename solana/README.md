@@ -50,8 +50,9 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | Script | Who signs | Purpose |
 | --- | --- | --- |
 | `init-core.ts` | Program upgrade authority | One-time setup: admin (Squads) and hook authority (Squads). On mainnet: deploy with the deployer as upgrade authority, run this, then transfer the upgrade authority to Squads + Timelock |
-| `grant-role.ts` | Admin | Grant `MultiplierScheduler`, `Pauser`, `Unpauser`, `Freezer`, `Unfreezer`, `Clawback`, `MetadataOps` |
-| `create-mint.ts` | Deployer + admin | Create a mint with all extensions and metadata (incl. ISIN), then `register_mint` |
+| `grant-role.ts` | Admin | Grant `MultiplierScheduler`, `Pauser`, `Unpauser`, `Freezer`, `Unfreezer`, `Clawback`, `MetadataOps`, `MintRegistrar` |
+| `create-mint.ts` | Deployer + `MintRegistrar` (`--registrar`, defaults to the deployer) | Create a mint with all extensions and metadata (incl. ISIN), then `register_mint`. A Mantle token can be registered for one mint only |
+| `unregister-mint.ts` | Admin | Undo a registration made in error (wrong mint or Mantle token) so it can be redone; only while the mint's supply is 0 |
 | `schedule-multiplier.ts` | `MultiplierScheduler` | Schedule the same `(multiplier, effectiveAt)` sent to Mantle |
 | `check-multiplier.ts` | — | Reconcile each mint's multiplier with its Mantle `ScaledToken` (address read from Core); exits 1 on mismatch for alerting. Needs `MANTLE_RPC_URL` |
 | `check-supply.ts` | — | Check each mint's Solana supply against the tokens locked in its Mantle pool (token from Core, pool from `--registry`, the Mantle TokenAdminRegistry); exits 1 if Solana holds more than is locked. Needs `MANTLE_RPC_URL` |

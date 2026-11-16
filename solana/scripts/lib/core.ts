@@ -38,6 +38,8 @@ async function pda(seeds: Seeds, program = CORE_PROGRAM_ID): Promise<Address> {
 export const configPda = () => pda([utf8.encode("config")]);
 export const authorityPda = () => pda([utf8.encode("authority")]);
 export const mintStatePda = (mint: Address) => pda([utf8.encode("mint"), enc.encode(mint)]);
+/** Index of the one mint registered for a Mantle token (20 raw address bytes). */
+export const mantleTokenPda = (token: Uint8Array) => pda([utf8.encode("mantle_token"), token]);
 export const rolePda = (role: RoleName, member: Address) =>
   pda([utf8.encode("role"), Uint8Array.of(roleIndex(role)), enc.encode(member)]);
 export const programDataPda = () => pda([enc.encode(CORE_PROGRAM_ID)], BPF_LOADER_UPGRADEABLE);

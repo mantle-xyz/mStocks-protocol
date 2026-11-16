@@ -50,6 +50,7 @@
 | `Config` | `["config"]` | `admin`, `pending_admin`, `hook_authority` (Squads, checked by `register_mint`), `min_notice` (300 s), `max_horizon` (365 days), `bump` | Singleton. `hook_authority`, `min_notice` and `max_horizon` are set at `initialize` and have no setter (on Mantle the notice period is fixed per implementation too) |
 | `RoleEntry` | `["role", role_id, member]` | `role`, `member`, `bump` | The account existing means the member holds the role; mirrors Mantle's `AccessControl`, several members per role |
 | `MintState` | `["mint", mint]` | `mint`, `mantle_token` (20 bytes), `bump` | Only registered stocks can be operated by Core |
+| `MantleTokenIndex` | `["mantle_token", mantle_token]` | `mint`, `bump` | One per Mantle token: a token can be registered for one mint only |
 | Authority PDA | `["authority"]` | No data | Holds the Token-2022 authorities and signs the CPIs |
 
 **Why one global Authority PDA instead of one per mint:** every operation goes through the same role checks, so splitting by mint does not reduce risk, it only complicates setup. Isolation between mints comes from `MintState` registration and account checks.
@@ -62,7 +63,7 @@ Same separation of duties as on Mantle:
 
 | Role | Holder | Can do | Mantle equivalent |
 | --- | --- | --- | --- |
-| Admin | Squads multisig | Grant / revoke roles, register mints, switch the default account state, hand over the admin; **no operational actions** | `DEFAULT_ADMIN_ROLE` |
+| Admin | Squads multisig | Grant / revoke roles, unregister an empty mint registered in error, switch the default account state, hand over the admin; **no operational actions** | `DEFAULT_ADMIN_ROLE` |
 | `MULTIPLIER_SCHEDULER` | Scheduling KMS | Schedule the multiplier | `MULTIPLIER_SCHEDULER_ROLE` |
 | `PAUSER` | Ops EOA / KMS | Pause | `PAUSE_ROLE` |
 | `UNPAUSER` | Multisig | Resume | `UNPAUSE_ROLE` |
@@ -70,6 +71,7 @@ Same separation of duties as on Mantle:
 | `UNFREEZER` | Backend KMS (same key as `FREEZER` by default) | Thaw accounts (automatically after removal from the blacklist) | `ComplianceRegistry` OPS (`unsanctionUsers`) |
 | `CLAWBACK` | Multisig | Clawback (Permanent Delegate) | — |
 | `METADATA_OPS` | Ops | Update name, symbol, ISIN | `ScaledToken` OPS |
+| `MINT_REGISTRAR` | Operations KMS | Register new mints | `ScaledTokenFactory` `OPS_ROLE` (`createToken`) |
 
 **Guards carried over:**
 - No self-grant: the Admin cannot grant a role to itself.
@@ -90,7 +92,8 @@ Same separation of duties as on Mantle:
 | `grant_role(role, member)` | Admin | `member != admin` | Create `RoleEntry` |
 | `revoke_role(role, member)` | Admin | — | Close `RoleEntry` |
 | `renounce_role(role)` | The member | — | Close their own `RoleEntry` |
-| `register_mint(mantle_token)` | Admin | See below | Create `MintState` |
+| `register_mint(mantle_token)` | `MINT_REGISTRAR` | See below; `mantle_token` non-zero and not yet registered for another mint | Create `MintState` and `MantleTokenIndex` |
+| `unregister_mint` | Admin | The mint's supply is 0 | Close `MintState` and `MantleTokenIndex`, so a registration made in error (wrong mint or wrong Mantle token) can be redone. Once tokens exist Core must keep operating the mint, so it stays registered |
 | `set_default_account_state(frozen)` | Admin | Mint registered | Switch the compliance policy: new accounts start frozen (screen before use) or usable (screen after use, current). A policy change, so it is the Admin's (Squads) call, like the admin-only `updateCompliance` on Mantle |
 
 Mint checks in `register_mint` (so a token is under control from launch):
@@ -168,7 +171,7 @@ Run once per stock, in this order:
 2. InitializeMint2: 9 decimals; mint authority = deployer (temporary); freeze authority = Authority PDA
 3. Initialize Token Metadata (update authority = deployer at first) → write ISIN and other fields
      → hand the update authority to the Authority PDA
-4. Core.register_mint(mantle_token)
+4. Core.register_mint(mantle_token), signed by the MINT_REGISTRAR (operations KMS)
 5. CCIP: self-register with the deployer (current mint authority) → Squads accepts the token admin role
      → initialize the BurnMint pool → configure the Mantle remote chain and rate limits
 6. Hand the mint authority to the CCIP pool signer PDA
@@ -208,7 +211,7 @@ Run once per stock, in this order:
 
 **Per-token gas on Solana → Mantle (must be handled before launch):** our mints have no per-token config on the Solana Fee Quoter, so they use the lane default `defaultTokenDestGasOverhead = 90000`, i.e. the pool's `releaseOrMint` on Mantle gets at most 90,000 gas. A ScaledToken transfer makes two external calls (pause and compliance checks); when the receiver holds the token for the first time, its balance is written from zero, the total goes over 90,000 and the execution fails, and the DON does not retry it. Only the Fee Quoter owner (Chainlink) can raise it with `set_token_transfer_fee_config`, so Chainlink has to set it for this lane before launch (150,000 suggested). Chainlink has agreed to raise the lane default on mainnet and testnet. Until then the CCIP retry service (§12) re-executes these messages automatically; `ccip-manual-exec-evm.sh` (`TOKEN_GAS=150000`) is the manual fallback.
 
-**Admin actions and Squads:** scripts that need the Admin's signature (`grant-role`, `revoke-role`, `register_mint` in `create-mint`) have two modes: given a keypair file they sign and send (devnet / local); given a Squads address they only print the instruction for a Squads proposal. In print mode the payer is the vault itself, because a Squads proposal can only be signed by the vault and cannot carry local signers.
+**Admin actions and Squads:** scripts that need the Admin's signature (`grant-role`, `revoke-role`, `unregister-mint`, `set-default-account-state`) have two modes: given a keypair file they sign and send (devnet / local); given a Squads address they only print the instruction for a Squads proposal. In print mode the payer is the vault itself, because a Squads proposal can only be signed by the vault and cannot carry local signers.
 
 ### 6.1 Operations scripts
 
@@ -274,7 +277,7 @@ Test runs and results are recorded in a separate [test report](https://skfc4x16l
 - If `set_default_account_state` is later used to switch to "screen before use", every new account has to be thawed first. The backend already holds `UNFREEZER` and could thaw new accounts directly, but that role can thaw any account; to limit it to opening new accounts, a separate "account opening" role can be added then.
 - Holders can burn their own tokens: Token-2022 allows it and it cannot be turned off (on Mantle burning needs `BURN_ROLE`). Tokens burned on Solana stay locked in Mantle's LockRelease pool for good. This only affects the holder and is not a security issue; supply reconciliation therefore checks Solana total supply ≤ the amount locked in the Mantle pool rather than strict equality (`check-supply.ts`).
 - Privileged roles are trusted with every token account of a mint, including the CCIP pool's own token account: freezing it (or clawing back from it, which leaves it frozen) stops Solana → Mantle transfers until it is thawed.
-- Registration is permanent: there is no instruction to unregister a mint or change its `mantle_token`. `register_mint` checks the mint's configuration, not its initial multiplier or supply; the launch procedure sets the initial multiplier to Mantle's and hands the mint authority to the CCIP pool.
+- Registration is an operations task (`MINT_REGISTRAR`, like the `OPS_ROLE` that deploys tokens through Mantle's `ScaledTokenFactory`). A compromised registrar key cannot register a mint with a back door (`register_mint` rejects any authority outside Core), touch existing mints, change roles, or create Mantle-backed tokens (which Mantle pool is linked to which mint is CCIP configuration); at worst it registers junk mints or claims an unused Mantle token for a wrong mint. Each Mantle token maps to one mint, and the Admin can unregister a mint only while its supply is 0, so a mistake is fixed before launch and a live mint can never be detached from Core. `register_mint` checks the mint's configuration, not its initial multiplier or supply; the launch procedure sets the initial multiplier to Mantle's and hands the mint authority to the CCIP pool.
 - A proposed admin cannot be withdrawn, only replaced by proposing another address. If the new admin already holds a role, its role account remains but every operational instruction rejects the admin (`AdminCannotOperate`).
 - An independent Solana audit before launch.
 
@@ -292,6 +295,7 @@ Test runs and results are recorded in a separate [test report](https://skfc4x16l
 | 6 | Role keys | The backend KMS supports Ed25519; each operational role uses a KMS key |
 | 7 | Compliance backend | Add Solana to the existing `mstocks-aml`, changing the EVM logic as little as possible (§11) |
 | 8 | Thaw | Same as EVM: after removal from the blacklist the backend signer thaws automatically; `UNFREEZER` is held by the backend KMS |
+| 9 | Mint registration | An operations role (`MINT_REGISTRAR`, KMS), like Mantle's factory `OPS_ROLE`, instead of the Admin multisig; one mint per Mantle token; Admin can unregister a mint with zero supply |
 
 ---
 

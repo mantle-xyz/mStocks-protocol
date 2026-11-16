@@ -37,11 +37,14 @@ npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --r
 for r in Pauser Unpauser Freezer Unfreezer Clawback MetadataOps; do
   npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --role $r --member "$(pk ops)" >/dev/null 2>&1 || true
 done
+# The deployer registers mints (on mainnet: the operations KMS key).
+npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --role MintRegistrar --member "$(solana-keygen pubkey "$DEPLOYER")" >/dev/null 2>&1 || true
 
 echo "== create-mint"
-OUT=$(npx tsx scripts/create-mint.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --hook-authority "$(pk hook)" \
+# A fresh mint every run, and each Mantle token maps to one mint: use a random placeholder token.
+OUT=$(npx tsx scripts/create-mint.ts --payer "$DEPLOYER" --registrar "$DEPLOYER" --hook-authority "$(pk hook)" \
   --name "Apple mStock (devnet)" --symbol AAPLm --uri https://example.com/aaplm.json --isin US0378331005 \
-  --mantle-token 0x00000000000000000000000000000000000000aa --initial-multiplier-1e18 1000000000000000000)
+  --mantle-token "0x$(openssl rand -hex 20)" --initial-multiplier-1e18 1000000000000000000)
 echo "$OUT"
 MINT=$(echo "$OUT" | awk '/^mint: /{print $2}')
 printf "explorer: $EXPLORER\n" "$MINT"

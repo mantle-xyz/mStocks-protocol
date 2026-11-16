@@ -11,16 +11,26 @@ use anchor_spl::token_2022::spl_token_2022::{
 };
 
 use crate::errors::CoreError;
-use crate::events::MintRegistered;
+use crate::events::{MintRegistered, MintUnregistered};
 use crate::state::*;
 
+/// Registration is an operations task (the `MintRegistrar` role), like deploying a token through
+/// Mantle's `ScaledTokenFactory` with `OPS_ROLE`: `validate_mint` leaves no room for a mint that
+/// keeps an authority outside Core, and each Mantle token maps to at most one mint.
 #[derive(Accounts)]
+#[instruction(mantle_token: [u8; 20])]
 pub struct RegisterMint<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    pub admin: Signer<'info>,
-    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
+    #[account(constraint = registrar.key() != config.admin @ CoreError::AdminCannotOperate)]
+    pub registrar: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,
+    #[account(
+        seeds = [ROLE_SEED, &Role::MintRegistrar.seed(), registrar.key().as_ref()],
+        bump = role_entry.bump,
+    )]
+    pub role_entry: Account<'info, RoleEntry>,
     /// CHECK: owner checked here, layout and extensions checked in `validate_mint`.
     #[account(owner = spl_token_2022::ID @ CoreError::NotToken2022)]
     pub mint: UncheckedAccount<'info>,
@@ -32,6 +42,14 @@ pub struct RegisterMint<'info> {
         bump,
     )]
     pub mint_state: Account<'info, MintState>,
+    #[account(
+        init,
+        payer = payer,
+        space = 8 + MantleTokenIndex::INIT_SPACE,
+        seeds = [MANTLE_TOKEN_SEED, mantle_token.as_ref()],
+        bump,
+    )]
+    pub mantle_index: Account<'info, MantleTokenIndex>,
     /// CHECK: PDA that must hold the mint's authorities.
     #[account(seeds = [AUTHORITY_SEED], bump = config.authority_bump)]
     pub authority: UncheckedAccount<'info>,
@@ -39,6 +57,7 @@ pub struct RegisterMint<'info> {
 }
 
 pub fn register_mint(ctx: Context<RegisterMint>, mantle_token: [u8; 20]) -> Result<()> {
+    require!(mantle_token != [0u8; 20], CoreError::ZeroMantleToken);
     let mint = ctx.accounts.mint.key();
     validate_mint(
         &ctx.accounts.mint.to_account_info(),
@@ -46,7 +65,42 @@ pub fn register_mint(ctx: Context<RegisterMint>, mantle_token: [u8; 20]) -> Resu
         &ctx.accounts.config.hook_authority,
     )?;
     ctx.accounts.mint_state.set_inner(MintState { mint, mantle_token, bump: ctx.bumps.mint_state });
+    ctx.accounts.mantle_index.set_inner(MantleTokenIndex { mint, bump: ctx.bumps.mantle_index });
     emit!(MintRegistered { mint, mantle_token });
+    Ok(())
+}
+
+/// Undoes a registration made in error (wrong mint or wrong Mantle token), so it can be registered
+/// again correctly. Only while the mint has no supply: once tokens exist, Core must keep operating
+/// it (freeze, pause, clawback all require the registration).
+#[derive(Accounts)]
+pub struct UnregisterMint<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+    /// CHECK: owner checked here, supply read in the handler.
+    #[account(owner = spl_token_2022::ID @ CoreError::NotToken2022)]
+    pub mint: UncheckedAccount<'info>,
+    #[account(mut, close = admin, seeds = [MINT_SEED, mint.key().as_ref()], bump = mint_state.bump)]
+    pub mint_state: Account<'info, MintState>,
+    #[account(
+        mut,
+        close = admin,
+        seeds = [MANTLE_TOKEN_SEED, mint_state.mantle_token.as_ref()],
+        bump = mantle_index.bump,
+        constraint = mantle_index.mint == mint.key() @ CoreError::MintMismatch,
+    )]
+    pub mantle_index: Account<'info, MantleTokenIndex>,
+}
+
+pub fn unregister_mint(ctx: Context<UnregisterMint>) -> Result<()> {
+    let supply = {
+        let data = ctx.accounts.mint.try_borrow_data()?;
+        StateWithExtensions::<Mint>::unpack(&data)?.base.supply
+    };
+    require!(supply == 0, CoreError::MintHasSupply);
+    emit!(MintUnregistered { mint: ctx.accounts.mint.key(), mantle_token: ctx.accounts.mint_state.mantle_token });
     Ok(())
 }
 

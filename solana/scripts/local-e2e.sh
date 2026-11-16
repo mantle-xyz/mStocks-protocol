@@ -23,15 +23,25 @@ for k in deployer admin scheduler ops; do solana -u l airdrop 100 "$(pk $k)" >/d
 echo "== init-core"
 npx tsx scripts/init-core.ts --upgrade-authority "$WORK/deployer.json" --admin "$(pk admin)" --hook-authority "$(pk hook)"
 
-echo "== grant MultiplierScheduler"
+echo "== grant MultiplierScheduler, and MintRegistrar to the deployer"
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MultiplierScheduler --member "$(pk scheduler)"
+npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MintRegistrar --member "$(pk deployer)"
 
 echo "== create-mint"
-OUT=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --hook-authority "$(pk hook)" \
+OUT=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
   --name "Apple mStock" --symbol AAPLm --uri https://example.com/aaplm.json --isin US0378331005 \
   --mantle-token 0x00000000000000000000000000000000000000aa --initial-multiplier-1e18 1000000000000000000)
 echo "$OUT"
 MINT=$(echo "$OUT" | awk '/^mint: /{print $2}')
+
+echo "== registration correction: a second mint for the same Mantle token is rejected; an empty mint can be unregistered"
+if npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
+  --name Dup --symbol DUP --uri https://example.com --mantle-token 0x00000000000000000000000000000000000000aa \
+  --initial-multiplier-1e18 1000000000000000000 >/dev/null 2>&1; then echo "UNEXPECTED: duplicate Mantle token registered"; exit 1; fi
+WRONG=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
+  --name Wrong --symbol WRONG --uri https://example.com --mantle-token 0x00000000000000000000000000000000000000bb \
+  --initial-multiplier-1e18 1000000000000000000 | awk '/^mint: /{print $2}')
+npx tsx scripts/unregister-mint.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$WRONG"
 
 echo "== schedule-multiplier (2x in 10 minutes)"
 NOW=$(date +%s)

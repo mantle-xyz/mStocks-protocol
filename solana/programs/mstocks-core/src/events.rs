@@ -33,6 +33,12 @@ pub struct MintRegistered {
 }
 
 #[event]
+pub struct MintUnregistered {
+    pub mint: Pubkey,
+    pub mantle_token: [u8; 20],
+}
+
+#[event]
 pub struct MultiplierScheduled {
     pub mint: Pubkey,
     pub multiplier_1e18: u128,

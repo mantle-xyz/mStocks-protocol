@@ -1,6 +1,8 @@
 // Creates one mStocks Token-2022 mint exactly as the TD §6 requires and registers it with Core.
+// Registration is signed by a holder of the MintRegistrar role (operations; defaults to the payer).
+// Each Mantle token can be registered for only one mint.
 //
-//   tsx scripts/create-mint.ts --payer <keypair> --admin <keypair.json|squads pubkey> \
+//   tsx scripts/create-mint.ts --payer <keypair> [--registrar <keypair>] \
 //     --hook-authority <squads pubkey> --name "Apple mStock" --symbol AAPLm --uri https://... \
 //     --isin US0378331005 --mantle-token 0x... --initial-multiplier-1e18 <Mantle uiMultiplier()>
 //
@@ -23,9 +25,9 @@ import {
   getUpdateTokenMetadataFieldInstruction,
   getUpdateTokenMetadataUpdateAuthorityInstruction,
 } from "@solana-program/token-2022";
-import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
 import {
-  authorityPda, configPda, coreInstruction, encodeEvmAddress, mintStatePda, toF64, TOKEN_2022_PROGRAM_ID,
+  authorityPda, configPda, coreInstruction, encodeEvmAddress, mantleTokenPda, mintStatePda, rolePda, toF64,
+  TOKEN_2022_PROGRAM_ID,
 } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, rpc, send } from "./lib/env.ts";
 
@@ -34,7 +36,9 @@ const NO_HOOK_PROGRAM = address("11111111111111111111111111111111");
 
 const args = parseArgs();
 const payer = await loadKeypair(required(args, "payer"));
-const admin = await resolveAdmin(required(args, "admin"));
+const registrarKey = args.registrar ? await loadKeypair(args.registrar) : payer;
+// The same key loaded twice is two signer objects, which @solana/kit rejects.
+const registrar = registrarKey.address === payer.address ? payer : registrarKey;
 const hookAuthority = address(required(args, "hook-authority"));
 const name = required(args, "name");
 const symbol = required(args, "symbol");
@@ -93,9 +97,17 @@ console.log(`metadata: ${meta}`);
 // 3. Register with Core (validates the whole configuration on-chain).
 const register = coreInstruction(
   "register_mint",
-  // In a Squads proposal only the vault signs, so the vault (admin) also pays rent.
-  { payer: typeof admin === "string" ? admin : payer, admin, config: await configPda(), mint, mint_state: await mintStatePda(mint), authority },
+  {
+    payer,
+    registrar,
+    config: await configPda(),
+    role_entry: await rolePda("MintRegistrar", registrar.address),
+    mint,
+    mint_state: await mintStatePda(mint),
+    mantle_index: await mantleTokenPda(mantleToken),
+    authority,
+  },
   mantleToken,
 );
-await sendOrPrint(payer, admin, register, `register_mint (admin ${adminAddress(admin)})`);
+console.log(`register_mint (registrar ${registrar.address}): ${await send(payer, [register])}`);
 console.log(`mint: ${mint}`);
