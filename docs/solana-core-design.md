@@ -223,6 +223,7 @@ Day-to-day operations after launch; backend services can follow how they call Co
 | Blacklist / unblacklist | `freeze.ts` (`--thaw`) | `--owner <wallet>` finds all of the wallet's token accounts for this mint over RPC (including non-ATAs) and sends batches of 20, the same flow the backend uses |
 | Clawback | `clawback.ts` | To a custody account; the source account stays frozen |
 | Update metadata | `update-metadata.ts` | Tops up the mint's rent when a field gets longer, then calls Core |
+| Supply reconciliation | `check-supply.ts` | For each mint: Solana supply (scaled to Mantle's 18 decimals) ≤ balance of its Mantle LockRelease pool (token from Core's registration, pool from the Mantle TokenAdminRegistry). It always holds, because Mantle locks before Solana mints and Solana burns before Mantle releases; the difference is tokens in flight to Solana plus tokens burned by holders on Solana. Exits with 1 if Solana holds more than is locked, so a scheduled job can alert |
 | Multiplier reconciliation | `check-multiplier.ts` | Option B reconciliation: reads the Mantle token address from Core's registration and compares the current and pending values (value + effective time) on both chains at the same moment; exits with 1 on a mismatch so a scheduled job can alert; a mismatch within 60 seconds of the effective time only warns, since the two chains' clocks can differ by a few seconds |
 | Inspect an account | `show-account.ts` | Balance and freeze state |
 | Test minting | `dev-mint-to.ts` | Local / devnet only, before the mint authority is handed off |
@@ -257,7 +258,7 @@ It lives in this repo's `solana/` directory, separate from the EVM code, and bui
 Test runs and results are recorded in a separate [test report](https://skfc4x16la.larksuite.com/wiki/Sohpww2abiDlMUkSCoXu4lvfshg) and not repeated here. Entry points:
 
 - Program: `cargo test -p mstocks-core` (LiteSVM, mainnet Token-2022 build); CI in `.github/workflows/solana.yml`.
-- Scripts: `npm run local-e2e` (local validator), `scripts/test-check-multiplier.sh` (reconciliation against a ScaledToken on anvil), `scripts/devnet-smoke.sh` (devnet).
+- Scripts: `npm run local-e2e` (local validator), `scripts/test-check-multiplier.sh` (reconciliation against a ScaledToken on anvil), `scripts/test-check-supply.sh` (supply reconciliation: backed and over-minted), `scripts/devnet-smoke.sh` (devnet).
 - Compliance backend: mstocks-aml's `scripts/solana-e2e.sh` (both chains locally) and `scripts/solana-devnet-check.sh` (devnet).
 
 ---
@@ -271,7 +272,7 @@ Test runs and results are recorded in a separate [test report](https://skfc4x16l
 - `register_mint` uses an extension allowlist: any extension on the mint that Core does not control is rejected, so no back-door authority is left behind.
 - The backend KMS key holds both `FREEZER` and `UNFREEZER`, matching OPS on EVM, which can both sanction and unsanction: a leaked key can freeze / thaw any account but cannot move assets (`CLAWBACK` is with the multisig). The Admin can revoke its roles at any time.
 - If `set_default_account_state` is later used to switch to "screen before use", every new account has to be thawed first. The backend already holds `UNFREEZER` and could thaw new accounts directly, but that role can thaw any account; to limit it to opening new accounts, a separate "account opening" role can be added then.
-- Holders can burn their own tokens: Token-2022 allows it and it cannot be turned off (on Mantle burning needs `BURN_ROLE`). Tokens burned on Solana stay locked in Mantle's LockRelease pool for good. This only affects the holder and is not a security issue; supply reconciliation should check Solana total supply ≤ the amount locked in the Mantle pool rather than strict equality.
+- Holders can burn their own tokens: Token-2022 allows it and it cannot be turned off (on Mantle burning needs `BURN_ROLE`). Tokens burned on Solana stay locked in Mantle's LockRelease pool for good. This only affects the holder and is not a security issue; supply reconciliation therefore checks Solana total supply ≤ the amount locked in the Mantle pool rather than strict equality (`check-supply.ts`).
 - Privileged roles are trusted with every token account of a mint, including the CCIP pool's own token account: freezing it (or clawing back from it, which leaves it frozen) stops Solana → Mantle transfers until it is thawed.
 - Registration is permanent: there is no instruction to unregister a mint or change its `mantle_token`. `register_mint` checks the mint's configuration, not its initial multiplier or supply; the launch procedure sets the initial multiplier to Mantle's and hands the mint authority to the CCIP pool.
 - A proposed admin cannot be withdrawn, only replaced by proposing another address. If the new admin already holds a role, its role account remains but every operational instruction rejects the admin (`AdminCannotOperate`).

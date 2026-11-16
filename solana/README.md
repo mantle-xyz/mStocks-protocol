@@ -35,6 +35,7 @@ scripts/fetch-fixtures.sh          # mainnet Token-2022 → tests/fixtures/token
 cargo test -p mstocks-core         # LiteSVM integration tests
 npm install && npm run local-e2e   # every script end-to-end on a local validator
 scripts/test-check-multiplier.sh   # reconciliation against a real ScaledToken on anvil
+scripts/test-check-supply.sh       # supply reconciliation: backed → exit 0, over-minted → exit 1
 cargo fmt --check && cargo clippy -p mstocks-core --all-targets -- -D warnings
 ```
 
@@ -53,6 +54,7 @@ Admin steps accept `--admin <keypair.json>` (devnet/local: signs directly) or `-
 | `create-mint.ts` | Deployer + admin | Create a mint with all extensions and metadata (incl. ISIN), then `register_mint` |
 | `schedule-multiplier.ts` | `MultiplierScheduler` | Schedule the same `(multiplier, effectiveAt)` sent to Mantle |
 | `check-multiplier.ts` | — | Reconcile each mint's multiplier with its Mantle `ScaledToken` (address read from Core); exits 1 on mismatch for alerting. Needs `MANTLE_RPC_URL` |
+| `check-supply.ts` | — | Check each mint's Solana supply against the tokens locked in its Mantle pool (token from Core, pool from `--registry`, the Mantle TokenAdminRegistry); exits 1 if Solana holds more than is locked. Needs `MANTLE_RPC_URL` |
 | `handoff-mint-authority.ts` | Deployer (current mint authority) | Give the mint authority to the CCIP pool signer PDA (dry run unless `--yes`) |
 | `ccip-register.ts` | Deployer (current mint authority) | Register the mint with CCIP for one remote EVM chain: token admin (propose + accept), BurnMint pool, pool token account, remote chain (token, pool, decimals), rate limits, pool lookup table, `set_pool`. Skips steps already done |
 | `ccip-send.ts` | Token holder | Send tokens to an EVM address through CCIP, paying in SOL (testing / ops checks) |
