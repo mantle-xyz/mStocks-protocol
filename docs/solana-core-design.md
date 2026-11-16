@@ -48,7 +48,7 @@
 
 | Account | PDA seeds | Fields | Notes |
 | --- | --- | --- | --- |
-| `Config` | `["config"]` | `admin`, `pending_admin`, `hook_authority` (Squads, checked by `register_mint`), `min_notice` (300 s), `max_horizon` (365 days), `bump` | Singleton. `hook_authority`, `min_notice` and `max_horizon` are set at `initialize` and have no setter (on Mantle the notice period is fixed per implementation too) |
+| `Config` | `["config"]` | `admin`, `pending_admin`, `compliance_admin`, `pending_compliance_admin`, `hook_authority` (Squads, checked by `register_mint`), `min_notice` (300 s), `max_horizon` (365 days), `bump` | Singleton. `hook_authority`, `min_notice` and `max_horizon` are set at `initialize` and have no setter (on Mantle the notice period is fixed per implementation too) |
 | `RoleEntry` | `["role", role_id, member]` | `role`, `member`, `bump` | The account existing means the member holds the role; mirrors Mantle's `AccessControl`, several members per role |
 | `MintState` | `["mint", mint]` | `mint`, `mantle_token` (20 bytes), `bump` | Only registered stocks can be operated by Core |
 | `MantleTokenIndex` | `["mantle_token", mantle_token]` | `mint`, `bump` | One per Mantle token: a token can be registered for one mint only |
@@ -60,37 +60,35 @@
 
 ## 4. Roles
 
-Same separation of duties as on Mantle. The Mantle column is the production configuration in `config.toml`; Mantle's admin addresses are OpenZeppelin `TimelockController`s whose proposers are 3/6 multisigs.
+Same separation of duties, admins and time locks as on Mantle (decided 2026-11-16). The Mantle column is the production configuration in `config.toml`; Mantle's admin addresses are OpenZeppelin `TimelockController`s whose proposers are 3/6 multisigs. Each Solana multisig mirrors one Mantle multisig, with the same signer group, threshold and time lock (Squads v4 time lock).
 
 | Solana role | Can do | Solana holder | Mantle equivalent | Mantle holder |
 | --- | --- | --- | --- | --- |
-| Program upgrade authority | Upgrade Core; run `initialize` once | Squads multisig + time lock | Beacon / ProxyAdmin owner | Multisig 2, 3/6 + 24 h timelock |
-| Admin | Grant / revoke roles, unregister an empty mint registered in error, switch the default account state, hand over the admin; **no operational actions** | Squads multisig | `DEFAULT_ADMIN_ROLE` of each contract | Split by contract, each 3/6 + 12 h timelock: multisig 1 (factory, ScaledToken), multisig 3 (TokenIssuer), multisig 4 (compliance and pause registries) |
-| `MINT_REGISTRAR` | Register new mints | Operations key | Factory `OPS_ROLE` (`createToken`) | EOA1 (RWA-Bycustody) |
-| `MULTIPLIER_SCHEDULER` | Schedule the multiplier | Operations key | `MULTIPLIER_SCHEDULER_ROLE` | EOA3 (RWA-Bycustody) |
-| `METADATA_OPS` | Update name, symbol, ISIN | Operations key | ScaledToken `OPS_ROLE` | EOA2 (RWA-Bycustody) |
-| `PAUSER` | Pause | Operations key | `PAUSE_ROLE` | EOA6 (RWA-Bycustody) |
-| `UNPAUSER` | Resume | Multisig, no time lock (resuming must be fast) | `UNPAUSE_ROLE` | Multisig 5, no timelock |
-| `FREEZER` | Freeze accounts (blacklist) | Compliance backend KMS | `ComplianceRegistry` `OPS_ROLE` (`sanctionUsers`) | EOA5 (Mantle) |
-| `UNFREEZER` | Thaw accounts (automatically after removal from the blacklist) | Compliance backend KMS (same key as `FREEZER` by default) | `ComplianceRegistry` `OPS_ROLE` (`unsanctionUsers`) | EOA5 (Mantle) |
-| `CLAWBACK` | Clawback (Permanent Delegate) | Multisig | — (no equivalent) | — |
-| Transfer Hook authority (Token-2022, not Core) | Attach / remove a program that checks every transfer | Squads multisig | ScaledToken admin's `updateCompliance` / `updatePauseManager` (replace the transfer checks) | Multisig 1, 3/6 + 12 h timelock |
-| CCIP token admin, per mint (router's token admin registry) | Point the mint at a different pool | Squads multisig (`ccip-handoff.ts`) | CCIP token admin (`TokenAdminRegistry`) | The token's `DEFAULT_ADMIN_ROLE`: multisig 1, 3/6 + 12 h timelock (§6.2) |
-| CCIP pool owner (BurnMint pool) | Remote chains and pools, rate limits | Squads multisig (`ccip-handoff.ts`) | LockRelease pool owner | Multisig (§6.2) |
+| Program upgrade authority | Upgrade Core; run `initialize` once | Squads mirroring multisig 2: 3/6 + 24 h time lock | Beacon / ProxyAdmin owner | Multisig 2, 3/6 + 24 h timelock |
+| Admin (`Config.admin`) | Grant / revoke `MINT_REGISTRAR`, `MULTIPLIER_SCHEDULER`, `METADATA_OPS`; unregister an empty mint registered in error; switch the default account state; **no operational actions** | Squads mirroring multisig 1: 3/6 + 12 h time lock | `DEFAULT_ADMIN_ROLE` of the factory and ScaledToken | Multisig 1, 3/6 + 12 h timelock |
+| Compliance admin (`Config.compliance_admin`) | Grant / revoke `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`, `CLAWBACK`; **no operational actions** | Squads mirroring multisig 4: 3/6 + 12 h time lock | `DEFAULT_ADMIN_ROLE` of the compliance and pause registries | Multisig 4, 3/6 + 12 h timelock |
+| `MINT_REGISTRAR` | Register new mints | RWA-Bycustody key (as EOA1) | Factory `OPS_ROLE` (`createToken`) | EOA1 (RWA-Bycustody) |
+| `MULTIPLIER_SCHEDULER` | Schedule the multiplier | RWA-Bycustody key (as EOA3) | `MULTIPLIER_SCHEDULER_ROLE` | EOA3 (RWA-Bycustody) |
+| `METADATA_OPS` | Update name, symbol, ISIN | RWA-Bycustody key (as EOA2) | ScaledToken `OPS_ROLE` | EOA2 (RWA-Bycustody) |
+| `PAUSER` | Pause | RWA-Bycustody key (as EOA6) | `PAUSE_ROLE` | EOA6 (RWA-Bycustody) |
+| `UNPAUSER` | Resume | Squads mirroring multisig 5, no time lock (resuming must be fast) | `UNPAUSE_ROLE` | Multisig 5, no timelock |
+| `FREEZER` | Freeze accounts (blacklist) | Mantle's compliance backend KMS (as EOA5) | `ComplianceRegistry` `OPS_ROLE` (`sanctionUsers`) | EOA5 (Mantle) |
+| `UNFREEZER` | Thaw accounts (automatically after removal from the blacklist) | Same key as `FREEZER` | `ComplianceRegistry` `OPS_ROLE` (`unsanctionUsers`) | EOA5 (Mantle) |
+| `CLAWBACK` | Clawback (Permanent Delegate) | A multisig other than the two admins (no Mantle equivalent) | — | — |
+| Transfer Hook authority (Token-2022, not Core) | Attach / remove a program that checks every transfer | The admin's Squads (multisig 1's group, 12 h) | ScaledToken admin's `updateCompliance` / `updatePauseManager` | Multisig 1, 3/6 + 12 h timelock |
+| CCIP token admin, per mint (router's token admin registry) | Point the mint at a different pool | The admin's Squads (`ccip-handoff.ts`) | CCIP token admin (`TokenAdminRegistry`) | The token's `DEFAULT_ADMIN_ROLE`: multisig 1 (§6.2) |
+| CCIP pool owner (BurnMint pool) | Remote chains and pools, rate limits | The admin's Squads (`ccip-handoff.ts`) | LockRelease pool owner | Multisig 1 (§6.2) |
 | — | Rate limits only | Pool owner | Pool `rateLimitAdmin` (optional) | Operations multisig, or unset |
 | — | — | — | Pool `rebalancer` (can withdraw every locked token) | **Unset** |
 
-**Open decisions (to settle before mainnet, then reflected here):**
-- One Admin or several: Mantle splits its admins by contract (multisigs 1, 3, 4); on Solana one Squads Admin grants every role, freeze roles included.
-- Squads threshold and time lock for the Admin, the upgrade authority, the Transfer Hook authority and the CCIP roles (Mantle: 3/6 with 12 h, 24 h for upgrades); Squads v4 supports a time lock per multisig.
-- Who holds the operations keys: on Mantle most are RWA-Bycustody EOAs and the compliance key is Mantle's; review decision 6 put Solana's operations roles on KMS keys.
-- Which multisig holds `CLAWBACK`, the Mantle CCIP pool owner and the Solana CCIP roles (one multisig per chain, or the token admin's).
+Mantle's multisig 3 (TokenIssuer admin) has no Solana counterpart: minting on Solana belongs only to the CCIP pool. Still open: which multisig holds `CLAWBACK` (it cannot be either admin).
 
 **Guards carried over:**
-- No self-grant: the Admin cannot grant a role to itself.
-- Operational instructions reject an Admin signature, even if the Admin also holds the role.
-- Admin changes take two steps: `propose_admin` → `accept_admin`.
-- Role members can renounce their own role; the Admin cannot.
+- Each admin grants and revokes only its own roles (`NotRoleAdmin`).
+- No self-grant: neither admin can be given any role.
+- Operational instructions reject either admin's signature, even if it still holds a role from before.
+- Admin changes take two steps, separately for each admin: `propose_admin` → `accept_admin`, `propose_compliance_admin` → `accept_compliance_admin`; the two admins must differ.
+- Role members can renounce their own role; the admins cannot.
 
 ---
 
@@ -100,10 +98,11 @@ Same separation of duties as on Mantle. The Mantle column is the production conf
 
 | Instruction | Signer | Checks | Action |
 | --- | --- | --- | --- |
-| `initialize(admin, hook_authority)` | Program upgrade authority | Once only; the signer must be the program's upgrade authority, so nobody can initialize first after deployment | Create `Config` |
-| `propose_admin(new)` / `accept_admin` | Current Admin / new Admin | Two-step confirmation | Change the Admin |
-| `grant_role(role, member)` | Admin | `member != admin` | Create `RoleEntry` |
-| `revoke_role(role, member)` | Admin | — | Close `RoleEntry` |
+| `initialize(admin, compliance_admin, hook_authority)` | Program upgrade authority | Once only; the signer must be the program's upgrade authority, so nobody can initialize first after deployment | Create `Config` |
+| `propose_admin(new)` / `accept_admin` | Current admin / new admin | Two-step confirmation; `new` ≠ compliance admin | Change the admin |
+| `propose_compliance_admin(new)` / `accept_compliance_admin` | Current compliance admin / new one | Two-step confirmation; `new` ≠ admin | Change the compliance admin |
+| `grant_role(role, member)` | The role's admin (compliance admin for `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`, `CLAWBACK`; admin for the others) | `member` is neither admin | Create `RoleEntry` |
+| `revoke_role(role, member)` | The role's admin | — | Close `RoleEntry` |
 | `renounce_role(role)` | The member | — | Close their own `RoleEntry` |
 | `register_mint(mantle_token)` | `MINT_REGISTRAR` | See below; `mantle_token` non-zero and not yet registered for another mint | Create `MintState` and `MantleTokenIndex` |
 | `unregister_mint` | Admin | The mint's supply is 0 | Close `MintState` and `MantleTokenIndex`, so a registration made in error (wrong mint or wrong Mantle token) can be redone. Once tokens exist Core must keep operating the mint, so it stays registered |
@@ -339,10 +338,11 @@ Test runs and results are recorded in a separate [test report](https://skfc4x16l
 | 3 | Transfer Hook | Dormant (no program), authority held directly by the Squads multisig |
 | 4 | Code location | This repo, `solana/` directory |
 | 5 | Toolchain | Upgrade to Agave + Anchor 1.x |
-| 6 | Role keys | The backend KMS supports Ed25519; each operational role uses a KMS key |
+| 6 | Role keys | As on Mantle: the operations roles' keys are held by RWA-Bycustody (registrar, scheduler, metadata, pauser); the freezer / unfreezer is Mantle's compliance backend KMS (Ed25519) |
 | 7 | Compliance backend | Add Solana to the existing `mstocks-aml`, changing the EVM logic as little as possible (§11) |
 | 8 | Thaw | Same as EVM: after removal from the blacklist the backend signer thaws automatically; `UNFREEZER` is held by the backend KMS |
 | 9 | Mint registration | An operations role (`MINT_REGISTRAR`, KMS), like Mantle's factory `OPS_ROLE`, instead of the Admin multisig; one mint per Mantle token; Admin can unregister a mint with zero supply |
+| 10 | Admins and time locks | Split and timed like Mantle: an admin for the token roles and the mint registry (multisig 1's group, 12 h), a compliance admin for the pause, freeze and clawback roles (multisig 4's group, 12 h), the upgrade authority with multisig 2's group (24 h), `UNPAUSER` with multisig 5's group (no time lock) |
 
 ---
 
@@ -384,7 +384,7 @@ Solana RPC ──► indexer ──► transfer_events ──► processor ─�
 
 **Monitoring:** the service exports the signer's balance as `solana_signer_balance_lamports`. The alert `mstocksAmlSolanaSignerBalanceLow` (monitoring-v2 `ccip` rules, [mantle-config#17165](https://github.com/mantlenetworkio/mantle-config/pull/17165); qa8 threshold 0.05 SOL) fires before the signer runs out of fees, because once it does, freeze transactions stop and blacklisted wallets keep moving tokens. Rules under `infra-infra` take effect only after ops run `kubectl apply -k` on them.
 
-**Before launch:** a backend KMS Ed25519 key, granted `FREEZER` and `UNFREEZER` by the Admin (Squads), with a SOL balance for fees, and a mainnet threshold for the balance alert.
+**Before launch:** a backend KMS Ed25519 key, granted `FREEZER` and `UNFREEZER` by the compliance admin (Squads), with a SOL balance for fees, and a mainnet threshold for the balance alert.
 
 ---
 
