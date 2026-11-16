@@ -52,4 +52,8 @@ pub enum CoreError {
     ZeroMantleToken,
     #[msg("Only a mint with zero supply can be unregistered")]
     MintHasSupply,
+    #[msg("Signer is not the admin that governs this role")]
+    NotRoleAdmin,
+    #[msg("The admin and the compliance admin must be different")]
+    AdminsMustDiffer,
 }

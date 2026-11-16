@@ -8,7 +8,7 @@ use crate::token2022::{self, Authority};
 
 #[derive(Accounts)]
 pub struct ScheduleMultiplier<'info> {
-    #[account(constraint = operator.key() != config.admin @ CoreError::AdminCannotOperate)]
+    #[account(constraint = !config.is_admin(&operator.key()) @ CoreError::AdminCannotOperate)]
     pub operator: Signer<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,

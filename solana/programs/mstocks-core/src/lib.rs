@@ -22,8 +22,13 @@ declare_id!("3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd");
 pub mod mstocks_core {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>, admin: Pubkey, hook_authority: Pubkey) -> Result<()> {
-        instructions::admin::initialize(ctx, admin, hook_authority)
+    pub fn initialize(
+        ctx: Context<Initialize>,
+        admin: Pubkey,
+        compliance_admin: Pubkey,
+        hook_authority: Pubkey,
+    ) -> Result<()> {
+        instructions::admin::initialize(ctx, admin, compliance_admin, hook_authority)
     }
 
     pub fn propose_admin(ctx: Context<AdminOnly>, new_admin: Pubkey) -> Result<()> {
@@ -32,6 +37,14 @@ pub mod mstocks_core {
 
     pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
         instructions::admin::accept_admin(ctx)
+    }
+
+    pub fn propose_compliance_admin(ctx: Context<ComplianceAdminOnly>, new_admin: Pubkey) -> Result<()> {
+        instructions::admin::propose_compliance_admin(ctx, new_admin)
+    }
+
+    pub fn accept_compliance_admin(ctx: Context<AcceptComplianceAdmin>) -> Result<()> {
+        instructions::admin::accept_compliance_admin(ctx)
     }
 
     pub fn grant_role(ctx: Context<GrantRole>, role: Role, member: Pubkey) -> Result<()> {

@@ -22,7 +22,7 @@ use crate::state::*;
 pub struct RegisterMint<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
-    #[account(constraint = registrar.key() != config.admin @ CoreError::AdminCannotOperate)]
+    #[account(constraint = !config.is_admin(&registrar.key()) @ CoreError::AdminCannotOperate)]
     pub registrar: Signer<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,

@@ -15,6 +15,18 @@ pub struct AdminAccepted {
 }
 
 #[event]
+pub struct ComplianceAdminProposed {
+    pub current: Pubkey,
+    pub proposed: Pubkey,
+}
+
+#[event]
+pub struct ComplianceAdminAccepted {
+    pub previous: Pubkey,
+    pub compliance_admin: Pubkey,
+}
+
+#[event]
 pub struct RoleGranted {
     pub role: Role,
     pub member: Pubkey,

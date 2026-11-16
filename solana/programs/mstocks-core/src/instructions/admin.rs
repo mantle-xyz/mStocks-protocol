@@ -1,7 +1,9 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::CoreError;
-use crate::events::{AdminAccepted, AdminProposed, RoleGranted, RoleRevoked};
+use crate::events::{
+    AdminAccepted, AdminProposed, ComplianceAdminAccepted, ComplianceAdminProposed, RoleGranted, RoleRevoked,
+};
 use crate::program::MstocksCore;
 use crate::state::*;
 
@@ -23,7 +25,13 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn initialize(ctx: Context<Initialize>, admin: Pubkey, hook_authority: Pubkey) -> Result<()> {
+pub fn initialize(
+    ctx: Context<Initialize>,
+    admin: Pubkey,
+    compliance_admin: Pubkey,
+    hook_authority: Pubkey,
+) -> Result<()> {
+    require_keys_neq!(admin, compliance_admin, CoreError::AdminsMustDiffer);
     ctx.accounts.config.set_inner(Config {
         admin,
         pending_admin: None,
@@ -32,6 +40,8 @@ pub fn initialize(ctx: Context<Initialize>, admin: Pubkey, hook_authority: Pubke
         max_horizon: DEFAULT_MAX_HORIZON,
         bump: ctx.bumps.config,
         authority_bump: ctx.bumps.authority,
+        compliance_admin,
+        pending_compliance_admin: None,
     });
     Ok(())
 }
@@ -45,6 +55,7 @@ pub struct AdminOnly<'info> {
 
 pub fn propose_admin(ctx: Context<AdminOnly>, new_admin: Pubkey) -> Result<()> {
     let config = &mut ctx.accounts.config;
+    require_keys_neq!(new_admin, config.compliance_admin, CoreError::AdminsMustDiffer);
     config.pending_admin = Some(new_admin);
     emit!(AdminProposed { current: config.admin, proposed: new_admin });
     Ok(())
@@ -72,16 +83,53 @@ pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
 }
 
 #[derive(Accounts)]
+pub struct ComplianceAdminOnly<'info> {
+    pub compliance_admin: Signer<'info>,
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump, has_one = compliance_admin)]
+    pub config: Account<'info, Config>,
+}
+
+pub fn propose_compliance_admin(ctx: Context<ComplianceAdminOnly>, new_admin: Pubkey) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    require_keys_neq!(new_admin, config.admin, CoreError::AdminsMustDiffer);
+    config.pending_compliance_admin = Some(new_admin);
+    emit!(ComplianceAdminProposed { current: config.compliance_admin, proposed: new_admin });
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct AcceptComplianceAdmin<'info> {
+    pub new_admin: Signer<'info>,
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        constraint = config.pending_compliance_admin == Some(new_admin.key()) @ CoreError::NotPendingAdmin,
+    )]
+    pub config: Account<'info, Config>,
+}
+
+pub fn accept_compliance_admin(ctx: Context<AcceptComplianceAdmin>) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let previous = config.compliance_admin;
+    config.compliance_admin = ctx.accounts.new_admin.key();
+    config.pending_compliance_admin = None;
+    emit!(ComplianceAdminAccepted { previous, compliance_admin: config.compliance_admin });
+    Ok(())
+}
+
+#[derive(Accounts)]
 #[instruction(role: Role, member: Pubkey)]
 pub struct GrantRole<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
+    /// The admin that governs `role` (`Config::role_admin`).
     pub admin: Signer<'info>,
     #[account(
         seeds = [CONFIG_SEED],
         bump = config.bump,
-        has_one = admin,
-        constraint = member != config.admin @ CoreError::SelfGrantNotAllowed,
+        constraint = admin.key() == config.role_admin(role) @ CoreError::NotRoleAdmin,
+        constraint = !config.is_admin(&member) @ CoreError::SelfGrantNotAllowed,
     )]
     pub config: Account<'info, Config>,
     #[account(
@@ -104,9 +152,14 @@ pub fn grant_role(ctx: Context<GrantRole>, role: Role, member: Pubkey) -> Result
 #[derive(Accounts)]
 #[instruction(role: Role, member: Pubkey)]
 pub struct RevokeRole<'info> {
+    /// The admin that governs `role` (`Config::role_admin`); receives the rent.
     #[account(mut)]
     pub admin: Signer<'info>,
-    #[account(seeds = [CONFIG_SEED], bump = config.bump, has_one = admin)]
+    #[account(
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        constraint = admin.key() == config.role_admin(role) @ CoreError::NotRoleAdmin,
+    )]
     pub config: Account<'info, Config>,
     #[account(
         mut,

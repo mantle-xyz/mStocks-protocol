@@ -40,7 +40,7 @@ impl From<MetadataField> for Field {
 
 #[derive(Accounts)]
 pub struct UpdateMetadata<'info> {
-    #[account(constraint = operator.key() != config.admin @ CoreError::AdminCannotOperate)]
+    #[account(constraint = !config.is_admin(&operator.key()) @ CoreError::AdminCannotOperate)]
     pub operator: Signer<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,

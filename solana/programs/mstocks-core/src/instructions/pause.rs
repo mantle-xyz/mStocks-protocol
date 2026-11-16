@@ -12,7 +12,7 @@ macro_rules! toggle_accounts {
     ($name:ident, $role:expr) => {
         #[derive(Accounts)]
         pub struct $name<'info> {
-            #[account(constraint = operator.key() != config.admin @ CoreError::AdminCannotOperate)]
+            #[account(constraint = !config.is_admin(&operator.key()) @ CoreError::AdminCannotOperate)]
             pub operator: Signer<'info>,
             #[account(seeds = [CONFIG_SEED], bump = config.bump)]
             pub config: Account<'info, Config>,
@@ -67,7 +67,7 @@ fn toggle<'info>(
 
 #[derive(Accounts)]
 pub struct PauseAll<'info> {
-    #[account(constraint = operator.key() != config.admin @ CoreError::AdminCannotOperate)]
+    #[account(constraint = !config.is_admin(&operator.key()) @ CoreError::AdminCannotOperate)]
     pub operator: Signer<'info>,
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,

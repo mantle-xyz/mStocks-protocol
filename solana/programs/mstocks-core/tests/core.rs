@@ -47,6 +47,7 @@ struct Env {
     svm: LiteSVM,
     payer: Keypair,
     admin: Keypair,
+    compliance_admin: Keypair,
     hook_admin: Keypair,
     config: Pubkey,
     authority: Pubkey,
@@ -60,8 +61,8 @@ impl Env {
     /// Loads both programs, makes `payer` the Core upgrade authority and initializes Core.
     fn new() -> Self {
         let mut env = Self::bare();
-        let (admin, hook) = (env.admin.pubkey(), env.hook_admin.pubkey());
-        env.initialize(&env.payer.insecure_clone(), admin, hook).expect("initialize");
+        let (admin, compliance, hook) = (env.admin.pubkey(), env.compliance_admin.pubkey(), env.hook_admin.pubkey());
+        env.initialize(&env.payer.insecure_clone(), admin, compliance, hook).expect("initialize");
         env.registrar = Some(env.operator(Role::MintRegistrar));
         env
     }
@@ -82,6 +83,7 @@ impl Env {
             svm,
             payer,
             admin: Keypair::new(),
+            compliance_admin: Keypair::new(),
             hook_admin: Keypair::new(),
             config: pda(&[CONFIG_SEED]),
             authority: pda(&[AUTHORITY_SEED]),
@@ -113,7 +115,13 @@ impl Env {
         Instruction { program_id: mstocks_core::ID, accounts: metas, data: data.data() }
     }
 
-    fn initialize(&mut self, signer: &Keypair, admin: Pubkey, hook_authority: Pubkey) -> Result<(), String> {
+    fn initialize(
+        &mut self,
+        signer: &Keypair,
+        admin: Pubkey,
+        compliance_admin: Pubkey,
+        hook_authority: Pubkey,
+    ) -> Result<(), String> {
         let program_data = Pubkey::find_program_address(&[mstocks_core::ID.as_ref()], &bpf_loader_upgradeable()).0;
         let ix = self.core_ix(
             mstocks_core::accounts::Initialize {
@@ -124,19 +132,28 @@ impl Env {
                 program_data,
                 system_program: system_program(),
             },
-            mstocks_core::instruction::Initialize { admin, hook_authority },
+            mstocks_core::instruction::Initialize { admin, compliance_admin, hook_authority },
             vec![],
         );
         self.svm.airdrop(&signer.pubkey(), 10_000_000_000).unwrap();
         self.svm.expire_blockhash();
         let tx =
             Transaction::new_signed_with_payer(&[ix], Some(&signer.pubkey()), &[signer], self.svm.latest_blockhash());
-        self.svm.send_transaction(tx).map(|_| ()).map_err(|e| format!("{:?}", e.err))
+        self.svm.send_transaction(tx).map(|_| ()).map_err(|e| format!("{:?}\n{}", e.err, e.meta.logs.join("\n")))
     }
 
+    /// Grants `role` signed by the admin that governs it.
     fn grant(&mut self, role: Role, member: &Pubkey) -> Result<(), String> {
-        let admin = self.admin.insecure_clone();
+        let admin = self.role_admin(role);
         self.grant_as(&admin, role, member)
+    }
+
+    fn role_admin(&self, role: Role) -> Keypair {
+        if role.is_compliance() {
+            self.compliance_admin.insecure_clone()
+        } else {
+            self.admin.insecure_clone()
+        }
     }
 
     fn grant_as(&mut self, admin: &Keypair, role: Role, member: &Pubkey) -> Result<(), String> {
@@ -521,13 +538,15 @@ fn assert_err(result: Result<(), String>, needle: &str) {
 fn initialize_requires_upgrade_authority_and_runs_once() {
     let mut env = Env::bare();
     let stranger = Keypair::new();
-    let (admin, hook) = (env.admin.pubkey(), env.hook_admin.pubkey());
-    assert!(env.initialize(&stranger, admin, hook).is_err(), "non-upgrade-authority must not initialize");
+    let (admin, compliance, hook) = (env.admin.pubkey(), env.compliance_admin.pubkey(), env.hook_admin.pubkey());
+    assert!(env.initialize(&stranger, admin, compliance, hook).is_err(), "non-upgrade-authority must not initialize");
     let payer = env.payer.insecure_clone();
-    env.initialize(&payer, admin, hook).unwrap();
-    assert!(env.initialize(&payer, admin, hook).is_err(), "second initialize must fail");
+    assert_err(env.initialize(&payer, admin, admin, hook), "AdminsMustDiffer");
+    env.initialize(&payer, admin, compliance, hook).unwrap();
+    assert!(env.initialize(&payer, admin, compliance, hook).is_err(), "second initialize must fail");
     let config = env.config();
     assert_eq!(config.admin, admin);
+    assert_eq!(config.compliance_admin, compliance);
     assert_eq!(config.hook_authority, hook);
     assert_eq!(config.min_notice, 300);
 }
@@ -1159,4 +1178,85 @@ fn transfers_must_carry_the_mint_account() {
     println!("legacy Transfer without mint: {result:?}");
     assert!(result.is_err(), "legacy Transfer without the mint must be rejected");
     assert_eq!(env.token(&b).0, 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// split admins (Mantle: token / factory admin vs compliance and pause registries' admin)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn each_admin_governs_only_its_own_roles() {
+    let mut env = Env::new();
+    let (admin, compliance) = (env.admin.insecure_clone(), env.compliance_admin.insecure_clone());
+    let member = Pubkey::new_unique();
+    for role in [Role::Pauser, Role::Unpauser, Role::Freezer, Role::Unfreezer, Role::Clawback] {
+        assert_err(env.grant_as(&admin, role, &member), "NotRoleAdmin");
+        env.grant_as(&compliance, role, &member).unwrap();
+    }
+    for role in [Role::MultiplierScheduler, Role::MetadataOps, Role::MintRegistrar] {
+        assert_err(env.grant_as(&compliance, role, &member), "NotRoleAdmin");
+        env.grant_as(&admin, role, &member).unwrap();
+    }
+    // Revoking follows the same split.
+    let revoke = |env: &Env, signer: &Keypair, role: Role| {
+        env.core_ix(
+            mstocks_core::accounts::RevokeRole {
+                admin: signer.pubkey(),
+                config: env.config,
+                role_entry: role_pda(role, &member),
+            },
+            mstocks_core::instruction::RevokeRole { role, member },
+            vec![],
+        )
+    };
+    let ix = revoke(&env, &admin, Role::Freezer);
+    assert_err(env.send(&[ix], &[&admin]).map(|_| ()), "NotRoleAdmin");
+    let ix = revoke(&env, &compliance, Role::Freezer);
+    env.send(&[ix], &[&compliance]).unwrap();
+    let ix = revoke(&env, &compliance, Role::MetadataOps);
+    assert_err(env.send(&[ix], &[&compliance]).map(|_| ()), "NotRoleAdmin");
+    // Neither admin can be given any role.
+    assert_err(env.grant(Role::Freezer, &admin.pubkey()), "SelfGrantNotAllowed");
+    assert_err(env.grant(Role::MultiplierScheduler, &compliance.pubkey()), "SelfGrantNotAllowed");
+}
+
+#[test]
+fn compliance_admin_handover_is_two_step_and_never_operates() {
+    let mut env = Env::new();
+    let m = env.registered_mint();
+    let compliance = env.compliance_admin.insecure_clone();
+    let freezer = env.operator(Role::Freezer);
+    let account = env.token_account(&m.mint, &Pubkey::new_unique());
+    let propose = |env: &Env, signer: &Keypair, new_admin: Pubkey| {
+        env.core_ix(
+            mstocks_core::accounts::ComplianceAdminOnly { compliance_admin: signer.pubkey(), config: env.config },
+            mstocks_core::instruction::ProposeComplianceAdmin { new_admin },
+            vec![],
+        )
+    };
+    let accept = |env: &Env, signer: &Keypair| {
+        env.core_ix(
+            mstocks_core::accounts::AcceptComplianceAdmin { new_admin: signer.pubkey(), config: env.config },
+            mstocks_core::instruction::AcceptComplianceAdmin {},
+            vec![],
+        )
+    };
+    let admin = env.admin.insecure_clone();
+    let ix = propose(&env, &admin, freezer.pubkey());
+    assert!(env.send(&[ix], &[&admin]).is_err(), "only the compliance admin proposes");
+    let ix = propose(&env, &compliance, admin.pubkey());
+    assert_err(env.send(&[ix], &[&compliance]).map(|_| ()), "AdminsMustDiffer");
+    let ix = accept(&env, &freezer);
+    assert_err(env.send(&[ix], &[&freezer]).map(|_| ()), "NotPendingAdmin");
+
+    // The freezer becomes compliance admin: its role entry stays, but it can no longer freeze.
+    let ix = propose(&env, &compliance, freezer.pubkey());
+    env.send(&[ix], &[&compliance]).unwrap();
+    let ix = accept(&env, &freezer);
+    env.send(&[ix], &[&freezer]).unwrap();
+    assert_eq!(env.config().compliance_admin, freezer.pubkey());
+    assert_eq!(env.config().pending_compliance_admin, None);
+    assert_err(env.set_frozen(&freezer, &m.mint, &[account], true), "AdminCannotOperate");
+    // The former compliance admin has lost its powers.
+    assert_err(env.grant_as(&compliance, Role::Freezer, &Pubkey::new_unique()), "NotRoleAdmin");
 }

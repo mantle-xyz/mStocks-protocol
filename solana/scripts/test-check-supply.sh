@@ -19,7 +19,7 @@ REGISTRY=0x00000000000000000000000000000000000000c0
 anvil --silent --port "$ANVIL_PORT" &
 ANVIL=$!
 CORE_ID=$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)
-for k in deployer admin hook holder; do solana-keygen new --no-bip39-passphrase --silent -o "$WORK/$k.json" >/dev/null; done
+for k in deployer admin compliance hook holder; do solana-keygen new --no-bip39-passphrase --silent -o "$WORK/$k.json" >/dev/null; done
 pk() { solana-keygen pubkey "$WORK/$1.json"; }
 solana-test-validator --reset --quiet --ledger "$WORK/ledger" \
   --bpf-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb tests/fixtures/token2022.so \
@@ -39,7 +39,7 @@ echo "mantle (anvil) token: $TOKEN, pool $POOL holds 2.0"
 # --- Solana: Core + registered mint mirroring that token; the deployer keeps the mint authority ---
 until solana -u l cluster-version >/dev/null 2>&1; do sleep 1; done
 for k in deployer admin; do solana -u l airdrop 100 "$(pk $k)" >/dev/null; done
-npx tsx scripts/init-core.ts --upgrade-authority "$WORK/deployer.json" --admin "$(pk admin)" --hook-authority "$(pk hook)" >/dev/null
+npx tsx scripts/init-core.ts --upgrade-authority "$WORK/deployer.json" --admin "$(pk admin)" --compliance-admin "$(pk compliance)" --hook-authority "$(pk hook)" >/dev/null
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MintRegistrar --member "$(pk deployer)" >/dev/null
 MINT=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
   --name "Apple mStock" --symbol AAPLm --uri https://example.com --mantle-token "$TOKEN" --initial-multiplier-1e18 1000000000000000000 \

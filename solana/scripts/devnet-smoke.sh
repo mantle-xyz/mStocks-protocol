@@ -10,14 +10,14 @@ KEYS=${KEYS:-$HOME/.config/solana/mstocks-devnet}
 DEPLOYER=${DEPLOYER:-$HOME/.config/solana/id.json}
 EXPLORER="https://explorer.solana.com/address/%s?cluster=devnet"
 mkdir -p "$KEYS"
-for k in admin hook scheduler ops user custody; do
+for k in admin compliance-admin hook scheduler ops user custody; do
   [ -f "$KEYS/$k.json" ] || solana-keygen new --no-bip39-passphrase --silent -o "$KEYS/$k.json" >/dev/null
 done
 pk() { solana-keygen pubkey "$KEYS/$1.json"; }
 sol() { solana -u "$RPC_URL" -k "$DEPLOYER" "$@"; }
 
 echo "== fund test keys from the deployer"
-for k in admin:0.2 scheduler:0.05 ops:0.2; do
+for k in admin:0.2 compliance-admin:0.05 scheduler:0.05 ops:0.2; do
   name=${k%%:*}; amount=${k##*:}
   bal=$(sol balance "$(pk $name)" | awk '{print $1}')
   awk "BEGIN{exit !($bal < $amount)}" && sol transfer --allow-unfunded-recipient "$(pk $name)" "$amount" >/dev/null
@@ -29,14 +29,15 @@ if sol account "$CONFIG" >/dev/null 2>&1; then
   echo "== Core already initialized (config $CONFIG)"
 else
   echo "== init-core"
-  npx tsx scripts/init-core.ts --upgrade-authority "$DEPLOYER" --admin "$(pk admin)" --hook-authority "$(pk hook)"
+  npx tsx scripts/init-core.ts --upgrade-authority "$DEPLOYER" --admin "$(pk admin)" --compliance-admin "$(pk compliance-admin)" --hook-authority "$(pk hook)"
 fi
 
 echo "== grant roles (scheduler + ops)"
 npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --role MultiplierScheduler --member "$(pk scheduler)" || true
-for r in Pauser Unpauser Freezer Unfreezer Clawback MetadataOps; do
-  npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --role $r --member "$(pk ops)" >/dev/null 2>&1 || true
+for r in Pauser Unpauser Freezer Unfreezer Clawback; do
+  npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/compliance-admin.json" --role $r --member "$(pk ops)" >/dev/null 2>&1 || true
 done
+npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --role MetadataOps --member "$(pk ops)" >/dev/null 2>&1 || true
 # The deployer registers mints (on mainnet: the operations KMS key).
 npx tsx scripts/grant-role.ts --payer "$DEPLOYER" --admin "$KEYS/admin.json" --role MintRegistrar --member "$(solana-keygen pubkey "$DEPLOYER")" >/dev/null 2>&1 || true
 

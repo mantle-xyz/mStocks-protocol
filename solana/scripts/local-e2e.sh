@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 WORK=$(mktemp -d)
 LEDGER="$WORK/ledger"
 CORE_ID=$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)
-for k in deployer admin hook scheduler ops user custody; do solana-keygen new --no-bip39-passphrase --silent -o "$WORK/$k.json" >/dev/null; done
+for k in deployer admin compliance hook scheduler ops user custody; do solana-keygen new --no-bip39-passphrase --silent -o "$WORK/$k.json" >/dev/null; done
 pk() { solana-keygen pubkey "$WORK/$1.json"; }
 
 solana-test-validator --reset --quiet --ledger "$LEDGER" \
@@ -18,10 +18,10 @@ solana-test-validator --reset --quiet --ledger "$LEDGER" \
 VALIDATOR=$!
 trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
 until solana -u l cluster-version >/dev/null 2>&1; do sleep 1; done
-for k in deployer admin scheduler ops; do solana -u l airdrop 100 "$(pk $k)" >/dev/null; done
+for k in deployer admin compliance scheduler ops; do solana -u l airdrop 100 "$(pk $k)" >/dev/null; done
 
 echo "== init-core"
-npx tsx scripts/init-core.ts --upgrade-authority "$WORK/deployer.json" --admin "$(pk admin)" --hook-authority "$(pk hook)"
+npx tsx scripts/init-core.ts --upgrade-authority "$WORK/deployer.json" --admin "$(pk admin)" --compliance-admin "$(pk compliance)" --hook-authority "$(pk hook)"
 
 echo "== grant MultiplierScheduler, and MintRegistrar to the deployer"
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MultiplierScheduler --member "$(pk scheduler)"
@@ -52,9 +52,13 @@ echo "== show-mint"
 npx tsx scripts/show-mint.ts --mint "$MINT"
 
 echo "== grant operational roles to ops"
-for r in Pauser Unpauser Freezer Unfreezer Clawback MetadataOps; do
-  npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role $r --member "$(pk ops)" >/dev/null
+for r in Pauser Unpauser Freezer Unfreezer Clawback; do
+  npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/compliance.json" --role $r --member "$(pk ops)" >/dev/null
 done
+npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MetadataOps --member "$(pk ops)" >/dev/null
+echo "== the admin cannot grant a compliance role"
+if npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role Freezer --member "$(pk user)" >/dev/null 2>&1; then
+  echo "UNEXPECTED: the admin granted Freezer"; exit 1; fi
 
 echo "== mint to user, open custody account (dev only, deployer is still mint authority)"
 USER_ATA=$(npx tsx scripts/dev-mint-to.ts --mint-authority "$WORK/deployer.json" --mint "$MINT" --owner "$(pk user)" --amount 5000000000 | awk '/^ata: /{print $2}')
@@ -97,7 +101,7 @@ npx tsx scripts/set-default-account-state.ts --payer "$WORK/deployer.json" --adm
 npx tsx scripts/show-mint.ts --mint "$MINT" | grep DefaultAccountState
 
 echo "== revoke Clawback from ops"
-npx tsx scripts/revoke-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role Clawback --member "$(pk ops)"
+npx tsx scripts/revoke-role.ts --payer "$WORK/deployer.json" --admin "$WORK/compliance.json" --role Clawback --member "$(pk ops)"
 
 echo "== handoff dry run"
 npx tsx scripts/handoff-mint-authority.ts --mint-authority "$WORK/deployer.json" --mint "$MINT"

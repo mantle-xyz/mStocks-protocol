@@ -1,5 +1,8 @@
 // One-time Core initialization. Must be signed by the program's upgrade authority.
-//   tsx scripts/init-core.ts --upgrade-authority ~/.config/solana/id.json --admin <squads> --hook-authority <squads>
+// Two admins, split like Mantle's: --admin governs the token roles and the mint registry (Mantle
+// multisig 1), --compliance-admin the pause / freeze / clawback roles (Mantle multisig 4).
+//   tsx scripts/init-core.ts --upgrade-authority ~/.config/solana/id.json --admin <squads> \
+//     --compliance-admin <squads> --hook-authority <squads>
 import { address } from "@solana/kit";
 import { authorityPda, configPda, coreInstruction, concat, CORE_PROGRAM_ID, encodePubkey, programDataPda } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
@@ -7,6 +10,7 @@ import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
 const args = parseArgs();
 const upgradeAuthority = await loadKeypair(required(args, "upgrade-authority"));
 const admin = address(required(args, "admin"));
+const complianceAdmin = address(required(args, "compliance-admin"));
 const hookAuthority = address(required(args, "hook-authority"));
 
 const ix = coreInstruction(
@@ -18,7 +22,7 @@ const ix = coreInstruction(
     program: CORE_PROGRAM_ID,
     program_data: await programDataPda(),
   },
-  concat(encodePubkey(admin), encodePubkey(hookAuthority)),
+  concat(encodePubkey(admin), encodePubkey(complianceAdmin), encodePubkey(hookAuthority)),
 );
 console.log(`initialize: ${await send(upgradeAuthority, [ix])}`);
 console.log(`config:    ${await configPda()}`);
