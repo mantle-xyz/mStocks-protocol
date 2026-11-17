@@ -2,7 +2,8 @@
 // on Solana; the remote pool releases or mints), paying the CCIP fee in native SOL. Approves the
 // router's fee billing signer as delegate for the amount first. The transaction uses the token's
 // pool lookup table to stay under the size limit. Prints the CCIP message id.
-//   tsx scripts/ccip-send.ts --sender <keypair> --mint <mint> --amount <raw u64> --dest-selector <u64>
+//   tsx scripts/ccip-send.ts --sender <keypair> --mint <mint> --amount <raw u64> [--dest-selector <u64>]
+//     (--dest-selector defaults to the network config's Mantle selector)
 //     --receiver <0x evm address> [--router <id>] [--compute-units 400000] [--gas-limit 0]
 import { createHash } from "node:crypto";
 import {
@@ -27,6 +28,7 @@ import {
 import { findAssociatedTokenPda, getApproveCheckedInstruction } from "@solana-program/token-2022";
 import { TOKEN_2022_PROGRAM_ID, concat, encodeEvmAddress, encodeU64 } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, rpc, send, withRetry } from "./lib/env.ts";
+import { setting } from "./lib/config.ts";
 
 const SYSTEM_PROGRAM = address("11111111111111111111111111111111");
 const TOKEN_PROGRAM = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -37,7 +39,7 @@ const args = parseArgs();
 const sender = await loadKeypair(required(args, "sender"));
 const mint = address(required(args, "mint"));
 const amount = BigInt(required(args, "amount"));
-const destSelector = BigInt(required(args, "dest-selector"));
+const destSelector = BigInt(setting(args["dest-selector"], "ccip.mantle_selector", "dest-selector"));
 const receiver = encodeEvmAddress(required(args, "receiver"));
 const router = address(args.router ?? "Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C");
 

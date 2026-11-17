@@ -44,6 +44,35 @@ typecheck of the scripts on every change under `solana/`. CI installs with Node 
 keeps a nested `typescript@5` for `@solana/web3.js` in the lockfile that npm 11 drops; after changing
 dependencies, refresh the lockfile with `npx npm@10 install --package-lock-only`.
 
+## Network configuration
+
+`config.mainnet.toml` (Solana mainnet ↔ Mantle) and `config.testnet.toml` (Solana devnet ↔ Mantle
+Sepolia) hold everything that is not a secret: public RPC endpoints, the program id, the admins,
+the role holders and the CCIP settings (Mantle selector, TokenAdminRegistry, pool owner, Solana CCIP
+admin). `NETWORK=mainnet|testnet` selects one; the scripts then take addresses from it, and a
+command-line value still overrides it. The operator's whole environment is:
+
+```bash
+export NETWORK=mainnet           # or testnet
+export RPC_URL=...               # provider URL with an API key (keys never go in files); optional
+export SQUADS_MEMBER=...         # your Squads member keypair, if you sign for a multisig
+```
+
+Without `NETWORK` the scripts are in local mode (every address on the command line, RPC = a local
+validator), which the local tests use. `NETWORK` may also be a path to a `.toml` file.
+
+Commands that work from the config alone:
+
+| Command | Does |
+| --- | --- |
+| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` | Build and test; first deployment and byte comparison; upgrade authority → the upgrade multisig (only after `init-core`); upgrade through a Squads proposal |
+| `init-core.ts --upgrade-authority <kp>` | Initialize with the config's admins and hook authority |
+| `sync-roles.ts [--dry-run]` | Grant every configured role holder that is missing and revoke every holder not configured, one transaction or Squads proposal per admin |
+| `check-config.ts` | Config vs chain: admins, upgrade authority, every role holder |
+| `create-mint.ts --payer <kp> --mantle-token <0x..> --uri <uri>` | Name, symbol, ISIN and initial multiplier read from the Mantle token |
+| `check-stock.ts --mint <mint>` | Every check of a launched stock: authorities, CCIP admin and pool owner, Mantle verify, multiplier, supply |
+| `squads.ts … --multisig admin` | Config names for multisigs: `admin`, `compliance_admin`, `upgrade_authority`, `unpauser`, `ccip_admin` |
+
 ## Scripts
 
 Admin and multisig-held steps (`--admin`, `--compliance-admin`, `--operator` of a multisig role,
@@ -63,11 +92,11 @@ way: a multisig account becomes its vault, since a multisig account cannot sign 
 would brick that authority. In a proposal the vault also pays rent, so keep some SOL in each vault.
 
 ```bash
-tsx scripts/grant-role.ts --payer <kp> --admin <admin multisig> --role MintRegistrar --member <registrar> \
-  --squads-member <member kp>                 # → Squads proposal #N, approved by the proposer
-tsx scripts/squads.ts approve --multisig <admin multisig> --index N --member <another member kp>
-tsx scripts/squads.ts status  --multisig <admin multisig> --index N   # approvals, time lock left
-tsx scripts/squads.ts execute --multisig <admin multisig> --index N --member <member kp>
+NETWORK=mainnet SQUADS_MEMBER=<member kp> tsx scripts/grant-role.ts --role MintRegistrar --member <registrar>
+                                              # → Squads proposal #N on the admin multisig, approved by the proposer
+tsx scripts/squads.ts approve --multisig admin --index N --member <another member kp>
+tsx scripts/squads.ts status  --multisig admin --index N   # approvals, time lock left
+tsx scripts/squads.ts execute --multisig admin --index N --member <member kp>
 ```
 
 `scripts/local-squads-e2e.sh` rehearses this on a local validator with the mainnet Squads v4
@@ -75,13 +104,16 @@ program (`scripts/fetch-fixtures.sh` dumps it).
 
 | Script | Who signs | Purpose |
 | --- | --- | --- |
+| `program.ts` | Deployer, then the upgrade multisig | `build` (anchor build + tests + sha256), `deploy` (first deployment + byte comparison), `verify`, `handoff` (upgrade authority → the config's upgrade multisig vault; refused before `init-core`), `upgrade` (buffer → vault → Squads upgrade proposal) |
+| `sync-roles.ts` | Admin and compliance admin | Make the on-chain role holders match the config: grants and revokes, one transaction or Squads proposal per admin (`--dry-run` lists them) |
+| `check-stock.ts` | — | Every check of one launched stock against the config, PASS / FAIL |
 | `init-core.ts` | Program upgrade authority | One-time setup: admin (Squads, Mantle multisig 1's role), compliance admin (Squads, multisig 4's role) and hook authority (Squads). On mainnet: deploy with the deployer as upgrade authority, run this, then transfer the upgrade authority to the upgrade multisig's vault (Squads, 24 h time lock). Pass multisig addresses; they are stored as their vaults |
 | `grant-role.ts` | Admin or compliance admin | Grant a role. The admin grants `MultiplierScheduler`, `MetadataOps`, `MintRegistrar`; the compliance admin grants `Pauser`, `Unpauser`, `Freezer`, `Unfreezer`. The script checks on chain that `--admin` governs the role before it sends or proposes (with a multisig, Core would only reject it when the proposal executes) |
 | `create-mint.ts` | Deployer + `MintRegistrar` (`--registrar`, defaults to the deployer) | Create a mint with all extensions and metadata (incl. ISIN) and `register_mint` it, in one transaction (all or nothing; about 1130 bytes when the registrar is the payer, so keep the URI short). A Mantle token can be registered for one mint only |
 | `unregister-mint.ts` | Admin | Undo a registration made in error (wrong mint or Mantle token) so it can be redone; only while the mint's supply is 0 |
 | `schedule-multiplier.ts` | `MultiplierScheduler` | Schedule the same `(multiplier, effectiveAt)` sent to Mantle |
 | `check-multiplier.ts` | — | Reconcile each mint's multiplier with its Mantle `ScaledToken` (address read from Core); exits 1 on mismatch for alerting. Needs `MANTLE_RPC_URL` |
-| `check-config.ts` | — | Check a deployment against `config.mainnet.toml` / `config.devnet.toml`: admins, hook authority, notice and horizon, the program's upgrade authority, and every role's holders (no missing, no extra; the retired Clawback has none). Exits 1 on a problem. Listing holders needs `getProgramAccounts` (`--roles-rpc`) |
+| `check-config.ts` | — | Check a deployment against `config.mainnet.toml` / `config.testnet.toml`: admins, hook authority, notice and horizon, the program's upgrade authority, and every role's holders (no missing, no extra; the retired Clawback has none). Exits 1 on a problem. Listing holders needs `getProgramAccounts` (`--roles-rpc`) |
 | `check-supply.ts` | — | Check each mint's Solana supply against the tokens locked in its Mantle pool (token from Core, pool from `--registry`, the Mantle TokenAdminRegistry); exits 1 if Solana holds more than is locked. Needs `MANTLE_RPC_URL` |
 | `ccip-mantle-setup.sh` | Deployer, then the multisigs | Mantle side of CCIP for one token: `deploy` the LockRelease pool (pinned CCIP 1.6.4) and point it at Solana; `multisig` writes Safe Transaction Builder files for the token admin's timelock (CCIP admin registration, `setPool`) and the pool owner — when the pool owner is a proposer of that timelock (multisig 1's Safe), its acceptance is in the schedule file, so the Safe signs twice; `verify`. `NETWORK=mainnet` (default) or `testnet`; needs `MANTLE_RPC_URL` |
 | `ccip-handoff.ts` | Deployer, then Squads | Hand a mint's CCIP token admin and BurnMint pool ownership to the Squads vault: proposes, then signs the acceptance (keypair) or puts both acceptances in one Squads proposal (multisig address). `ccip-register.ts --handoff-to` does the same; re-run this without a member key to confirm the handoff |
@@ -120,27 +152,27 @@ Keep provider URLs with API keys in the environment only. Some providers reject
 
 ## Launching a stock
 
-With the Mantle token already in place, a stock takes three transactions from the operators and
-one approval round from each multisig:
+With the Mantle token already in place and `NETWORK` set, a stock takes three Solana transactions,
+one Mantle command and one approval round from each multisig:
 
-1. `create-mint.ts` with `--initial-multiplier-1e18` = Mantle `uiMultiplier()`: one transaction
-   creates, configures and registers the mint. If Mantle has a pending multiplier, run
-   `schedule-multiplier.ts` with the same values right after.
-2. Mantle pool: `ccip-mantle-setup.sh deploy <deployer key> <token> <mint> <pool-owner multisig>
-   --rate-capacity … --rate-per-second …` deploys the LockRelease pool, points it at the Solana pool
-   and mint, sets rate limits and proposes the multisig as owner (one command, three transactions).
-3. `ccip-register.ts` with the Mantle token, the pool from step 2, the Mantle chain selector,
-   `--handoff-to <admin multisig> --handoff-mint-authority --squads-member <kp>`: two transactions
-   register the mint with CCIP, propose the multisig as token admin and pool owner and give the mint
-   authority to the pool (the pool signer becomes the only minter); then one Squads proposal holds
-   the multisig's two acceptances.
-4. Multisigs. Mantle: `ccip-mantle-setup.sh multisig <token> <pool> <pool-owner>` writes two Safe
-   Transaction Builder files: the first schedules the timelock batch (CCIP admin registration,
-   `setPool`) and accepts the pool's ownership, the second executes the batch after the delay.
-   Solana: the multisig approves and executes the proposal from step 3 (`squads.ts`); then re-run
-   `ccip-handoff.ts --to <admin multisig>` without a member key to confirm.
-5. `ccip-mantle-setup.sh verify <token> <pool> <mint>` and `show-mint.ts` to confirm the final
-   configuration.
+1. `create-mint.ts --payer <MintRegistrar kp> --mantle-token <token> --uri <uri>`: one transaction
+   creates, configures and registers the mint; name, symbol, ISIN and the initial multiplier come
+   from the Mantle token. If Mantle has a pending multiplier, run `schedule-multiplier.ts` with the
+   same values right after.
+2. Mantle pool: `ccip-mantle-setup.sh deploy <deployer key> <token> <mint> --rate-capacity …
+   --rate-per-second …` deploys the LockRelease pool, points it at the Solana pool and mint, sets
+   rate limits and proposes the config's pool owner (one command, three transactions).
+3. `ccip-register.ts --authority <kp> --mint <mint> --remote-token <token> --remote-pool <pool>
+   --rate-capacity … --rate-per-second … --handoff-to --handoff-mint-authority`: two transactions
+   register the mint with CCIP, propose the config's CCIP admin multisig as token admin and pool
+   owner and give the mint authority to the pool (the pool signer becomes the only minter); then one
+   Squads proposal holds the multisig's two acceptances.
+4. Multisigs. Mantle: `ccip-mantle-setup.sh multisig <token> <pool>` writes two Safe Transaction
+   Builder files: the first schedules the timelock batch (CCIP admin registration, `setPool`) and
+   accepts the pool's ownership, the second executes the batch after the delay. Solana: the multisig
+   approves and executes the proposal from step 3 (`squads.ts … --multisig ccip_admin`).
+5. `check-stock.ts --mint <mint>`: PASS when every authority, the CCIP roles on both chains, the
+   multiplier and the supply are right.
 
 The whole sequence was rehearsed on Mantle Sepolia ↔ Solana devnet with a token whose admin is a
 timelock, as on mainnet (TD §6.2): step by step on 2026-11-16, and in this packed form on 2026-11-17

@@ -4,7 +4,9 @@ import { readFileSync } from "node:fs";
 import {
   AccountRole,
   address,
+  createSolanaRpc,
   fetchEncodedAccount,
+  getBase58Decoder,
   getAddressDecoder,
   getAddressEncoder,
   getProgramDerivedAddress,
@@ -13,6 +15,7 @@ import {
   type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
+import { config } from "./config.ts";
 import { rpc, withRetry } from "./env.ts";
 
 const idl = JSON.parse(
@@ -20,6 +23,8 @@ const idl = JSON.parse(
 );
 
 export const CORE_PROGRAM_ID: Address = address(idl.address);
+if (config && config.program.id !== CORE_PROGRAM_ID)
+  throw new Error(`config program.id ${config.program.id} is not the built program ${CORE_PROGRAM_ID}`);
 export const TOKEN_2022_PROGRAM_ID = address("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 export const BPF_LOADER_UPGRADEABLE = address("BPFLoaderUpgradeab1e11111111111111111111111");
 
@@ -54,7 +59,32 @@ export function roleIndex(role: string): number {
 }
 
 /** Roles governed by the compliance admin (Role::is_compliance); the admin governs the others. */
-const COMPLIANCE_ROLES = ["Pauser", "Unpauser", "Freezer", "Unfreezer", "Clawback"];
+export const COMPLIANCE_ROLES = ["Pauser", "Unpauser", "Freezer", "Unfreezer", "Clawback"];
+/** Every Core role name, in the program's enum order (= seed). */
+export const ROLE_NAMES_IN_ORDER: readonly string[] = ROLES;
+
+const ROLE_ENTRY_DISCRIMINATOR = Uint8Array.from([161, 238, 39, 6, 64, 179, 124, 31]);
+/** On-chain holders of every role (RoleEntry: discriminator, role u8, member). Needs getProgramAccounts. */
+export async function roleHolders(rpcUrl: string): Promise<Map<string, Set<Address>>> {
+  const accounts = await withRetry(() =>
+    createSolanaRpc(rpcUrl)
+      .getProgramAccounts(CORE_PROGRAM_ID, {
+        encoding: "base64",
+        filters: [
+          { dataSize: 42n },
+          { memcmp: { offset: 0n, bytes: getBase58Decoder().decode(ROLE_ENTRY_DISCRIMINATOR) as never, encoding: "base58" } },
+        ],
+      })
+      .send(),
+  );
+  const dec = getAddressDecoder();
+  const out = new Map<string, Set<Address>>(ROLES.map((r) => [r, new Set<Address>()]));
+  for (const { account } of accounts) {
+    const d = Buffer.from(account.data[0], "base64");
+    out.get(ROLES[d[8]])!.add(dec.decode(d.subarray(9, 41)));
+  }
+  return out;
+}
 
 export type CoreConfig = {
   admin: Address;

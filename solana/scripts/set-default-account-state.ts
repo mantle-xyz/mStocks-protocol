@@ -1,15 +1,16 @@
 // Admin-only compliance policy switch for one mint: new token accounts start frozen (--frozen,
 // screen before use) or usable (default, today's screen after use).
-//   tsx scripts/set-default-account-state.ts --payer <keypair> --admin <keypair.json|squads multisig> --mint <mint> [--frozen]
+//   tsx scripts/set-default-account-state.ts [--payer <keypair>] [--admin <keypair.json|squads multisig>] --mint <mint> [--frozen]
 //     [--squads-member <keypair.json>]
 import { address } from "@solana/kit";
-import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
+import { adminAddress, optionalPayer, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
+import { setting } from "./lib/config.ts";
 import { authorityPda, configPda, coreInstruction, encodeU8, mintStatePda } from "./lib/core.ts";
-import { loadKeypair, parseArgs, required } from "./lib/env.ts";
+import { parseArgs, required } from "./lib/env.ts";
 
 const args = parseArgs();
-const payer = await loadKeypair(required(args, "payer"));
-const admin = await resolveAdmin(required(args, "admin"));
+const admin = await resolveAdmin(setting(args.admin, "admins.admin", "admin"));
+const payer = await optionalPayer(args.payer, admin);
 const mint = address(required(args, "mint"));
 const frozen = args.frozen === "true";
 

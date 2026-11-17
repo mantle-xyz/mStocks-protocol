@@ -1,15 +1,16 @@
 // Admin-only: undoes a registration made in error (wrong mint, or the wrong Mantle token) so the
 // mint can be registered again correctly. Core only allows it while the mint has zero supply.
-//   tsx scripts/unregister-mint.ts --payer <keypair> --admin <keypair.json|squads multisig> --mint <mint>
+//   tsx scripts/unregister-mint.ts [--payer <keypair>] [--admin <keypair.json|squads multisig>] --mint <mint>
 //     [--squads-member <keypair.json>]
 import { address, fetchEncodedAccount } from "@solana/kit";
-import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
+import { adminAddress, optionalPayer, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
+import { setting } from "./lib/config.ts";
 import { configPda, coreInstruction, mantleTokenPda, mintStatePda } from "./lib/core.ts";
-import { loadKeypair, parseArgs, required, rpc, withRetry } from "./lib/env.ts";
+import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
 
 const args = parseArgs();
-const payer = await loadKeypair(required(args, "payer"));
-const admin = await resolveAdmin(required(args, "admin"));
+const admin = await resolveAdmin(setting(args.admin, "admins.admin", "admin"));
+const payer = await optionalPayer(args.payer, admin);
 const mint = address(required(args, "mint"));
 
 const mintState = await mintStatePda(mint);

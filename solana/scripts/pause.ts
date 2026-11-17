@@ -3,15 +3,20 @@
 // (creates the Squads proposal with --squads-member, otherwise prints the instruction).
 //   tsx scripts/pause.ts --operator <keypair.json|squads multisig> --mint <mint> [--resume]
 //     [--squads-member <keypair.json>]
+// With --resume and no --operator, the network config's unpauser (the multisig) is used.
 import { address } from "@solana/kit";
 import { resolveAdmin, sendOrPrint } from "./lib/admin.ts";
+import { config } from "./lib/config.ts";
 import { coreInstruction, mintOpAccounts } from "./lib/core.ts";
 import { parseArgs, required } from "./lib/env.ts";
 
 const args = parseArgs();
-const operator = await resolveAdmin(required(args, "operator"));
-const mint = address(required(args, "mint"));
 const resume = args.resume === "true";
+const unpausers = config?.roles.unpauser ?? [];
+const operator = await resolveAdmin(
+  args.operator ?? (resume && unpausers.length === 1 ? unpausers[0] : required(args, "operator")),
+);
+const mint = address(required(args, "mint"));
 const label = resume ? "resume" : "pause";
 
 const ix = coreInstruction(

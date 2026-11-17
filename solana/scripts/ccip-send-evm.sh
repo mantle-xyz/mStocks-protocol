@@ -3,10 +3,21 @@
 # BurnMint pool on Solana mints into the wallet's associated token account, created if missing).
 # Pays the CCIP fee in native MNT and prints the CCIP message id. Mantle → Solana waits for Mantle
 # finality, so delivery takes about 20–25 minutes on Sepolia.
-#   MANTLE_RPC_URL=<rpc> scripts/ccip-send-evm.sh <private key file> <mantle token> <solana wallet> <amount wei>
-#   [ROUTER=0xFd33fd627017fEf041445FC19a2B6521C9778f86] [DEST_SELECTOR=16423721717087811551]
+#   NETWORK=mainnet|testnet scripts/ccip-send-evm.sh <private key file> <mantle token> <solana wallet> <amount wei>
+# NETWORK picks the router, the Solana selector and (from config.<network>.toml) the Mantle RPC;
+# MANTLE_RPC_URL, ROUTER and DEST_SELECTOR override them. Without NETWORK: testnet values, and
+# MANTLE_RPC_URL is required.
 set -euo pipefail
-: "${MANTLE_RPC_URL:?set MANTLE_RPC_URL}"
+case ${NETWORK:-} in
+  mainnet) ROUTER=${ROUTER:-0x670052635a9850bb45882Cb2eCcF66bCff0F41B7}; DEST_SELECTOR=${DEST_SELECTOR:-124615329519749607} ;;
+  testnet|"") ;;
+  *) echo "NETWORK must be mainnet or testnet" >&2; exit 1 ;;
+esac
+if [ -n "${NETWORK:-}" ] && [ -z "${MANTLE_RPC_URL:-}" ]; then
+  MANTLE_RPC_URL=$(python3 -I -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["network"]["mantle_rpc"])' \
+    "$(dirname "$0")/../config.$NETWORK.toml")
+fi
+: "${MANTLE_RPC_URL:?set MANTLE_RPC_URL or NETWORK}"
 KEY=${1:?file with the sender hex private key}
 TOKEN=${2:?mantle token address}
 WALLET=${3:?solana wallet (base58)}

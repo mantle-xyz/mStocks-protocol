@@ -8,10 +8,12 @@
 // With --handoff-to, the new holder's acceptance follows: one Squads proposal for a multisig
 // (created with --squads-member, printed without it), signed directly for a keypair.
 // Steps already done on chain are left out, so it can be re-run after a failure.
-//   tsx scripts/ccip-register.ts --authority <mint authority keypair> --mint <mint>
-//     --remote-selector <u64> --remote-token <0x..> --remote-pool <0x..> [--remote-decimals 18]
+//   NETWORK=mainnet tsx scripts/ccip-register.ts --authority <mint authority keypair> --mint <mint>
+//     --remote-token <0x..> --remote-pool <0x..> [--remote-selector <u64>] [--remote-decimals 18]
 //     [--rate-capacity <units> --rate-per-second <units>]   (rate limits are off without these)
-//     [--handoff-to <keypair.json|squads multisig> [--squads-member <keypair.json>]] [--handoff-mint-authority]
+//     [--handoff-to [<keypair.json|squads multisig>] [--squads-member <keypair.json>]] [--handoff-mint-authority]
+// --remote-selector defaults to the config's Mantle selector; --handoff-to without a value to the
+// config's CCIP admin.
 //     [--router <id>] [--pool-program <id>] [--fee-quoter <id>]
 // Defaults are the CCIP Solana program ids (same on devnet and mainnet).
 import {
@@ -43,13 +45,14 @@ import {
   registryState,
   type Meta,
 } from "./lib/ccip.ts";
+import { ccipAdmin, setting } from "./lib/config.ts";
 import { TOKEN_2022_PROGRAM_ID, concat, encodeEvmAddress, encodeU64 } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, rpc, send, withRetry } from "./lib/env.ts";
 
 const args = parseArgs();
 const authority = await loadKeypair(required(args, "authority"));
 const mint = address(required(args, "mint"));
-const remoteSelector = BigInt(required(args, "remote-selector"));
+const remoteSelector = BigInt(setting(args["remote-selector"], "ccip.mantle_selector", "remote-selector"));
 const remoteToken = encodeEvmAddress(required(args, "remote-token"));
 const remotePool = encodeEvmAddress(required(args, "remote-pool"));
 const remoteDecimals = Number(args["remote-decimals"] ?? 18);
@@ -57,7 +60,10 @@ const rateLimit =
   args["rate-capacity"] !== undefined
     ? { enabled: true, capacity: BigInt(args["rate-capacity"]), rate: BigInt(required(args, "rate-per-second")) }
     : { enabled: false, capacity: 0n, rate: 0n };
-const handoffTo = args["handoff-to"] ? await resolveAdmin(args["handoff-to"]) : undefined;
+// --handoff-to without a value: the config's CCIP admin (the admin's Squads).
+const handoffTo = args["handoff-to"]
+  ? await resolveAdmin(args["handoff-to"] === "true" ? ccipAdmin() : args["handoff-to"])
+  : undefined;
 const handoffMintAuthority = args["handoff-mint-authority"] === "true";
 
 const a = await ccipAccounts(mint, { router: args.router, poolProgram: args["pool-program"], feeQuoter: args["fee-quoter"] });

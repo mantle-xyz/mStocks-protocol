@@ -205,9 +205,9 @@ Run once per stock, in this order:
 
 | Step | Script |
 | --- | --- |
-| Deploy and initialize Core (once) | Deploy with the deployer as upgrade authority → `init-core.ts` (signed by the upgrade authority) → hand the upgrade authority to the upgrade multisig's vault (Squads, 24 h time lock); later upgrades are Squads proposals (`squads.ts upgrade`) |
-| Grant roles | `grant-role.ts` / `revoke-role.ts` |
-| Steps 1–4 | `create-mint.ts` (one transaction) |
+| Deploy and initialize Core (once) | `program.ts deploy` (deployer as upgrade authority, byte comparison) → `init-core.ts` (signed by the upgrade authority) → `program.ts handoff` (upgrade authority → the upgrade multisig's vault, Squads, 24 h time lock); later upgrades: `program.ts upgrade` (Squads proposal) |
+| Grant roles | `sync-roles.ts`: the config's role holders, one proposal per admin; single changes with `grant-role.ts` / `revoke-role.ts` |
+| Steps 1–4 | `create-mint.ts` (one transaction; name, symbol, ISIN and initial multiplier read from the Mantle token) |
 | Schedule a pending multiplier | `schedule-multiplier.ts` |
 | Compare the multiplier on both chains (option B) | `check-multiplier.ts` |
 | Step 6, CCIP registration | `ccip-register.ts`, two transactions: (1) token admin registration (propose + accept), BurnMint pool initialization, pool token account, address lookup table; (2) remote chain config (token, pool, decimals), rate limits, `set_pool`, and with `--handoff-to` / `--handoff-mint-authority` the proposals to the admin's Squads (step 7) and the mint authority handoff (step 8); then the Squads proposal with the acceptances. Steps already done are skipped |
@@ -215,7 +215,7 @@ Run once per stock, in this order:
 | Step 7, multisigs | Mantle: `ccip-mantle-setup.sh multisig` writes two Safe Transaction Builder files (timelock schedule plus the pool owner's acceptance when the Safe is a timelock proposer; execute after the delay). Solana: the admin's Squads approves and executes the proposal from step 6 (`ccip-handoff.ts` does the handoff on its own and confirms it) |
 | Step 8 | Part of step 6 (`--handoff-mint-authority`); on its own `handoff-mint-authority.ts --yes` |
 | Step 9 | `ccip-mantle-setup.sh verify` (exits 1 on a problem), `show-mint.ts` |
-| Check the result | `show-mint.ts` |
+| Check the result | `check-stock.ts` (every check of the stock, PASS / FAIL) |
 
 **CCIP testnet (Solana devnet ↔ Mantle Sepolia, open since 2026-11):** on both chains the OnRamp / OffRamp addresses are shared by all lanes.
 
@@ -231,6 +231,8 @@ Run once per stock, in this order:
 | Fee tokens | LINK, WSOL | LINK, WMNT |
 
 **Per-token gas on Solana → Mantle (must be handled before launch):** our mints have no per-token config on the Solana Fee Quoter, so they use the lane default `defaultTokenDestGasOverhead = 90000`, i.e. the pool's `releaseOrMint` on Mantle gets at most 90,000 gas. A ScaledToken transfer makes two external calls (pause and compliance checks); when the receiver holds the token for the first time, its balance is written from zero, the total goes over 90,000 and the execution fails, and the DON does not retry it. Only the Fee Quoter owner (Chainlink) can raise it with `set_token_transfer_fee_config`, so Chainlink has to set it for this lane before launch (150,000 suggested). Chainlink has agreed to raise the lane default on mainnet and testnet. Until then the CCIP retry service (§12) re-executes these messages automatically; `ccip-manual-exec-evm.sh` (`TOKEN_GAS=150000`) is the manual fallback.
+
+**Network configuration:** `config.mainnet.toml` and `config.testnet.toml` hold everything that is not a secret (public endpoints, program id, admins, role holders, CCIP settings); `NETWORK=mainnet|testnet` selects one and the scripts take their addresses from it, so the operator's environment is `NETWORK`, an optional `RPC_URL` with the provider key, and `SQUADS_MEMBER`. The config is reviewed like code; `check-config.ts` and `sync-roles.ts` compare it with the chain.
 
 **Admin actions and Squads:** scripts that need a multisig's signature (`grant-role`, `revoke-role`, `unregister-mint`, `set-default-account-state`, `clawback`, `pause --resume` for the Unpauser, the acceptances in `ccip-handoff`) take a keypair file, which signs and sends (devnet / local), or a Squads v4 multisig account address (mainnet). For a multisig the signer is its vault (index 0); with `--squads-member <member keypair>` the script creates the vault transaction and its proposal in one transaction, approved by that member, and `squads.ts` takes it the rest of the way (`approve`, `status`, `execute` once the time lock has passed); without a member key it prints the instruction. In a proposal the vault is also the payer, because a vault transaction can only be signed by the vault and cannot carry local signers, so each vault keeps some SOL for rent. Every address stored as a signer (`init-core` admins and hook authority, `create-mint --hook-authority`, a role `--member`, the `check-config` entries) is converted from a multisig account to its vault: the multisig account cannot sign, so storing it would brick that authority. Program upgrades go through the upgrade multisig: write a buffer, `solana program set-buffer-authority <buffer> --new-buffer-authority <vault>`, then `squads.ts upgrade` proposes the BPF loader `Upgrade` signed by the vault. `local-squads-e2e.sh` rehearses all of this against the mainnet Squads v4 program on a local validator.
 
@@ -312,7 +314,7 @@ It lives in this repo's `solana/` directory, separate from the EVM code, and bui
 Test runs and results are recorded in a separate [test report](https://skfc4x16la.larksuite.com/wiki/Sohpww2abiDlMUkSCoXu4lvfshg) and not repeated here. Entry points:
 
 - Program: `cargo test -p mstocks-core` (LiteSVM, mainnet Token-2022 build); CI in `.github/workflows/solana.yml`.
-- Scripts: `npm run local-e2e` (local validator), `scripts/local-squads-e2e.sh` (the runbook with real Squads v4 multisigs on a local validator), `scripts/test-check-multiplier.sh` (reconciliation against a ScaledToken on anvil), `scripts/test-check-supply.sh` (supply reconciliation: backed and over-minted), `scripts/devnet-smoke.sh` (devnet).
+- Scripts: `npm run local-e2e` (local validator), `scripts/local-squads-e2e.sh` (the runbook with real Squads v4 multisigs on a local validator, driven by a network config), `scripts/test-check-multiplier.sh` (reconciliation against a ScaledToken on anvil), `scripts/test-check-supply.sh` (supply reconciliation: backed and over-minted), `scripts/devnet-smoke.sh` (devnet).
 - Compliance backend: mstocks-aml's `scripts/solana-e2e.sh` (both chains locally) and `scripts/solana-devnet-check.sh` (devnet).
 
 ---

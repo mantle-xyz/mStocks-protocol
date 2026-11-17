@@ -1,30 +1,34 @@
 // Squads v4 multisig operations for the admin multisigs (create, inspect, approve, execute, and
 // propose a program upgrade). Proposals for Core / CCIP admin actions are created by the scripts
 // themselves when given a multisig address and --squads-member; this script takes them the rest of
-// the way. Every key here is a member keypair file; the multisig is the multisig account address
-// (not the vault).
+// the way. Every key here is a member keypair file (--member, default SQUADS_MEMBER); --multisig is
+// the multisig account address (not the vault) or, with NETWORK set, a config name: admin,
+// compliance_admin, upgrade_authority, unpauser, ccip_admin.
 //   tsx scripts/squads.ts create  --creator <kp> --members <a,b,c> --threshold <n> [--time-lock <s>]
 //   tsx scripts/squads.ts status  --multisig <ms> [--index <n>]
 //   tsx scripts/squads.ts approve --multisig <ms> --index <n> --member <kp>
 //   tsx scripts/squads.ts reject  --multisig <ms> --index <n> --member <kp>
 //   tsx scripts/squads.ts execute --multisig <ms> --index <n> --member <kp>
-//   tsx scripts/squads.ts upgrade --multisig <ms> --member <kp> --buffer <buffer> [--program <id>] [--spill <addr>]
+//   tsx scripts/squads.ts upgrade [--multisig <ms>] --member <kp> --buffer <buffer> [--program <id>] [--spill <addr>]
+//     (program.ts upgrade writes the buffer and calls this; --multisig defaults to upgrade_authority)
 // `create` gives every member all permissions (initiate, vote, execute) and no config authority, so
 // membership, threshold and time lock change only through the multisig's own config proposals. For
 // `upgrade`, first hand the buffer to the vault: solana program set-buffer-authority <buffer>
 // --new-buffer-authority <vault>.
 import * as multisig from "@sqds/multisig";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { address, AccountRole, type Address } from "@solana/kit";
+import { address } from "@solana/kit";
 import { CORE_PROGRAM_ID } from "./lib/core.ts";
 import { parseArgs, required } from "./lib/env.ts";
-import { connection, loadWeb3Keypair, propose, sendWeb3, vaultOf } from "./lib/squads.ts";
+import { connection, loadWeb3Keypair, multisigFromConfig, propose, sendWeb3, upgradeIx, vaultOf } from "./lib/squads.ts";
 
 const [command, ...rest] = process.argv.slice(2);
 const args = parseArgs(rest);
 const { Multisig, Proposal, ProgramConfig } = multisig.accounts;
 
-const msArg = () => new PublicKey(required(args, "multisig"));
+const msArg = () => multisigFromConfig(required(args, "multisig"));
+/** --member, else SQUADS_MEMBER. */
+const member = () => args.member ?? process.env.SQUADS_MEMBER ?? required(args, "member");
 const indexArg = () => BigInt(required(args, "index"));
 const proposalPda = (multisigPda: PublicKey, transactionIndex: bigint) =>
   multisig.getProposalPda({ multisigPda, transactionIndex })[0];
@@ -102,51 +106,37 @@ async function main() {
     case "reject": {
       const multisigPda = msArg();
       const transactionIndex = indexArg();
-      const member = loadWeb3Keypair(required(args, "member"));
+      const signer = loadWeb3Keypair(member());
       const build = command === "approve" ? multisig.instructions.proposalApprove : multisig.instructions.proposalReject;
-      const sig = await sendWeb3([build({ multisigPda, transactionIndex, member: member.publicKey })], [member]);
+      const sig = await sendWeb3([build({ multisigPda, transactionIndex, member: signer.publicKey })], [signer]);
       const { ms, proposal } = await proposalState(multisigPda, transactionIndex);
-      console.log(`${command} by ${member.publicKey.toBase58()}: ${sig}`);
+      console.log(`${command} by ${signer.publicKey.toBase58()}: ${sig}`);
       console.log(`  ${describe(ms, proposal, transactionIndex)}`);
       break;
     }
     case "execute": {
       const multisigPda = msArg();
       const transactionIndex = indexArg();
-      const member = loadWeb3Keypair(required(args, "member"));
+      const signer = loadWeb3Keypair(member());
       const { ms, proposal } = await proposalState(multisigPda, transactionIndex);
       console.log(`  ${describe(ms, proposal, transactionIndex)}`);
       const { instruction } = await multisig.instructions.vaultTransactionExecute({
         connection,
         multisigPda,
         transactionIndex,
-        member: member.publicKey,
+        member: signer.publicKey,
       });
-      console.log(`execute #${transactionIndex}: ${await sendWeb3([instruction], [member])}`);
+      console.log(`execute #${transactionIndex}: ${await sendWeb3([instruction], [signer])}`);
       break;
     }
     case "upgrade": {
-      // BPF Loader Upgradeable `Upgrade` (instruction 3), signed by the vault as upgrade authority.
-      const multisigPda = msArg();
+      // BPF Loader Upgradeable `Upgrade`, signed by the vault as upgrade authority.
+      const multisigPda = multisigFromConfig(args.multisig ?? "upgrade_authority");
       const vault = address(vaultOf(multisigPda).toBase58());
       const program = address(args.program ?? CORE_PROGRAM_ID);
-      const programData = programDataOf(program);
-      const spill = address(args.spill ?? vault);
-      const ix = {
-        programAddress: address("BPFLoaderUpgradeab1e11111111111111111111111"),
-        accounts: [
-          { address: programData, role: AccountRole.WRITABLE },
-          { address: program, role: AccountRole.WRITABLE },
-          { address: address(required(args, "buffer")), role: AccountRole.WRITABLE },
-          { address: spill, role: AccountRole.WRITABLE },
-          { address: address("SysvarRent111111111111111111111111111111111"), role: AccountRole.READONLY },
-          { address: address("SysvarC1ock11111111111111111111111111111111"), role: AccountRole.READONLY },
-          { address: vault, role: AccountRole.READONLY_SIGNER },
-        ],
-        data: Uint8Array.from([3, 0, 0, 0]),
-      };
-      const p = await propose(multisigPda, [ix], required(args, "member"), `upgrade ${program}`);
-      console.log(`upgrade ${program}: Squads proposal #${p.transactionIndex} (${p.signature})`);
+      const ix = upgradeIx(program, address(required(args, "buffer")), address(args.spill ?? vault), vault);
+      const p = await propose(multisigPda, [ix], member(), `upgrade ${program}`);
+      console.log(`upgrade ${program}: Squads proposal #${p.transactionIndex} on ${multisigPda.toBase58()} (${p.signature})`);
       console.log(`  needs ${p.threshold} approval(s), then executable ${p.timeLock}s after approval`);
       break;
     }
@@ -160,11 +150,3 @@ main().catch((e: Error) => {
   console.error(`error: ${e.message}`);
   process.exit(1);
 });
-
-function programDataOf(program: Address): Address {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [new PublicKey(program).toBuffer()],
-    new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111"),
-  );
-  return address(pda.toBase58());
-}

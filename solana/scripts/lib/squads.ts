@@ -15,6 +15,7 @@ import {
   VersionedTransaction,
 } from "@solana/web3.js";
 import { AccountRole, address, type Address, type Instruction } from "@solana/kit";
+import { config } from "./config.ts";
 import { RPC_URL, withRetry } from "./env.ts";
 
 export const SQUADS_PROGRAM_ID = multisig.PROGRAM_ID;
@@ -101,3 +102,41 @@ export async function propose(multisigPda: PublicKey, instructions: Instruction[
 }
 
 export const vaultAddress = (multisigPda: PublicKey): Address => address(vaultOf(multisigPda).toBase58());
+
+const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+
+/** BPF Loader Upgradeable `Upgrade` (instruction 3) of `program` from `buffer`, signed by `authority`. */
+export function upgradeIx(program: Address, buffer: Address, spill: Address, authority: Address): Instruction {
+  const [programData] = PublicKey.findProgramAddressSync([new PublicKey(program).toBuffer()], BPF_LOADER_UPGRADEABLE);
+  return {
+    programAddress: address(BPF_LOADER_UPGRADEABLE.toBase58()),
+    accounts: [
+      { address: address(programData.toBase58()), role: AccountRole.WRITABLE },
+      { address: program, role: AccountRole.WRITABLE },
+      { address: buffer, role: AccountRole.WRITABLE },
+      { address: spill, role: AccountRole.WRITABLE },
+      { address: address("SysvarRent111111111111111111111111111111111"), role: AccountRole.READONLY },
+      { address: address("SysvarC1ock11111111111111111111111111111111"), role: AccountRole.READONLY },
+      { address: authority, role: AccountRole.READONLY_SIGNER },
+    ],
+    data: Uint8Array.from([3, 0, 0, 0]),
+  };
+}
+
+/** Config names usable instead of a multisig address (--multisig admin, upgrade_authority, ...). */
+export function multisigFromConfig(value: string): PublicKey {
+  const named: Record<string, string | undefined> = {
+    admin: config?.admins.admin,
+    compliance_admin: config?.admins.compliance_admin,
+    upgrade_authority: config?.admins.upgrade_authority,
+    hook_authority: config?.admins.hook_authority,
+    unpauser: config?.roles.unpauser?.length === 1 ? config.roles.unpauser[0] : undefined,
+    ccip_admin: config?.ccip.solana_ccip_admin || config?.admins.admin,
+  };
+  if (value in named) {
+    const resolved = named[value];
+    if (!resolved) throw new Error(`${value} is not set in the network config (set NETWORK, or pass the multisig address)`);
+    return new PublicKey(resolved);
+  }
+  return new PublicKey(value);
+}

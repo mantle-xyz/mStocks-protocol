@@ -4,12 +4,12 @@
 # transfers the token, so ScaledToken needs no new role, and its rebalancer stays unset (nobody can
 # withdraw the locked tokens).
 #
-#   deploy   <deployer-key-file> <token> <solana-mint> <pool-owner> (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit)
+#   deploy   <deployer-key-file> <token> <solana-mint> [<pool-owner>] (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit)
 #            [--rate-limit-admin <addr>]
 #            Sends from the deployer: deploys the pool, points it at the Solana pool and mint, sets the
 #            rate limits (same both ways, in the token's 18-decimal units), optionally a rate limit
 #            admin, and proposes <pool-owner> (the multisig) as owner. Prints the pool address.
-#   multisig <token> <pool> <pool-owner> [--out <dir>]
+#   multisig <token> <pool> [<pool-owner>] [--out <dir>]
 #            Writes Safe Transaction Builder JSON files for the multisigs:
 #              - the token admin (the token's DEFAULT_ADMIN_ROLE, a TimelockController on mainnet)
 #                registers as the token's CCIP admin, accepts, and sets the pool;
@@ -25,15 +25,24 @@
 #            Checks registry, pool owner, remote chain, rate limits, rebalancer, sanctions; exits 1 on a
 #            problem.
 #
-# Env: MANTLE_RPC_URL (required), NETWORK=mainnet|testnet (default mainnet: Mantle ↔ Solana mainnet;
-# testnet: Mantle Sepolia ↔ Solana devnet). The Solana side is ccip-register.ts / ccip-handoff.ts.
+# Env: NETWORK=mainnet|testnet (required: Mantle ↔ Solana mainnet, or Mantle Sepolia ↔ Solana devnet)
+# selects config.<network>.toml, which gives the Mantle RPC (MANTLE_RPC_URL overrides it) and the
+# default <pool-owner> (ccip.mantle_pool_owner). The Solana side is ccip-register.ts / ccip-handoff.ts.
 set -euo pipefail
 # File arguments (key files, --out, JSON files) are relative to the caller's directory.
 CALLER=$PWD
 abspath() { case $1 in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$CALLER" "$1" ;; esac; }
 cd "$(dirname "$0")/.."
-RPC=${MANTLE_RPC_URL:?set MANTLE_RPC_URL}
-NETWORK=${NETWORK:-mainnet}
+NETWORK=${NETWORK:?set NETWORK=mainnet or NETWORK=testnet}
+CONFIG_FILE=config.$NETWORK.toml
+cfg() { # dotted key of the network config → value ("" when unset)
+  python3 -I -c 'import sys, tomllib
+d = tomllib.load(open(sys.argv[1], "rb"))
+for k in sys.argv[2].split("."): d = d.get(k, "") if isinstance(d, dict) else ""
+print(d)' "$CONFIG_FILE" "$1"
+}
+[ -f "$CONFIG_FILE" ] || { echo "no $CONFIG_FILE for NETWORK=$NETWORK" >&2; exit 1; }
+RPC=${MANTLE_RPC_URL:-$(cfg network.mantle_rpc)}
 CCIP_VERSION=1.6.4
 POOL_PROGRAM=41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB
 case $NETWORK in
@@ -128,8 +137,10 @@ PY
 }
 
 cmd_deploy() {
-  [ $# -ge 4 ] || die "usage: deploy <deployer-key-file> <token> <solana-mint> <pool-owner> (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit) [--rate-limit-admin <addr>]"
-  local key token=$2 mint=$3 owner=$4; key=$(abspath "$1"); shift 4
+  [ $# -ge 3 ] || die "usage: deploy <deployer-key-file> <token> <solana-mint> [<pool-owner>] (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit) [--rate-limit-admin <addr>]"
+  local key token=$2 mint=$3 owner; key=$(abspath "$1"); shift 3
+  if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then owner=$1; shift; else owner=$(cfg ccip.mantle_pool_owner); fi
+  [ -n "$owner" ] || die "no <pool-owner>: pass it or fill ccip.mantle_pool_owner in $CONFIG_FILE"
   local cap="" rate="" nolimit="" rladmin=""
   while [ $# -gt 0 ]; do case $1 in
     --rate-capacity) cap=$2; shift 2 ;; --rate-per-second) rate=$2; shift 2 ;;
@@ -198,8 +209,10 @@ batch_files() { # actor tag (target data)... → JSON files for one actor
 }
 
 cmd_multisig() {
-  [ $# -ge 3 ] || die "usage: multisig <token> <pool> <pool-owner> [--out <dir>]"
-  TOKEN_ADDR=$1; POOL_ADDR=$2; local owner=$3; shift 3
+  [ $# -ge 2 ] || die "usage: multisig <token> <pool> [<pool-owner>] [--out <dir>]"
+  TOKEN_ADDR=$1; POOL_ADDR=$2; local owner; shift 2
+  if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then owner=$1; shift; else owner=$(cfg ccip.mantle_pool_owner); fi
+  [ -n "$owner" ] || die "no <pool-owner>: pass it or fill ccip.mantle_pool_owner in $CONFIG_FILE"
   OUT=$CALLER; while [ $# -gt 0 ]; do case $1 in --out) OUT=$(abspath "$2"); shift 2 ;; *) die "unknown option $1" ;; esac; done
   mkdir -p "$OUT"
   local sym admin; sym=$(call "$TOKEN_ADDR" "symbol()(string)" | tr -d '"'); admin=$(token_admin "$TOKEN_ADDR")

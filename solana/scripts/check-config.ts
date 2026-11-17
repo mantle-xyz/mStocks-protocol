@@ -1,50 +1,27 @@
-// Checks a deployed mstocks-core against a config file (config.mainnet.toml / config.devnet.toml):
+// Checks a deployed mstocks-core against its network config (config.mainnet.toml / config.testnet.toml):
 // the config itself (both admins set and different, no admin holding a role), the Config account
 // (admins, hook authority, notice and horizon), the program's upgrade authority, and every role's
 // holders on chain (no missing and no extra holder; the retired Clawback has none). Exits 1 on any
 // problem, so it can gate each launch step. Addresses in the config may be Squads multisig accounts;
 // they are checked as their vaults, the addresses that sign.
-//   RPC_URL=<rpc> tsx scripts/check-config.ts --config config.mainnet.toml [--roles-rpc <rpc>]
-// Listing role holders needs getProgramAccounts; pass --roles-rpc when RPC_URL's provider rejects it.
+//   NETWORK=mainnet tsx scripts/check-config.ts [--config <file>] [--roles-rpc <rpc>]
+// Listing role holders needs getProgramAccounts: the config's network.roles_rpc, or --roles-rpc.
 import { readFileSync } from "node:fs";
-import {
-  address,
-  createSolanaRpc,
-  fetchEncodedAccount,
-  getAddressDecoder,
-  getBase58Decoder,
-  type Address,
-} from "@solana/kit";
+import { fetchEncodedAccount, getAddressDecoder } from "@solana/kit";
 import { parse } from "smol-toml";
-import { signerAddress } from "./lib/admin.ts";
-import { fetchConfig, programDataPda } from "./lib/core.ts";
-import { parseArgs, required, rpc, RPC_URL, withRetry } from "./lib/env.ts";
+import { configuredRoles, signerAddress } from "./lib/admin.ts";
+import { CONFIG_PATH, ROLE_NAMES, type Config } from "./lib/config.ts";
+import { fetchConfig, programDataPda, ROLE_NAMES_IN_ORDER, roleHolders } from "./lib/core.ts";
+import { parseArgs, rpc, RPC_URL, withRetry } from "./lib/env.ts";
 
 const args = parseArgs();
-type Cfg = {
-  program: { id: string; min_notice_seconds: number; max_horizon_seconds: number };
-  admins: { upgrade_authority: string; admin: string; compliance_admin: string; hook_authority: string };
-  roles: Record<string, string[]>;
-};
-const cfg = parse(readFileSync(required(args, "config"), "utf8")) as unknown as Cfg;
+const path = args.config ?? CONFIG_PATH;
+if (!path) throw new Error("set NETWORK=mainnet|testnet or pass --config <file>");
+const cfg = parse(readFileSync(path, "utf8")) as unknown as Config;
 const toSigner = (v: string) => (v ? signerAddress(v) : Promise.resolve(v));
-for (const k of Object.keys(cfg.admins) as (keyof Cfg["admins"])[]) cfg.admins[k] = await toSigner(cfg.admins[k]);
-for (const role of Object.keys(cfg.roles)) cfg.roles[role] = await Promise.all(cfg.roles[role].map(toSigner));
-const rolesRpc = createSolanaRpc(args["roles-rpc"] ?? RPC_URL);
+for (const k of Object.keys(cfg.admins) as (keyof Config["admins"])[]) cfg.admins[k] = await toSigner(cfg.admins[k]);
+const rolesRpc = args["roles-rpc"] ?? cfg.network?.roles_rpc ?? RPC_URL;
 const dec = getAddressDecoder();
-
-// Role enum order (= seed); `clawback` is retired and must have no holder.
-const ROLE_KEYS = [
-  "multiplier_scheduler",
-  "pauser",
-  "unpauser",
-  "freezer",
-  "unfreezer",
-  "clawback",
-  "metadata_ops",
-  "mint_registrar",
-];
-const ROLE_ENTRY_DISCRIMINATOR = Uint8Array.from([161, 238, 39, 6, 64, 179, 124, 31]);
 
 let failures = 0;
 const ok = (label: string, value: string) => console.log(`  ok   ${label}: ${value}`);
@@ -55,15 +32,14 @@ const fail = (label: string, detail: string) => {
 const expect = (label: string, actual: string, wanted: string) =>
   actual === wanted ? ok(label, actual) : fail(label, `${actual} (want ${wanted || "<not set in config>"})`);
 
-console.log("== config file");
+console.log(`== config file ${path}`);
 const { admin, compliance_admin: complianceAdmin, hook_authority: hook, upgrade_authority: upgrade } = cfg.admins;
 for (const [k, v] of Object.entries(cfg.admins)) (v ? ok : fail)(`admins.${k}`, v || "not set");
 if (admin && admin === complianceAdmin) fail("admins", "admin and compliance_admin must differ");
-for (const [role, members] of Object.entries(cfg.roles)) {
-  if (!ROLE_KEYS.includes(role) || role === "clawback") fail(`roles.${role}`, "unknown or retired role");
+const want = await configuredRoles(cfg.roles).catch((e: Error) => (fail("roles", e.message), new Map<string, Set<string>>()));
+for (const [role, members] of want)
   for (const m of members)
     if (m === admin || m === complianceAdmin) fail(`roles.${role}`, `${m} is an admin; admins cannot hold roles`);
-}
 
 console.log("== Config account");
 const conf = await fetchConfig();
@@ -86,39 +62,18 @@ else
   expect("upgrade authority", pd.data[12] === 1 ? dec.decode(pd.data.subarray(13, 45)) : "none (immutable)", upgrade);
 
 console.log("== role holders");
-const res = await rolesRpc
-  .getProgramAccounts(address(cfg.program.id), {
-    encoding: "base64",
-    filters: [
-      { dataSize: 42n },
-      {
-        memcmp: { offset: 0n, bytes: getBase58Decoder().decode(ROLE_ENTRY_DISCRIMINATOR) as never, encoding: "base58" },
-      },
-    ],
-  })
-  .send()
-  .catch((e: Error) => e);
-if (res instanceof Error)
-  fail("role holders", `getProgramAccounts failed (${res.message.slice(0, 80)}); pass --roles-rpc`);
+const have = await roleHolders(rolesRpc).catch((e: Error) => e);
+if (have instanceof Error) fail("role holders", `getProgramAccounts failed (${have.message.slice(0, 80)}); pass --roles-rpc`);
 else {
-  const onChain = new Map<string, Set<Address>>();
-  for (const { account } of res) {
-    const d = Buffer.from(account.data[0], "base64");
-    const role = ROLE_KEYS[d[8]];
-    if (!onChain.has(role)) onChain.set(role, new Set());
-    onChain.get(role)!.add(dec.decode(d.subarray(9, 41)));
-  }
-  for (const role of ROLE_KEYS) {
-    const want = new Set(role === "clawback" ? [] : (cfg.roles[role] ?? []));
-    const have = onChain.get(role) ?? new Set();
-    const missing = [...want].filter((m) => !have.has(m as Address));
-    const extra = [...have].filter((m) => !want.has(m));
-    if (!missing.length && !extra.length) ok(role, [...have].join(", ") || "none");
+  const keyOf = Object.fromEntries(Object.entries(ROLE_NAMES).map(([k, v]) => [v, k]));
+  for (const role of ROLE_NAMES_IN_ORDER) {
+    const wanted = want.get(role) ?? new Set<string>();
+    const held = have.get(role) ?? new Set<string>();
+    const missing = [...wanted].filter((m) => !held.has(m as never));
+    const extra = [...held].filter((m) => !wanted.has(m));
+    if (!missing.length && !extra.length) ok(keyOf[role], [...held].join(", ") || "none");
     else
-      fail(
-        role,
-        `${missing.length ? `missing ${missing.join(", ")} ` : ""}${extra.length ? `unexpected ${extra.join(", ")}` : ""}`,
-      );
+      fail(keyOf[role], `${missing.length ? `missing ${missing.join(", ")} ` : ""}${extra.length ? `unexpected ${extra.join(", ")}` : ""}`);
   }
 }
 

@@ -7,6 +7,8 @@
 //   <any other address>   e.g. the vault itself: prints the instruction for a Squads proposal.
 import { address, type Address, type Instruction, type KeyPairSigner } from "@solana/kit";
 import { asSquadsMultisig, propose, vaultAddress } from "./squads.ts";
+import { ROLE_NAMES, setting } from "./config.ts";
+import { COMPLIANCE_ROLES, concat, configPda, coreInstruction, encodePubkey, encodeU8, roleIndex, rolePda } from "./core.ts";
 import { loadKeypair, parseArgs, send } from "./env.ts";
 import type { PublicKey } from "@solana/web3.js";
 
@@ -34,6 +36,48 @@ export async function signerAddress(value: string): Promise<Address> {
 }
 
 export const adminAddress = (admin: Admin): Address => (typeof admin === "string" ? admin : admin.address);
+
+/** The admin that governs `role`: --admin, else the config's admin or compliance admin. */
+export function roleAdminSetting(role: string, value: string | undefined): string {
+  return COMPLIANCE_ROLES.includes(role)
+    ? setting(value, "admins.compliance_admin", "admin")
+    : setting(value, "admins.admin", "admin");
+}
+
+/** --payer when given; else a keypair admin pays itself, and a multisig needs none (its vault pays). */
+export async function optionalPayer(value: string | undefined, admin: Admin): Promise<KeyPairSigner | null> {
+  if (value) return loadKeypair(value);
+  return typeof admin === "string" ? null : admin;
+}
+
+/** grant_role. In a Squads proposal only the vault signs, so the vault (admin) also pays the rent. */
+export async function grantRoleIx(role: string, member: Address, admin: Admin, payer: KeyPairSigner | null): Promise<Instruction> {
+  return coreInstruction(
+    "grant_role",
+    { payer: typeof admin === "string" ? admin : (payer ?? admin), admin, config: await configPda(), role_entry: await rolePda(role, member) },
+    concat(encodeU8(roleIndex(role)), encodePubkey(member)),
+  );
+}
+
+/** revoke_role; the role account's rent returns to the admin. */
+export async function revokeRoleIx(role: string, member: Address, admin: Admin): Promise<Instruction> {
+  return coreInstruction(
+    "revoke_role",
+    { admin, config: await configPda(), role_entry: await rolePda(role, member) },
+    concat(encodeU8(roleIndex(role)), encodePubkey(member)),
+  );
+}
+
+/** The config's role holders by Core role name, multisig accounts resolved to their vaults. */
+export async function configuredRoles(roles: Record<string, string[]>): Promise<Map<string, Set<Address>>> {
+  const out = new Map<string, Set<Address>>(Object.values(ROLE_NAMES).map((r) => [r, new Set<Address>()]));
+  for (const [key, members] of Object.entries(roles)) {
+    const role = ROLE_NAMES[key];
+    if (!role || role === "Clawback") throw new Error(`roles.${key}: unknown or retired role`);
+    for (const m of members) out.get(role)!.add(await signerAddress(m));
+  }
+  return out;
+}
 
 /**
  * Keypair admin: signs and sends (`payer` pays, or the admin when there is no payer). Squads

@@ -1,5 +1,11 @@
-# Devnet configuration of mstocks-core (test keys; the upgrade authority stays the deployer).
-#   RPC_URL=<devnet rpc> tsx scripts/check-config.ts --config config.devnet.toml
+# Solana devnet ↔ Mantle Sepolia configuration of mstocks-core, read by the scripts when
+# NETWORK=testnet (test keys; the upgrade authority stays the deployer).
+#   NETWORK=testnet tsx scripts/check-config.ts
+
+[network]
+solana_rpc = "https://api.devnet.solana.com"   # RPC_URL overrides it (a provider URL with a key)
+roles_rpc = "https://api.devnet.solana.com"
+mantle_rpc = "https://rpc.sepolia.mantle.xyz"
 
 [program]
 id = "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd"
@@ -22,5 +28,7 @@ freezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "E8SV8n8PQHiNNHZttcZ4
 unfreezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "E8SV8n8PQHiNNHZttcZ4PCYkFsC2rAHNYQNyZfXm6jQX"]
 
 [ccip]
-mantle_pool_owner = ""
-solana_ccip_admin = ""
+mantle_selector = "8236463271206331221"                                    # Mantle Sepolia
+mantle_token_admin_registry = "0x0F1eE88A582f31d92510E300fc1330AA5a525D51"
+mantle_pool_owner = "0xaD306c7C6dC31a510489Fc449Bd7f502d397df9b"          # rehearsal key standing in for multisig 1's Safe
+solana_ccip_admin = "36Ss7VbkAzHBDVYU9s3QsG7U2xSQYQ5XfShMcrCV16DE"         # rehearsal Squads (3/6, 60 s time lock)

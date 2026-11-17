@@ -9,12 +9,14 @@
 // tokens were minted without a lock, so it exits 1 for alerting. If the Mantle pool also serves
 // other chains, its balance covers them too and this remains a necessary (not sufficient) check.
 //
-//   MANTLE_RPC_URL=<mantle rpc> tsx scripts/check-supply.ts --registry <Mantle TokenAdminRegistry> --mints a,b,c
+//   NETWORK=mainnet tsx scripts/check-supply.ts --mints a,b,c
+//     [--registry <Mantle TokenAdminRegistry>]   (default: the config's; Mantle RPC: MANTLE_RPC_URL or the config's)
 //
 // The Mantle token comes from Core's MintState and its pool from the TokenAdminRegistry.
 import { address, fetchEncodedAccount, type Address } from "@solana/kit";
 import { getMintDecoder } from "@solana-program/token-2022";
 import { mintStatePda } from "./lib/core.ts";
+import { config, setting } from "./lib/config.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
 
 const SELECTORS = {
@@ -24,8 +26,8 @@ const SELECTORS = {
 };
 
 const args = parseArgs();
-const mantleRpc = process.env.MANTLE_RPC_URL ?? required(args, "mantle-rpc");
-const registry = required(args, "registry");
+const mantleRpc = process.env.MANTLE_RPC_URL || config?.network.mantle_rpc || required(args, "mantle-rpc");
+const registry = setting(args.registry, "ccip.mantle_token_admin_registry", "registry");
 const mints: Address[] = required(args, "mints")
   .split(",")
   .map((m) => address(m.trim()));

@@ -2,9 +2,11 @@
 // Registration is signed by a holder of the MintRegistrar role (operations; defaults to the payer).
 // Each Mantle token can be registered for only one mint. Everything is one transaction.
 //
-//   tsx scripts/create-mint.ts --payer <keypair> [--registrar <keypair>] [--mint-keypair <keypair>] \
-//     --hook-authority <squads multisig> --name "Apple mStock" --symbol AAPLm --uri https://... \
-//     --isin US0378331005 --mantle-token 0x... --initial-multiplier-1e18 <Mantle uiMultiplier()>
+//   NETWORK=mainnet tsx scripts/create-mint.ts --payer <MintRegistrar keypair> --mantle-token 0x... --uri https://...
+//     [--registrar <keypair>] [--mint-keypair <keypair>] [--hook-authority <squads multisig>]
+//     [--name "Apple mStock"] [--symbol AAPLm] [--isin US0378331005] [--initial-multiplier-1e18 <n>]
+// The hook authority defaults to the config's; name, symbol, ISIN (asset code) and the initial
+// multiplier to the Mantle token's (read from the config's Mantle RPC, or MANTLE_RPC_URL).
 //
 // The payer stays mint authority until the CCIP pool is registered (ccip-register.ts
 // --handoff-mint-authority hands it to the pool). If Mantle has a pending multiplier, schedule it on
@@ -31,6 +33,8 @@ import {
   TOKEN_2022_PROGRAM_ID,
 } from "./lib/core.ts";
 import { signerAddress } from "./lib/admin.ts";
+import { config, setting } from "./lib/config.ts";
+import { scaledToken } from "./lib/mantle.ts";
 import { loadKeypair, parseArgs, required, rpc, send } from "./lib/env.ts";
 
 const DECIMALS = 9;
@@ -41,13 +45,26 @@ const payer = await loadKeypair(required(args, "payer"));
 const registrarKey = args.registrar ? await loadKeypair(args.registrar) : payer;
 // The same key loaded twice is two signer objects, which @solana/kit rejects.
 const registrar = registrarKey.address === payer.address ? payer : registrarKey;
-const hookAuthority = await signerAddress(required(args, "hook-authority"));
-const name = required(args, "name");
-const symbol = required(args, "symbol");
+const hookAuthority = await signerAddress(setting(args["hook-authority"], "admins.hook_authority", "hook-authority"));
+const mantleTokenHex = required(args, "mantle-token");
+const mantleToken = encodeEvmAddress(mantleTokenHex);
+// Name, symbol, ISIN and the initial multiplier default to the Mantle token's, read on chain, so
+// nothing is copied by hand; --name / --symbol / --isin / --initial-multiplier-1e18 override them.
+// Read whenever Mantle is reachable (network config or MANTLE_RPC_URL), and in any case when a
+// value is missing; local tests pass everything and have no Mantle.
+const mantleReachable = Boolean(process.env.MANTLE_RPC_URL || config?.network.mantle_rpc);
+const needsMantle = mantleReachable || !args.name || !args.symbol || !args["initial-multiplier-1e18"];
+const fromMantle = needsMantle ? await scaledToken(mantleTokenHex) : null;
+if (fromMantle)
+  console.log(`Mantle ${mantleTokenHex}: name "${fromMantle.name}", symbol ${fromMantle.symbol}, asset code ${fromMantle.assetCode || "(none)"}, uiMultiplier ${fromMantle.multiplier}`);
+const name = args.name ?? fromMantle!.name;
+const symbol = args.symbol ?? fromMantle!.symbol;
 const uri = required(args, "uri");
-const isin = args.isin;
-const mantleToken = encodeEvmAddress(required(args, "mantle-token"));
-const initialMultiplier = toF64(BigInt(required(args, "initial-multiplier-1e18")));
+const isin = args.isin ?? (fromMantle?.assetCode || undefined);
+const multiplier1e18 = BigInt(args["initial-multiplier-1e18"] ?? fromMantle!.multiplier);
+if (fromMantle && multiplier1e18 !== fromMantle.multiplier)
+  throw new Error(`--initial-multiplier-1e18 ${multiplier1e18} differs from Mantle's uiMultiplier ${fromMantle.multiplier}`);
+const initialMultiplier = toF64(multiplier1e18);
 const mintSigner = args["mint-keypair"] ? await loadKeypair(args["mint-keypair"]) : await generateKeyPairSigner();
 const mint = mintSigner.address;
 const authority = await authorityPda();

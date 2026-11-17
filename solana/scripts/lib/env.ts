@@ -15,9 +15,13 @@ import {
   type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
+import { config } from "./config.ts";
 
-/** RPC endpoint; keep provider URLs with API keys in the environment, never in files. */
-export const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8899";
+/**
+ * RPC endpoint: RPC_URL, else the network config's public endpoint, else a local validator. Keep
+ * provider URLs with API keys in the environment, never in files.
+ */
+export const RPC_URL = process.env.RPC_URL || config?.network.solana_rpc || "http://127.0.0.1:8899";
 
 export const rpc = createSolanaRpc(RPC_URL);
 

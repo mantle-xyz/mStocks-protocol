@@ -1,7 +1,7 @@
 // Plan B reconciliation: compares each Solana mint's multiplier state with its Mantle ScaledToken.
 // The Mantle token address comes from Core's MintState, so only the mints are needed.
 //
-//   MANTLE_RPC_URL=<mantle rpc> tsx scripts/check-multiplier.ts --mints a,b,c
+//   NETWORK=mainnet tsx scripts/check-multiplier.ts --mints a,b,c   (Mantle RPC: MANTLE_RPC_URL or the config's)
 //
 // For each mint it compares, at the current time, the effective multiplier and the pending change
 // (value + effective time). Exit code 1 on any mismatch, so a cron job can alert on it. Within
@@ -10,13 +10,14 @@
 import { address, fetchEncodedAccount, type Address } from "@solana/kit";
 import { getMintDecoder } from "@solana-program/token-2022";
 import { mintStatePda, toF64 } from "./lib/core.ts";
+import { config } from "./lib/config.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
 
 const SKEW_SECONDS = 60n;
 const SELECTORS = { uiMultiplier: "0xa60bf13d", newUIMultiplier: "0xdc767007", effectiveAt: "0x97a4064f" };
 
 const args = parseArgs();
-const mantleRpc = process.env.MANTLE_RPC_URL ?? required(args, "mantle-rpc");
+const mantleRpc = process.env.MANTLE_RPC_URL || config?.network.mantle_rpc || required(args, "mantle-rpc");
 const mints: Address[] = required(args, "mints").split(",").map((m) => address(m.trim()));
 
 async function ethCall(to: string, data: string): Promise<bigint> {

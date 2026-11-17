@@ -1,8 +1,16 @@
-# Solana mainnet configuration for mstocks-core, mirroring the Mantle config.toml: the same roles,
-# multisig signer groups, thresholds and time locks. Fill in the addresses before launch, then check
-# with: RPC_URL=<mainnet rpc> tsx scripts/check-config.ts --config config.mainnet.toml
+# Solana mainnet ↔ Mantle mainnet configuration of mstocks-core, mirroring the Mantle config.toml:
+# the same roles, multisig signer groups, thresholds and time locks. The scripts read it when
+# NETWORK=mainnet, so commands need no addresses; a command-line value overrides it. Fill in the
+# addresses before launch (reviewed like code), then: NETWORK=mainnet tsx scripts/check-config.ts
 # Squads entries use Squads v4 with a time lock on the multisig. Give the multisig account address:
-# check-config.ts checks it as its vault (index 0), the address that signs and is stored on chain.
+# the scripts use its vault (index 0), the address that signs and is stored on chain.
+
+[network]
+# Public endpoints. A provider URL with an API key goes in the RPC_URL environment variable instead
+# (keys never go in files); RPC_URL overrides solana_rpc.
+solana_rpc = "https://api.mainnet-beta.solana.com"
+roles_rpc = "https://api.mainnet-beta.solana.com"   # must allow getProgramAccounts (role holder listing)
+mantle_rpc = "https://rpc.mantle.xyz"
 
 [program]
 id = "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd"
@@ -25,6 +33,8 @@ freezer = []                 # Mantle compliance backend KMS, as Mantle EOA5 (Co
 unfreezer = []               # same key as freezer
 
 [ccip]
+mantle_selector = "1556008542357238666"                                    # Mantle mainnet chain selector
+mantle_token_admin_registry = "0x000A744940eB5D857c0d61d97015DFc83107404F"
 # Pool owner and CCIP token admin of each token, on both chains: the admin's multisig (multisig 1).
-mantle_pool_owner = ""       # Mantle multisig 1 (Safe) or its timelock
-solana_ccip_admin = ""       # the admin's Squads vault
+mantle_pool_owner = ""       # Mantle multisig 1 (Safe)
+solana_ccip_admin = ""       # the admin's Squads (multisig account address); empty: admins.admin

@@ -7,17 +7,19 @@
 //      one Squads proposal, created with --squads-member (printed without it).
 // Steps already done on chain are skipped, so it can be re-run (e.g. after the proposal executed).
 // ccip-register.ts --handoff-to does the same as part of the registration.
-//   tsx scripts/ccip-handoff.ts --authority <current holder keypair> --mint <mint> --to <keypair.json|squads multisig>
+//   tsx scripts/ccip-handoff.ts --authority <current holder keypair> --mint <mint> [--to <keypair.json|squads multisig>]
 //     [--squads-member <keypair.json>] [--router <id>] [--pool-program <id>]
+// --to defaults to the network config's CCIP admin.
 import { address } from "@solana/kit";
 import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
 import { ccipAccounts, handoffAccepts, handoffProposals, poolOwnership, registryState } from "./lib/ccip.ts";
+import { ccipAdmin } from "./lib/config.ts";
 import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
 
 const args = parseArgs();
 const authority = await loadKeypair(required(args, "authority"));
 const mint = address(required(args, "mint"));
-const target = await resolveAdmin(required(args, "to"));
+const target = await resolveAdmin(args.to && args.to !== "true" ? args.to : ccipAdmin());
 const targetAddress = adminAddress(target);
 const a = await ccipAccounts(mint, { router: args.router, poolProgram: args["pool-program"] });
 
