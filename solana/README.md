@@ -40,7 +40,9 @@ cargo fmt --check && cargo clippy -p mstocks-core --all-targets -- -D warnings
 ```
 
 CI (`.github/workflows/solana.yml`) runs rustfmt, `cargo build-sbf`, clippy, the LiteSVM tests and a
-typecheck of the scripts on every change under `solana/`.
+typecheck of the scripts on every change under `solana/`. CI installs with Node 22's npm 10, which
+keeps a nested `typescript@5` for `@solana/web3.js` in the lockfile that npm 11 drops; after changing
+dependencies, refresh the lockfile with `npx npm@10 install --package-lock-only`.
 
 ## Scripts
 
