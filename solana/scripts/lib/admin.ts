@@ -16,7 +16,12 @@ export async function sendOrPrint(payer: KeyPairSigner, admin: KeyPairSigner | A
     console.log(`${label}: ${await send(payer, [ix])}`);
     return;
   }
-  console.log(`${label}: admin is a multisig, submit this instruction as a Squads proposal:`);
+  printForSquads(ix, label);
+}
+
+/** Prints an instruction to be submitted as a Squads proposal. */
+export function printForSquads(ix: Instruction, label: string) {
+  console.log(`${label}: signer is a multisig, submit this instruction as a Squads proposal:`);
   console.log(
     JSON.stringify(
       {

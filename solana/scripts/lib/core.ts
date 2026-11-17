@@ -132,11 +132,11 @@ export function encodeMetadataField(field: string): Uint8Array {
 }
 
 /** Accounts shared by every operational instruction on one registered mint. */
-export async function mintOpAccounts(role: RoleName, operator: KeyPairSigner, mint: Address) {
+export async function mintOpAccounts(role: RoleName, operator: KeyPairSigner | Address, mint: Address) {
   return {
     operator,
     config: await configPda(),
-    role_entry: await rolePda(role, operator.address),
+    role_entry: await rolePda(role, typeof operator === "string" ? operator : operator.address),
     mint,
     mint_state: await mintStatePda(mint),
     authority: await authorityPda(),
