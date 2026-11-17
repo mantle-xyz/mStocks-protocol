@@ -2,7 +2,8 @@
 // the config itself (both admins set and different, no admin holding a role), the Config account
 // (admins, hook authority, notice and horizon), the program's upgrade authority, and every role's
 // holders on chain (no missing and no extra holder; the retired Clawback has none). Exits 1 on any
-// problem, so it can gate each launch step.
+// problem, so it can gate each launch step. Addresses in the config may be Squads multisig accounts;
+// they are checked as their vaults, the addresses that sign.
 //   RPC_URL=<rpc> tsx scripts/check-config.ts --config config.mainnet.toml [--roles-rpc <rpc>]
 // Listing role holders needs getProgramAccounts; pass --roles-rpc when RPC_URL's provider rejects it.
 import { readFileSync } from "node:fs";
@@ -15,6 +16,7 @@ import {
   type Address,
 } from "@solana/kit";
 import { parse } from "smol-toml";
+import { signerAddress } from "./lib/admin.ts";
 import { configPda, programDataPda } from "./lib/core.ts";
 import { parseArgs, required, rpc, RPC_URL, withRetry } from "./lib/env.ts";
 
@@ -25,6 +27,9 @@ type Cfg = {
   roles: Record<string, string[]>;
 };
 const cfg = parse(readFileSync(required(args, "config"), "utf8")) as unknown as Cfg;
+const toSigner = (v: string) => (v ? signerAddress(v) : Promise.resolve(v));
+for (const k of Object.keys(cfg.admins) as (keyof Cfg["admins"])[]) cfg.admins[k] = await toSigner(cfg.admins[k]);
+for (const role of Object.keys(cfg.roles)) cfg.roles[role] = await Promise.all(cfg.roles[role].map(toSigner));
 const rolesRpc = createSolanaRpc(args["roles-rpc"] ?? RPC_URL);
 const dec = getAddressDecoder();
 

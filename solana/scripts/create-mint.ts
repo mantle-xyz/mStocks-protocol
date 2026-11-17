@@ -3,7 +3,7 @@
 // Each Mantle token can be registered for only one mint.
 //
 //   tsx scripts/create-mint.ts --payer <keypair> [--registrar <keypair>] \
-//     --hook-authority <squads pubkey> --name "Apple mStock" --symbol AAPLm --uri https://... \
+//     --hook-authority <squads multisig> --name "Apple mStock" --symbol AAPLm --uri https://... \
 //     --isin US0378331005 --mantle-token 0x... --initial-multiplier-1e18 <Mantle uiMultiplier()>
 //
 // The payer stays mint authority until the CCIP pool is registered (run handoff-mint-authority.ts
@@ -29,6 +29,7 @@ import {
   authorityPda, configPda, coreInstruction, encodeEvmAddress, mantleTokenPda, mintStatePda, rolePda, toF64,
   TOKEN_2022_PROGRAM_ID,
 } from "./lib/core.ts";
+import { signerAddress } from "./lib/admin.ts";
 import { loadKeypair, parseArgs, required, rpc, send } from "./lib/env.ts";
 
 const DECIMALS = 9;
@@ -39,7 +40,7 @@ const payer = await loadKeypair(required(args, "payer"));
 const registrarKey = args.registrar ? await loadKeypair(args.registrar) : payer;
 // The same key loaded twice is two signer objects, which @solana/kit rejects.
 const registrar = registrarKey.address === payer.address ? payer : registrarKey;
-const hookAuthority = address(required(args, "hook-authority"));
+const hookAuthority = await signerAddress(required(args, "hook-authority"));
 const name = required(args, "name");
 const symbol = required(args, "symbol");
 const uri = required(args, "uri");

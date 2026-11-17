@@ -2,11 +2,12 @@
 // admin for this mint, which can repoint the mint at another pool, and the BurnMint pool's owner,
 // which configures remote chains and rate limits. Both are two-step:
 //   1. the current holder (the key that ran ccip-register.ts) proposes the new holder — sent here;
-//   2. the new holder accepts — signed and sent here when --to is a keypair file (devnet / local),
-//      printed as instructions for a Squads proposal when --to is the vault address (mainnet).
+//   2. the new holder accepts — signed and sent here when --to is a keypair file (devnet / local);
+//      when --to is a Squads multisig (mainnet), its vault becomes the holder and both accepts are
+//      one Squads proposal, created with --squads-member (printed without it).
 // Steps already done on chain are skipped, so it can be re-run (e.g. after the proposal executed).
-//   tsx scripts/ccip-handoff.ts --authority <current holder keypair> --mint <mint> --to <keypair.json|squads vault>
-//     [--router <id>] [--pool-program <id>]
+//   tsx scripts/ccip-handoff.ts --authority <current holder keypair> --mint <mint> --to <keypair.json|squads multisig>
+//     [--squads-member <keypair.json>] [--router <id>] [--pool-program <id>]
 import { createHash } from "node:crypto";
 import {
   address,
@@ -159,9 +160,9 @@ if (pool.owner !== targetAddress)
       signer,
     ),
   );
-for (const a of accepts)
-  await sendOrPrint(authority, target, a, `accept (${a.programAddress === router ? "token admin" : "pool owner"})`);
-if (!accepts.length) console.log("accept: nothing to do");
+const accepting = accepts.map((a) => (a.programAddress === router ? "token admin" : "pool owner")).join(" + ");
+if (accepts.length) await sendOrPrint(authority, target, accepts, `accept (${accepting})`);
+else console.log("accept: nothing to do");
 
 reg = await registryState();
 pool = await poolOwnership();

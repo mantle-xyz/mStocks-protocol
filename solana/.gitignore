@@ -3,3 +3,4 @@ node_modules/
 test-ledger/
 .anchor/
 tests/fixtures/*.so
+tests/fixtures/*.json

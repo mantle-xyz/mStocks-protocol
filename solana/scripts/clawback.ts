@@ -1,8 +1,9 @@
 // Moves tokens out of a (blacklisted) account into custody as the permanent delegate. Signed by the
-// compliance admin: a keypair signs and sends (devnet / local), a Squads address prints the
-// instruction for a Squads proposal (mainnet). The source always ends frozen; freeze it first.
-//   tsx scripts/clawback.ts --payer <keypair> --compliance-admin <keypair.json|squads pubkey> --mint <mint>
-//     --source <token account> --destination <custody token account> --amount <raw>
+// compliance admin: a keypair signs and sends (devnet / local); a Squads multisig address creates
+// the Squads proposal with --squads-member, or prints the instruction (mainnet). The source always
+// ends frozen; freeze it first.
+//   tsx scripts/clawback.ts --payer <keypair> --compliance-admin <keypair.json|squads multisig> --mint <mint>
+//     --source <token account> --destination <custody token account> --amount <raw> [--squads-member <keypair.json>]
 import { address } from "@solana/kit";
 import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
 import { authorityPda, configPda, coreInstruction, encodeU64, mintStatePda } from "./lib/core.ts";

@@ -1,6 +1,7 @@
 // Admin-only: undoes a registration made in error (wrong mint, or the wrong Mantle token) so the
 // mint can be registered again correctly. Core only allows it while the mint has zero supply.
-//   tsx scripts/unregister-mint.ts --payer <keypair> --admin <keypair.json|squads pubkey> --mint <mint>
+//   tsx scripts/unregister-mint.ts --payer <keypair> --admin <keypair.json|squads multisig> --mint <mint>
+//     [--squads-member <keypair.json>]
 import { address, fetchEncodedAccount } from "@solana/kit";
 import { adminAddress, resolveAdmin, sendOrPrint } from "./lib/admin.ts";
 import { configPda, coreInstruction, mantleTokenPda, mintStatePda } from "./lib/core.ts";

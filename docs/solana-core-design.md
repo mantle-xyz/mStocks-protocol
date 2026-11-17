@@ -203,14 +203,14 @@ Run once per stock, in this order:
 
 | Step | Script |
 | --- | --- |
-| Deploy and initialize Core (once) | Deploy with the deployer as upgrade authority → `init-core.ts` (signed by the upgrade authority) → hand the upgrade authority to Squads + Timelock |
+| Deploy and initialize Core (once) | Deploy with the deployer as upgrade authority → `init-core.ts` (signed by the upgrade authority) → hand the upgrade authority to the upgrade multisig's vault (Squads, 24 h time lock); later upgrades are Squads proposals (`squads.ts upgrade`) |
 | Grant roles | `grant-role.ts` / `revoke-role.ts` |
 | Steps 1–4 | `create-mint.ts` |
 | Schedule a pending multiplier | `schedule-multiplier.ts` |
 | Compare the multiplier on both chains (option B) | `check-multiplier.ts` |
-| Step 6, CCIP registration | `ccip-register.ts`: token admin registration (propose + accept), BurnMint pool initialization, pool token account, remote chain config (token, pool, decimals), rate limits, address lookup table, `set_pool`; steps already done are skipped. On mainnet the token admin role and pool ownership must then be handed to Squads (not scripted) |
+| Step 6, CCIP registration | `ccip-register.ts`: token admin registration (propose + accept), BurnMint pool initialization, pool token account, remote chain config (token, pool, decimals), rate limits, address lookup table, `set_pool`; steps already done are skipped. On mainnet the token admin role and pool ownership are then handed to the admin's Squads (`ccip-handoff.ts`, step 7) |
 | Step 5, Mantle pool | `ccip-mantle-setup.sh deploy` (deployer key) |
-| Step 7, multisigs | Mantle: `ccip-mantle-setup.sh multisig` writes Safe Transaction Builder files (timelock schedule, then execute after the delay; pool owner acceptance). Solana: `ccip-handoff.ts` proposes the Squads vault and prints the acceptance for a Squads proposal |
+| Step 7, multisigs | Mantle: `ccip-mantle-setup.sh multisig` writes Safe Transaction Builder files (timelock schedule, then execute after the delay; pool owner acceptance). Solana: `ccip-handoff.ts` proposes the Squads vault and puts both acceptances in one Squads proposal |
 | Step 8 | `handoff-mint-authority.ts` (dry run by default, `--yes` to execute) |
 | Step 9 | `ccip-mantle-setup.sh verify` (exits 1 on a problem), `show-mint.ts` |
 | Check the result | `show-mint.ts` |
@@ -230,7 +230,7 @@ Run once per stock, in this order:
 
 **Per-token gas on Solana → Mantle (must be handled before launch):** our mints have no per-token config on the Solana Fee Quoter, so they use the lane default `defaultTokenDestGasOverhead = 90000`, i.e. the pool's `releaseOrMint` on Mantle gets at most 90,000 gas. A ScaledToken transfer makes two external calls (pause and compliance checks); when the receiver holds the token for the first time, its balance is written from zero, the total goes over 90,000 and the execution fails, and the DON does not retry it. Only the Fee Quoter owner (Chainlink) can raise it with `set_token_transfer_fee_config`, so Chainlink has to set it for this lane before launch (150,000 suggested). Chainlink has agreed to raise the lane default on mainnet and testnet. Until then the CCIP retry service (§12) re-executes these messages automatically; `ccip-manual-exec-evm.sh` (`TOKEN_GAS=150000`) is the manual fallback.
 
-**Admin actions and Squads:** scripts that need the Admin's signature (`grant-role`, `revoke-role`, `unregister-mint`, `set-default-account-state`) have two modes: given a keypair file they sign and send (devnet / local); given a Squads address they only print the instruction for a Squads proposal. In print mode the payer is the vault itself, because a Squads proposal can only be signed by the vault and cannot carry local signers.
+**Admin actions and Squads:** scripts that need a multisig's signature (`grant-role`, `revoke-role`, `unregister-mint`, `set-default-account-state`, `clawback`, `pause --resume` for the Unpauser, the acceptances in `ccip-handoff`) take a keypair file, which signs and sends (devnet / local), or a Squads v4 multisig account address (mainnet). For a multisig the signer is its vault (index 0); with `--squads-member <member keypair>` the script creates the vault transaction and its proposal in one transaction, approved by that member, and `squads.ts` takes it the rest of the way (`approve`, `status`, `execute` once the time lock has passed); without a member key it prints the instruction. In a proposal the vault is also the payer, because a vault transaction can only be signed by the vault and cannot carry local signers, so each vault keeps some SOL for rent. Every address stored as a signer (`init-core` admins and hook authority, `create-mint --hook-authority`, a role `--member`, the `check-config` entries) is converted from a multisig account to its vault: the multisig account cannot sign, so storing it would brick that authority. Program upgrades go through the upgrade multisig: write a buffer, `solana program set-buffer-authority <buffer> --new-buffer-authority <vault>`, then `squads.ts upgrade` proposes the BPF loader `Upgrade` signed by the vault. `local-squads-e2e.sh` rehearses all of this against the mainnet Squads v4 program on a local validator.
 
 ### 6.1 Operations scripts
 
@@ -276,6 +276,8 @@ Mantle is the issuing chain, so each token gets a **LockReleaseTokenPool**: send
 
 **Rehearsal (2026-11-16, Mantle Sepolia ↔ Solana devnet):** a new ScaledToken whose admin is a TimelockController (60 s delay standing in for 12 h), a separate pool owner standing in for a Safe, and a key standing in for the Squads vault. The deploy, the timelock batch (an early execute was rejected; it executed after the delay), the pool owner acceptance, the Solana handoff in both modes (printing the Squads instructions, then signing them), the mint authority handoff and `verify` all passed. Then 0.01 went Mantle → Solana (delivered in about 26 minutes) and 0.005 came back (released on Mantle within a minute), and `check-supply.ts` reconciled exactly (0.005 on Solana, 0.005 locked).
 
+**Squads handoff (2026-11-17, devnet):** the rehearsal mint's CCIP token admin and pool ownership then moved from the stand-in key to a real Squads v4 multisig (2/3, 60 s time lock): `ccip-handoff.ts --to <multisig> --squads-member <m1>` proposed the vault and created one Squads proposal with both acceptances; executing it with one approval (`InvalidProposalStatus`) and inside the time lock (`TimeLockNotReleased`) was rejected; after the second approval and the time lock it executed, and the vault now holds both roles.
+
 ---
 
 ## 7. Directory layout
@@ -306,7 +308,7 @@ It lives in this repo's `solana/` directory, separate from the EVM code, and bui
 Test runs and results are recorded in a separate [test report](https://skfc4x16la.larksuite.com/wiki/Sohpww2abiDlMUkSCoXu4lvfshg) and not repeated here. Entry points:
 
 - Program: `cargo test -p mstocks-core` (LiteSVM, mainnet Token-2022 build); CI in `.github/workflows/solana.yml`.
-- Scripts: `npm run local-e2e` (local validator), `scripts/test-check-multiplier.sh` (reconciliation against a ScaledToken on anvil), `scripts/test-check-supply.sh` (supply reconciliation: backed and over-minted), `scripts/devnet-smoke.sh` (devnet).
+- Scripts: `npm run local-e2e` (local validator), `scripts/local-squads-e2e.sh` (the runbook with real Squads v4 multisigs on a local validator), `scripts/test-check-multiplier.sh` (reconciliation against a ScaledToken on anvil), `scripts/test-check-supply.sh` (supply reconciliation: backed and over-minted), `scripts/devnet-smoke.sh` (devnet).
 - Compliance backend: mstocks-aml's `scripts/solana-e2e.sh` (both chains locally) and `scripts/solana-devnet-check.sh` (devnet).
 
 ---
@@ -316,7 +318,7 @@ Test runs and results are recorded in a separate [test report](https://skfc4x16l
 - Every account's owner and PDA seeds are checked: the Token-2022 program ID, that `MintState` belongs to the mint, that a token account's mint is registered.
 - The Authority PDA only signs inside Core; there is no generic CPI entry point.
 - Multiplier conversion: Core rejects multipliers with more than 15 significant digits, so the f64 Token-2022 stores carries the same value as Mantle.
-- Core's upgrade authority goes to the Squads multisig + Timelock. `initialize` requires the upgrade authority's signature, so the order is: deployer deploys → `init-core` → hand off the upgrade authority.
+- Core's upgrade authority goes to the vault of the upgrade multisig (Squads v4, 24 h time lock). `initialize` requires the upgrade authority's signature, so the order is: deployer deploys → `init-core` → hand off the upgrade authority.
 - `register_mint` uses an extension allowlist: any extension on the mint that Core does not control is rejected, so no back-door authority is left behind.
 - The backend KMS key holds both `FREEZER` and `UNFREEZER`, matching OPS on EVM, which can both sanction and unsanction: a leaked key can freeze / thaw any account but cannot move assets (clawback is signed by the compliance admin multisig). The compliance admin can revoke its roles at any time.
 - If `set_default_account_state` is later used to switch to "screen before use", every new account has to be thawed first. The backend already holds `UNFREEZER` and could thaw new accounts directly, but that role can thaw any account; to limit it to opening new accounts, a separate "account opening" role can be added then. It also stops CCIP deliveries to new wallets (tested on devnet): the executor creates the receiver's token account, which starts frozen, so the pool's MintTo fails (`Account is frozen`) and the message waits for a manual execution. Nothing thaws that account automatically, because the backend only learns about a wallet from a successful transfer. Before switching a CCIP-connected mint to screen before use, the backend needs a way to screen and thaw new accounts (for example by watching the mint's account creations), and failed deliveries need `ccip-manual-exec.ts` after the thaw.
