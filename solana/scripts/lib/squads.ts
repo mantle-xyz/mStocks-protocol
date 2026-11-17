@@ -1,8 +1,8 @@
-// Squads v4 support. Admin actions on mainnet are signed by a Squads multisig's vault (index 0).
-// When a script is given the multisig account itself, it uses the vault as the signer and, instead
-// of printing the instruction, creates the vault transaction, its proposal and the proposer's
-// approval in one transaction; the other members approve and execute with squads.ts (or the Squads
-// app), after the multisig's time lock.
+// Squads v4 support. Admin actions on mainnet are signed by a Squads multisig's vault (index 0), whose
+// members sign with Ledgers in the Squads app. The scripts never sign for a multisig: they print the
+// action as a base58 transaction with the vault as fee payer and signer, which a member imports into
+// the Squads app to create the proposal; the members approve it there and execute it after the time
+// lock. squads.ts propose does the same import with a member's key file (tests and rehearsals).
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as multisig from "@sqds/multisig";
@@ -10,11 +10,12 @@ import {
   Connection,
   Keypair,
   PublicKey,
+  Transaction,
   TransactionInstruction,
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { AccountRole, address, type Address, type Instruction } from "@solana/kit";
+import { AccountRole, address, getBase58Decoder, getBase58Encoder, type Address, type Instruction } from "@solana/kit";
 import { config } from "./config.ts";
 import { RPC_URL, withRetry } from "./env.ts";
 
@@ -38,7 +39,7 @@ export async function asSquadsMultisig(value: Address): Promise<PublicKey | null
   return info.data.subarray(0, 8).equals(discriminator) ? key : null;
 }
 
-const toWeb3 = (ix: Instruction) =>
+export const toWeb3 = (ix: Instruction) =>
   new TransactionInstruction({
     programId: new PublicKey(ix.programAddress),
     keys: (ix.accounts ?? []).map((a) => ({
@@ -75,13 +76,13 @@ export async function sendWeb3(instructions: TransactionInstruction[], signers: 
 }
 
 /** Creates a vault transaction with `instructions` (signed by the vault), its proposal and the proposer's approval. */
-export async function propose(multisigPda: PublicKey, instructions: Instruction[], proposerPath: string, memo: string) {
+export async function propose(multisigPda: PublicKey, instructions: TransactionInstruction[], proposerPath: string, memo: string) {
   const proposer = loadWeb3Keypair(proposerPath);
   const ms = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
   const transactionIndex = BigInt(ms.transactionIndex.toString()) + 1n;
   const vault = vaultOf(multisigPda);
   const { blockhash } = await connection.getLatestBlockhash();
-  const transactionMessage = new TransactionMessage({ payerKey: vault, recentBlockhash: blockhash, instructions: instructions.map(toWeb3) });
+  const transactionMessage = new TransactionMessage({ payerKey: vault, recentBlockhash: blockhash, instructions });
   const common = { multisigPda, transactionIndex };
   const sig = await sendWeb3(
     [
@@ -99,6 +100,28 @@ export async function propose(multisigPda: PublicKey, instructions: Instruction[
     [proposer],
   );
   return { transactionIndex, signature: sig, threshold: ms.threshold, timeLock: ms.timeLock };
+}
+
+/**
+ * The action as a base58 transaction for the Squads app's import: legacy, the vault as fee payer and
+ * only signer, signatures left empty. Returns the base58 and its size (the import must fit 1232 bytes).
+ */
+export async function squadsImport(vault: Address, instructions: Instruction[]) {
+  const { blockhash } = await withRetry(() => connection.getLatestBlockhash());
+  const tx = new Transaction({ feePayer: new PublicKey(vault), recentBlockhash: blockhash });
+  tx.add(...instructions.map(toWeb3));
+  const message = tx.compileMessage();
+  const signers = message.accountKeys.slice(0, message.header.numRequiredSignatures).map(String);
+  if (signers.some((k) => k !== vault)) throw new Error(`only the vault may sign a Squads transaction; signers: ${signers.join(", ")}`);
+  const bytes = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+  return { base58: getBase58Decoder().decode(bytes), size: bytes.length };
+}
+
+/** The instructions of an imported base58 transaction (legacy or v0 without lookup tables) and its fee payer. */
+export function decodeImport(base58: string): { payer: PublicKey; instructions: TransactionInstruction[] } {
+  const tx = VersionedTransaction.deserialize(Uint8Array.from(getBase58Encoder().encode(base58)));
+  const message = TransactionMessage.decompile(tx.message);
+  return { payer: message.payerKey, instructions: message.instructions };
 }
 
 export const vaultAddress = (multisigPda: PublicKey): Address => address(vaultOf(multisigPda).toBase58());

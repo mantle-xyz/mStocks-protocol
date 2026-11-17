@@ -1,26 +1,22 @@
-// Squads v4 multisig operations for the admin multisigs (create, inspect, approve, execute, and
-// propose a program upgrade). Proposals for Core / CCIP admin actions are created by the scripts
-// themselves when given a multisig address and --squads-member; this script takes them the rest of
-// the way. Every key here is a member keypair file (--member, default SQUADS_MEMBER); --multisig is
-// the multisig account address (not the vault) or, with NETWORK set, a config name: admin,
-// compliance_admin, upgrade_authority, unpauser, ccip_admin.
-//   tsx scripts/squads.ts create  --creator <kp> --members <a,b,c> --threshold <n> [--time-lock <s>]
+// Squads v4 multisig tools. On mainnet the members use the Squads app with their Ledgers: a script
+// prints a multisig action as a base58 transaction, a member imports it there to create the
+// proposal, the members approve it and execute it after the time lock. `status` works for anyone;
+// the other commands sign with a member's key file (--member, default SQUADS_MEMBER) and are for
+// test multisigs and rehearsals, where `propose` imports a base58 exactly as the app does.
+// --multisig is the multisig account address (not the vault) or, with NETWORK set, a config name:
+// admin, compliance_admin, upgrade_authority, unpauser, ccip_admin.
 //   tsx scripts/squads.ts status  --multisig <ms> [--index <n>]
+//   tsx scripts/squads.ts create  --creator <kp> --members <a,b,c> --threshold <n> [--time-lock <s>]
+//   tsx scripts/squads.ts propose --multisig <ms> --base58 <transaction> --member <kp> [--memo <text>]
 //   tsx scripts/squads.ts approve --multisig <ms> --index <n> --member <kp>
 //   tsx scripts/squads.ts reject  --multisig <ms> --index <n> --member <kp>
 //   tsx scripts/squads.ts execute --multisig <ms> --index <n> --member <kp>
-//   tsx scripts/squads.ts upgrade [--multisig <ms>] --member <kp> --buffer <buffer> [--program <id>] [--spill <addr>]
-//     (program.ts upgrade writes the buffer and calls this; --multisig defaults to upgrade_authority)
 // `create` gives every member all permissions (initiate, vote, execute) and no config authority, so
-// membership, threshold and time lock change only through the multisig's own config proposals. For
-// `upgrade`, first hand the buffer to the vault: solana program set-buffer-authority <buffer>
-// --new-buffer-authority <vault>.
+// membership, threshold and time lock change only through the multisig's own config proposals.
 import * as multisig from "@sqds/multisig";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { address } from "@solana/kit";
-import { CORE_PROGRAM_ID } from "./lib/core.ts";
 import { parseArgs, required } from "./lib/env.ts";
-import { connection, loadWeb3Keypair, multisigFromConfig, propose, sendWeb3, upgradeIx, vaultOf } from "./lib/squads.ts";
+import { connection, decodeImport, loadWeb3Keypair, multisigFromConfig, propose, sendWeb3, vaultOf } from "./lib/squads.ts";
 
 const [command, ...rest] = process.argv.slice(2);
 const args = parseArgs(rest);
@@ -129,19 +125,20 @@ async function main() {
       console.log(`execute #${transactionIndex}: ${await sendWeb3([instruction], [signer])}`);
       break;
     }
-    case "upgrade": {
-      // BPF Loader Upgradeable `Upgrade`, signed by the vault as upgrade authority.
-      const multisigPda = multisigFromConfig(args.multisig ?? "upgrade_authority");
-      const vault = address(vaultOf(multisigPda).toBase58());
-      const program = address(args.program ?? CORE_PROGRAM_ID);
-      const ix = upgradeIx(program, address(required(args, "buffer")), address(args.spill ?? vault), vault);
-      const p = await propose(multisigPda, [ix], member(), `upgrade ${program}`);
-      console.log(`upgrade ${program}: Squads proposal #${p.transactionIndex} on ${multisigPda.toBase58()} (${p.signature})`);
-      console.log(`  needs ${p.threshold} approval(s), then executable ${p.timeLock}s after approval`);
+    case "propose": {
+      // What the Squads app does on import, with a member's key file (tests and rehearsals; on
+      // mainnet a member imports the same base58 in the app and signs with a Ledger).
+      const multisigPda = msArg();
+      const vault = vaultOf(multisigPda);
+      const { payer, instructions } = decodeImport(required(args, "base58"));
+      if (!payer.equals(vault)) throw new Error(`the transaction's fee payer is ${payer.toBase58()}, not the vault ${vault.toBase58()}`);
+      const p = await propose(multisigPda, instructions, member(), args.memo ?? "imported");
+      console.log(`propose: Squads proposal #${p.transactionIndex} on ${multisigPda.toBase58()} (${p.signature}), ${instructions.length} instruction(s)`);
+      console.log(`  approved by the proposer; needs ${p.threshold} approval(s), then executable ${p.timeLock}s after approval`);
       break;
     }
     default:
-      throw new Error("usage: tsx scripts/squads.ts <create|status|approve|reject|execute|upgrade> ...");
+      throw new Error("usage: tsx scripts/squads.ts <create|status|propose|approve|reject|execute> ...");
   }
 }
 

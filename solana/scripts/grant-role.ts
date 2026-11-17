@@ -1,6 +1,6 @@
 // Grants a Core role. Roles: MultiplierScheduler, Pauser, Unpauser, Freezer, Unfreezer, MetadataOps, MintRegistrar.
 //   tsx scripts/grant-role.ts [--payer <keypair>] [--admin <keypair.json|squads multisig>] --role Freezer \
-//     --member <pubkey|squads multisig> [--squads-member <keypair.json>]
+//     --member <pubkey|squads multisig>
 // --admin (default: from the network config) is the admin that governs the role: the compliance
 // admin for Pauser, Unpauser, Freezer, Unfreezer (and revoking a retired Clawback), the admin for
 // the others. Clawback can no longer be granted: clawback.ts is signed by the compliance admin.

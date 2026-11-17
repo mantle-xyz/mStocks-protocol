@@ -64,7 +64,6 @@ config change. The operator's whole environment is:
 ```bash
 export NETWORK=mainnet           # or testnet
 export RPC_URL=...               # provider URL with an API key (keys never go in files); optional
-export SQUADS_MEMBER=...         # your Squads member keypair, if you sign for a multisig
 ```
 
 Without `NETWORK` the TypeScript scripts are in local mode (every address on the command line, RPC =
@@ -76,9 +75,9 @@ Commands that work from the config alone:
 
 | Command | Does |
 | --- | --- |
-| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` | Build and test; first deployment and byte comparison; upgrade authority → the upgrade multisig (only after `init-core`); upgrade through a Squads proposal |
+| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` | Build and test; first deployment and byte comparison; upgrade authority → the upgrade multisig (only after `init-core`); upgrade: buffer to the vault, then the upgrade as a base58 transaction for the Squads app |
 | `init-core.ts --upgrade-authority <kp>` | Initialize with the config's admins and hook authority |
-| `sync-roles.ts [--dry-run]` | Grant every configured role holder that is missing and revoke every holder not configured, one transaction or Squads proposal per admin |
+| `sync-roles.ts [--dry-run]` | Grant every configured role holder that is missing and revoke every holder not configured, one transaction or Squads action per admin |
 | `check-config.ts` | Config vs chain: admins, upgrade authority, every role holder |
 | `create-mint.ts --payer <kp> --mantle-token <0x..> --uri <uri>` | Name, symbol, ISIN and initial multiplier read from the Mantle token |
 | `check-stock.ts --mint <mint>` | Every check of a launched stock: authorities, CCIP admin and pool owner, Mantle verify, multiplier, supply |
@@ -90,12 +89,12 @@ Admin and multisig-held steps (`--admin`, `--compliance-admin`, `--operator` of 
 ccip-handoff's `--to`) accept:
 
 - `<keypair.json>`: signs and sends (devnet / local);
-- a **Squads v4 multisig account address** (mainnet): its vault (index 0) is the signer. With
-  `--squads-member <member keypair>` (or `SQUADS_MEMBER`) the script creates the vault transaction
-  and its proposal, approved by that member; the other members then approve and execute with
-  `squads.ts` (or the Squads app) after the multisig's time lock. Without a member key it prints
-  the instruction instead;
-- any other address (e.g. the vault itself): prints the instruction for a Squads proposal.
+- a **Squads v4 multisig account address** (mainnet): its vault (index 0) is the signer. The
+  script signs nothing: it prints the action as a list of instructions (what the members approve)
+  and as a base58 transaction (legacy, the vault as fee payer and only signer). A member imports
+  the base58 into the Squads app (Transactions → TX Builder → Import) to create the proposal, the
+  members approve it with their Ledgers, and it is executed after the multisig's time lock;
+- any other address (e.g. the vault itself): the same, with that address as signer.
 
 Addresses stored as signers (`init-core.ts` admins and hook authority, `create-mint.ts
 --hook-authority`, a role `--member`, `check-config.ts` config entries) are converted the same
@@ -103,12 +102,17 @@ way: a multisig account becomes its vault, since a multisig account cannot sign 
 would brick that authority. In a proposal the vault also pays rent, so keep some SOL in each vault.
 
 ```bash
-NETWORK=mainnet SQUADS_MEMBER=<member kp> tsx scripts/grant-role.ts --role MintRegistrar --member <registrar>
-                                              # → Squads proposal #N on the admin multisig, approved by the proposer
-tsx scripts/squads.ts approve --multisig admin --index N --member <another member kp>
-tsx scripts/squads.ts status  --multisig admin --index N   # approvals, time lock left
-tsx scripts/squads.ts execute --multisig admin --index N --member <member kp>
+NETWORK=mainnet tsx scripts/grant-role.ts --role MintRegistrar --member <registrar>
+#   grant MintRegistrar to … : signed by the Squads multisig … (vault …);
+#     import the base58 transaction below into the Squads app (Transactions → TX Builder → Import), 1 instruction(s):
+#     1. Core grant_role: role MintRegistrar, member … [payer …, admin …]
+#   grant MintRegistrar to … base58: 4h3…        ← paste into the Squads app, approve with the Ledgers
+tsx scripts/squads.ts status --multisig admin    # anyone: recent proposals, approvals, time lock left
 ```
+
+With test multisigs whose members are key files, `squads.ts propose --base58 <…> --member <kp>`
+imports the same transaction the way the app does, and `approve` / `execute` follow;
+`local-squads-e2e.sh` runs every multisig action like this.
 
 `scripts/local-squads-e2e.sh` rehearses this on a local validator with the mainnet Squads v4
 program (`scripts/fetch-fixtures.sh` dumps it).
@@ -116,7 +120,7 @@ program (`scripts/fetch-fixtures.sh` dumps it).
 | Script | Who signs | Purpose |
 | --- | --- | --- |
 | `program.ts` | Deployer, then the upgrade multisig | `build` (anchor build + tests + sha256), `deploy` (first deployment + byte comparison), `verify`, `handoff` (upgrade authority → the config's upgrade multisig vault; refused before `init-core`), `upgrade` (buffer → vault → Squads upgrade proposal) |
-| `sync-roles.ts` | Admin and compliance admin | Make the on-chain role holders match the config: grants and revokes, one transaction or Squads proposal per admin (`--dry-run` lists them) |
+| `sync-roles.ts` | Admin and compliance admin | Make the on-chain role holders match the config: grants and revokes, one transaction or Squads action per admin (`--dry-run` lists them) |
 | `check-stock.ts` | — | Every check of one launched stock against the config, PASS / FAIL |
 | `init-core.ts` | Program upgrade authority | One-time setup: admin (Squads, Mantle multisig 1's role), compliance admin (Squads, multisig 4's role) and hook authority (Squads). On mainnet: deploy with the deployer as upgrade authority, run this, then transfer the upgrade authority to the upgrade multisig's vault (Squads, 24 h time lock). Pass multisig addresses; they are stored as their vaults |
 | `grant-role.ts` | Admin or compliance admin | Grant a role. The admin grants `MultiplierScheduler`, `MetadataOps`, `MintRegistrar`; the compliance admin grants `Pauser`, `Unpauser`, `Freezer`, `Unfreezer`. The script checks on chain that `--admin` governs the role before it sends or proposes (with a multisig, Core would only reject it when the proposal executes) |
@@ -127,22 +131,22 @@ program (`scripts/fetch-fixtures.sh` dumps it).
 | `check-config.ts` | — | Check a deployment against `config.mainnet.toml` / `config.testnet.toml`: admins, hook authority, notice and horizon, the program's upgrade authority, and every role's holders (no missing, no extra; the retired Clawback has none). Exits 1 on a problem. Listing holders needs `getProgramAccounts` (`--roles-rpc`) |
 | `check-supply.ts` | — | Check each mint's Solana supply against the tokens locked in its Mantle pool (token from Core, pool from `--registry`, the Mantle TokenAdminRegistry); exits 1 if Solana holds more than is locked. Needs `MANTLE_RPC_URL` |
 | `ccip-mantle-setup.sh` | Deployer, then the multisigs | Mantle side of CCIP for one token: `deploy` the LockRelease pool (pinned CCIP 1.6.4) and point it at Solana; `multisig` writes Safe Transaction Builder files for the token admin's timelock (CCIP admin registration, `setPool`) and the pool owner — when the pool owner is a proposer of that timelock (multisig 1's Safe), its acceptance is in the schedule file, so the Safe signs twice; `verify` (also checks the token admin against `[mantle].token_admin`). Network constants and the default pool owner come from the config; `NETWORK` is required |
-| `ccip-handoff.ts` | Deployer, then Squads | Hand a mint's CCIP token admin and BurnMint pool ownership to the Squads vault: proposes, then signs the acceptance (keypair) or puts both acceptances in one Squads proposal (multisig address). `ccip-register.ts --handoff-to` does the same; re-run this without a member key to confirm the handoff |
+| `ccip-handoff.ts` | Deployer, then Squads | Hand a mint's CCIP token admin and BurnMint pool ownership to the Squads vault: proposes, then signs the acceptance (keypair) or prints both acceptances as one base58 transaction for the Squads app (multisig address). `ccip-register.ts --handoff-to` does the same; re-run this to confirm the handoff |
 | `handoff-mint-authority.ts` | Deployer (current mint authority) | Give the mint authority to the CCIP pool signer PDA (dry run unless `--yes`); `ccip-register.ts --handoff-mint-authority` does it as part of the registration |
-| `ccip-register.ts` | Deployer (current mint authority) | Register the mint with CCIP for one remote EVM chain in two transactions: (1) token admin (propose + accept), BurnMint pool, pool token account, pool lookup table; (2) remote chain (token, pool, decimals), rate limits, `set_pool`, and with `--handoff-to <multisig>` the proposals to the multisig, with `--handoff-mint-authority` the mint authority to the pool. Then the multisig's acceptance as one Squads proposal (`--squads-member`). Skips steps already done |
+| `ccip-register.ts` | Deployer (current mint authority) | Register the mint with CCIP for one remote EVM chain in two transactions: (1) token admin (propose + accept), BurnMint pool, pool token account, pool lookup table; (2) remote chain (token, pool, decimals), rate limits, `set_pool`, and with `--handoff-to <multisig>` the proposals to the multisig, with `--handoff-mint-authority` the mint authority to the pool. Then the multisig's acceptance as one base58 transaction for the Squads app. Skips steps already done |
 | `ccip-send.ts` | Token holder | Send tokens to an EVM address through CCIP, paying in SOL (testing / ops checks) |
 | `ccip-send-evm.sh` | Token holder on Mantle | The other direction: send a Mantle token to a Solana wallet through CCIP, paying in MNT; prints the message id. Router, selector and RPC from the config (`NETWORK` required) |
 | `ccip-manual-exec.ts` | Anyone (pays the fee) | Re-execute an inbound CCIP message whose automatic execution failed (e.g. it arrived while the mint was paused; the DON does not retry), from the failed execution transaction. Allowed 20 minutes after the commit; a second run is skipped by the OffRamp |
 | `ccip-manual-exec-evm.sh` | Anyone (pays the gas) | Same for the Mantle side (Solana → Mantle): re-execute a message whose execution failed (Mantle token paused, receiver sanctioned, inbound rate limit, or out of gas), from the failed execution transaction. `TOKEN_GAS` raises the per-token gas, e.g. 150000 for a receiver that has never held the token. RPC from the config (`NETWORK` required) |
 | `devnet-ccip-smoke.sh` | Role keys + a holder | Basic-function smoke on a CCIP-connected mint against devnet and Mantle Sepolia: transfer, pause, freeze, clawback, metadata, the same multiplier on both chains, `ccip_send` after it, holder burn |
-| `pause.ts` | `Pauser` / `Unpauser` (`--resume`) | Pause or resume one mint (the mainnet Unpauser is a multisig: `--operator <multisig> --squads-member <kp>`) |
+| `pause.ts` | `Pauser` / `Unpauser` (`--resume`) | Pause or resume one mint (the mainnet Unpauser is a multisig: `--resume` prints the base58 for the Squads app) |
 | `pause-all.ts` | `Pauser` | Emergency pause of every registered mint, 8 per transaction (`--dry-run` lists them; `--mints` if the RPC rejects `getProgramAccounts`) |
 | `freeze.ts` | `Freezer` / `Unfreezer` (`--thaw`) | Freeze or thaw token accounts, 20 per transaction; `--owner <wallet>` finds every account the wallet holds for the mint (what the backend does on blacklisting) |
 | `clawback.ts` | Compliance admin (`--compliance-admin`; a Squads multisig creates a proposal) | Move tokens from an account to custody as permanent delegate; the source ends frozen. Freeze the account first |
 | `update-metadata.ts` | `MetadataOps` | Update name / symbol / uri / any key (e.g. isin); tops up the mint's rent first |
 | `revoke-role.ts` | Admin or compliance admin | Revoke a role (the admin that governs it) |
 | `set-default-account-state.ts` | Admin | Compliance policy switch: new token accounts start frozen (`--frozen`) or usable (default) |
-| `squads.ts` | Squads members | `create` a multisig (test / rehearsal), `status` (members, threshold, time lock, recent proposals), `approve` / `reject` / `execute` a proposal, `upgrade` (propose a Core upgrade from a buffer whose authority is the vault) |
+| `squads.ts` | Anyone / test members | `status` (members, threshold, time lock, recent proposals). For test multisigs with key-file members: `create`, `propose --base58` (import as the Squads app does), `approve` / `reject` / `execute` |
 | `local-squads-e2e.sh` | — | Runbook rehearsal with real Squads multisigs on a local validator: init, roles, check-config, resume, clawback, unregister, a program upgrade, and the negative cases |
 | `show-mint.ts` / `show-account.ts` | — | Print a mint's configuration / a token account's balance and state |
 | `dev-mint-to.ts` | Mint authority | Local/devnet only: mint before the CCIP handoff |
@@ -177,11 +181,11 @@ one Mantle command and one approval round from each multisig:
    --rate-capacity … --rate-per-second … --handoff-to --handoff-mint-authority`: two transactions
    register the mint with CCIP, propose the config's CCIP admin multisig as token admin and pool
    owner and give the mint authority to the pool (the pool signer becomes the only minter); then one
-   Squads proposal holds the multisig's two acceptances.
+   base58 transaction for the Squads app holds the multisig's two acceptances.
 4. Multisigs. Mantle: `ccip-mantle-setup.sh multisig <token> <pool>` writes two Safe Transaction
    Builder files: the first schedules the timelock batch (CCIP admin registration, `setPool`) and
    accepts the pool's ownership, the second executes the batch after the delay. Solana: the multisig
-   approves and executes the proposal from step 3 (`squads.ts … --multisig ccip_admin`).
+   imports the base58 from step 3 into the Squads app, approves it and executes it after the time lock.
 5. `check-stock.ts --mint <mint>`: PASS when every authority, the CCIP roles on both chains, the
    multiplier and the supply are right.
 

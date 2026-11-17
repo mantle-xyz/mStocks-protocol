@@ -6,12 +6,12 @@
 //      the proposals handing the token admin and the pool ownership to the multisig; with
 //      --handoff-mint-authority, finally the mint authority to the pool signer.
 // With --handoff-to, the new holder's acceptance follows: one Squads proposal for a multisig
-// (created with --squads-member, printed without it), signed directly for a keypair.
+// (printed as a base58 transaction for the Squads app), signed directly for a keypair.
 // Steps already done on chain are left out, so it can be re-run after a failure.
 //   NETWORK=mainnet tsx scripts/ccip-register.ts --authority <mint authority keypair> --mint <mint>
 //     --remote-token <0x..> --remote-pool <0x..> [--remote-selector <u64>] [--remote-decimals 18]
 //     [--rate-capacity <units> --rate-per-second <units>]   (rate limits are off without these)
-//     [--handoff-to [<keypair.json|squads multisig>] [--squads-member <keypair.json>]] [--handoff-mint-authority]
+//     [--handoff-to [<keypair.json|squads multisig>]] [--handoff-mint-authority]
 // --remote-selector defaults to the config's Mantle selector; --handoff-to without a value to the
 // config's CCIP admin.
 //     [--router <id>] [--pool-program <id>] [--fee-quoter <id>]

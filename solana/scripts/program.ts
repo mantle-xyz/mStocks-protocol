@@ -4,9 +4,9 @@
 //   verify                      on-chain bytes == target/deploy/mstocks_core.so (exit 1 otherwise)
 //   handoff --deployer <kp>     upgrade authority → the config's upgrade_authority multisig vault
 //                               (refused before init-core: initialize needs the upgrade authority)
-//   upgrade --deployer <kp>     writes a buffer, hands it to the vault and creates the Squads upgrade
-//                               proposal (--squads-member / SQUADS_MEMBER); approve and execute it with
-//                               squads.ts, then run verify
+//   upgrade --deployer <kp>     writes a buffer, hands it to the vault and prints the upgrade as a
+//                               base58 transaction for the Squads app; after the members approve and
+//                               execute it, run verify
 //   NETWORK=mainnet tsx scripts/program.ts <command> [--deployer <keypair>] [--to <squads multisig>]
 // The Solana CLI gets -k explicitly: some subcommands otherwise fall back to the configured keypair.
 import { spawnSync } from "node:child_process";
@@ -14,11 +14,11 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { address, fetchEncodedAccount, getAddressDecoder } from "@solana/kit";
-import { signerAddress } from "./lib/admin.ts";
+import { printSquadsImport, signerAddress } from "./lib/admin.ts";
 import { setting } from "./lib/config.ts";
 import { CORE_PROGRAM_ID, fetchConfig, programDataPda } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, rpc, RPC_URL, withRetry } from "./lib/env.ts";
-import { multisigFromConfig, propose, upgradeIx, vaultOf } from "./lib/squads.ts";
+import { multisigFromConfig, upgradeIx, vaultOf } from "./lib/squads.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SO = `${ROOT}target/deploy/mstocks_core.so`;
@@ -94,11 +94,10 @@ switch (command) {
     if (!buffer) throw new Error(`no buffer address in: ${out}`);
     solana(deployer, "program", "set-buffer-authority", buffer, "--buffer-authority", deployer, "--new-buffer-authority", vault);
     console.log(`buffer ${buffer} (authority ${vault})`);
-    const member = args["squads-member"] ?? process.env.SQUADS_MEMBER ?? required(args, "squads-member");
     const spill = (await loadKeypair(deployer)).address;
-    const p = await propose(multisigPda, [upgradeIx(CORE_PROGRAM_ID, address(buffer), spill, vault)], member, `upgrade ${CORE_PROGRAM_ID}`);
-    console.log(`upgrade: Squads proposal #${p.transactionIndex} on ${multisigPda.toBase58()} (${p.signature})`);
-    console.log(`  needs ${p.threshold} approval(s), then executable ${p.timeLock}s after approval; then: program.ts verify`);
+    await signerAddress(multisigPda.toBase58()); // names the multisig in the output
+    await printSquadsImport(vault, [upgradeIx(CORE_PROGRAM_ID, address(buffer), spill, vault)], "upgrade");
+    console.log("after the members approve and execute it (time lock), run: program.ts verify");
     break;
   }
   default:

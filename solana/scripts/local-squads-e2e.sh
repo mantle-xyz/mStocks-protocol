@@ -4,6 +4,8 @@
 # Time locks are scaled down (12h → TL, 24h → 2×TL).
 #   multisigs: admin (2/3, TL), compliance admin (2/3, TL), upgrade authority (2/3, 2×TL),
 #              unpauser (2/3, no time lock); EOAs: registrar, scheduler, ops (metadata), pauser, kms
+# Multisig actions go the mainnet way: each script prints a base58 transaction, which squads.ts
+# propose imports as the Squads app does (a member's key file stands in for a Ledger).
 # Covers: program.ts deploy / handoff / upgrade / verify, init-core and sync-roles from the config
 # (one proposal per admin, grants and a revoke), check-config, a mint, resume by the unpauser
 # multisig, clawback by the compliance multisig, unregister by the admin multisig, and the negative
@@ -43,6 +45,13 @@ expect_fail() { # label, expected error pattern, command...
   echo "   $label rejected: $(grep -oE "$want" "$WORK/out" | head -1)"
 }
 idx() { awk -v l="$1" 'index($0, l) && /Squads proposal #/ {sub(/.*#/, ""); print $1; exit}'; }
+# A script prints a multisig action as "<label …> base58: <transaction>"; squads.ts propose imports it
+# the way the Squads app does (member m1's key file stands in for a Ledger). Prints the proposal index.
+imp() { # multisig, label prefix, file with the script's output
+  local b58; b58=$(awk -v l="$2" 'index($0, l) == 1 && / base58: / {print $NF; exit}' "$3")
+  [ -n "$b58" ] || { cat "$3"; fail "$2: no base58"; }
+  ts scripts/squads.ts propose --multisig "$1" --base58 "$b58" --member "$WORK/m1.json" | idx "propose:"
+}
 approve() { ts scripts/squads.ts approve --multisig "$1" --index "$2" --member "$WORK/m2.json" >/dev/null; }
 execute() { ts scripts/squads.ts execute --multisig "$1" --index "$2" --member "$WORK/m3.json" | grep -E "^execute" || fail "execute $1 #$2"; }
 after_time_lock() { sleep $(( $1 + 2 )); }
@@ -78,7 +87,7 @@ unfreezer = ["$(pk kms)"]
 [ccip]
 solana_ccip_admin = ""
 EOF
-export NETWORK=$WORK/config.toml SQUADS_MEMBER=$WORK/m1.json
+export NETWORK=$WORK/config.toml
 for ms in admin compliance_admin upgrade_authority unpauser; do
   v=$(ts scripts/squads.ts status --multisig $ms | awk '/^multisig /{print $NF}')
   sol transfer --allow-unfunded-recipient "$v" 1 >/dev/null
@@ -92,8 +101,8 @@ expect_fail "handoff before init-core" "not initialized" npx tsx scripts/program
 echo "== Step: init-core (addresses from the config), handoff, sync-roles"
 ts scripts/init-core.ts --upgrade-authority "$D" | grep -E "^initialize" || fail "init-core"
 ts scripts/program.ts handoff --deployer "$D" | grep "upgrade authority"
-ts scripts/sync-roles.ts >"$WORK/sync"; grep -E "change|grant|revoke|Squads proposal" "$WORK/sync"
-A=$(idx "admin roles" <"$WORK/sync"); C=$(idx "compliance roles" <"$WORK/sync")
+ts scripts/sync-roles.ts >"$WORK/sync"; grep -E "change|  [0-9]\. " "$WORK/sync" | cut -c1-150
+A=$(imp admin "admin roles" "$WORK/sync"); C=$(imp compliance_admin "compliance roles" "$WORK/sync")
 [ -n "$A" ] && [ -n "$C" ] || fail "sync-roles proposals"
 expect_fail "execute with 1/2 approvals" "InvalidProposalStatus" \
   npx tsx scripts/squads.ts execute --multisig admin --index "$A" --member "$WORK/m3.json"
@@ -113,10 +122,10 @@ expect_fail "grant-role with the wrong admin" "is governed by the admin" \
 echo "== sync-roles revokes a holder dropped from the config"
 sed -i.bak '/^multiplier_scheduler/d' "$WORK/config.toml"
 ts scripts/sync-roles.ts >"$WORK/sync"; grep -E "revoke" "$WORK/sync"
-R=$(idx "admin roles" <"$WORK/sync"); approve admin "$R"; after_time_lock "$TL"; execute admin "$R"
+R=$(imp admin "admin roles" "$WORK/sync"); approve admin "$R"; after_time_lock "$TL"; execute admin "$R"
 ts scripts/check-config.ts | grep -q "^PASS" || fail "check-config after revoke"
 mv "$WORK/config.toml.bak" "$WORK/config.toml"
-ts scripts/sync-roles.ts >"$WORK/sync"; R=$(idx "admin roles" <"$WORK/sync"); approve admin "$R"; after_time_lock "$TL"; execute admin "$R"
+ts scripts/sync-roles.ts >"$WORK/sync"; R=$(imp admin "admin roles" "$WORK/sync"); approve admin "$R"; after_time_lock "$TL"; execute admin "$R"
 ts scripts/check-config.ts | grep -q "^PASS" || fail "check-config after re-grant"
 echo "   revoked, re-granted, PASS"
 
@@ -132,13 +141,15 @@ CUSTODY_ATA=$(ts scripts/dev-mint-to.ts --mint-authority "$WORK/registrar.json" 
 
 echo "== pause (pauser key) → resume through the unpauser multisig from the config"
 ts scripts/pause.ts --operator "$WORK/pauser.json" --mint "$MINT" | grep -E "^pause"
-P=$(ts scripts/pause.ts --mint "$MINT" --resume | idx "resume"); approve unpauser "$P"; execute unpauser "$P"
+ts scripts/pause.ts --mint "$MINT" --resume >"$WORK/p"; P=$(imp unpauser "resume" "$WORK/p"); approve unpauser "$P"; execute unpauser "$P"
 ts scripts/show-mint.ts --mint "$MINT" | grep "^PausableConfig" | grep -q '"paused":false' || fail "still paused"
 echo "   resumed"
 
 echo "== clawback through the compliance multisig (after a kms freeze)"
 ts scripts/freeze.ts --operator "$WORK/kms.json" --mint "$MINT" --owner "$(pk user)" | grep -E "^freeze" | head -1
-CB=$(ts scripts/clawback.ts --mint "$MINT" --source "$USER_ATA" --destination "$CUSTODY_ATA" --amount 2000000000 | idx "clawback")
+ts scripts/clawback.ts --mint "$MINT" --source "$USER_ATA" --destination "$CUSTODY_ATA" --amount 2000000000 >"$WORK/p"
+grep -E "^  1\. " "$WORK/p" | cut -c1-160
+CB=$(imp compliance_admin "clawback" "$WORK/p")
 approve compliance_admin "$CB"; after_time_lock "$TL"; execute compliance_admin "$CB"
 spl-token -u "$LOCAL" --program-2022 balance --address "$CUSTODY_ATA" | grep -qx 2 || fail "custody balance"
 echo "   custody holds 2"
@@ -146,13 +157,14 @@ echo "   custody holds 2"
 echo "== unregister a wrongly registered mint through the admin multisig"
 WRONG=$(ts scripts/create-mint.ts --payer "$WORK/registrar.json" --uri https://example.com --name Wrong --symbol WRONG --isin X \
   --mantle-token 0x00000000000000000000000000000000000000bb --initial-multiplier-1e18 1000000000000000000 | awk '/^mint: /{print $2}')
-U=$(ts scripts/unregister-mint.ts --mint "$WRONG" | idx "unregister_mint"); approve admin "$U"; after_time_lock "$TL"; execute admin "$U"
+ts scripts/unregister-mint.ts --mint "$WRONG" >"$WORK/p"; U=$(imp admin "unregister_mint" "$WORK/p"); approve admin "$U"; after_time_lock "$TL"; execute admin "$U"
 expect_fail "unregistered mint" "not registered" npx tsx scripts/unregister-mint.ts --mint "$WRONG"
 
 echo "== program.ts upgrade through the upgrade multisig"
 expect_fail "upgrade by the old deployer key" "does not match" \
   sol program deploy target/deploy/mstocks_core.so --program-id "$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)" --upgrade-authority "$D"
-UP=$(ts scripts/program.ts upgrade --deployer "$D" | tee "$WORK/up" | idx "upgrade:")
+ts scripts/program.ts upgrade --deployer "$D" >"$WORK/up"; grep -E "^  1\. " "$WORK/up" | cut -c1-160
+UP=$(imp upgrade_authority "upgrade" "$WORK/up")
 [ -n "$UP" ] || { cat "$WORK/up"; fail "upgrade proposal"; }
 approve upgrade_authority "$UP"; after_time_lock $((TL * 2)); execute upgrade_authority "$UP"
 ts scripts/program.ts verify | grep -E "matches|DIFFERS"

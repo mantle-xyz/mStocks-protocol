@@ -18,7 +18,7 @@ import {
 import { config } from "./config.ts";
 import { rpc, withRetry } from "./env.ts";
 
-const idl = JSON.parse(
+export const idl = JSON.parse(
   readFileSync(new URL("../../target/idl/mstocks_core.json", import.meta.url), "utf8"),
 );
 

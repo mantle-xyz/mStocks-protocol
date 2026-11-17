@@ -1,9 +1,9 @@
 // Brings the on-chain role holders in line with the network config: grants every configured holder
 // that is missing and revokes every holder the config does not list (including any holder of the
 // retired Clawback). The changes are grouped by the admin that governs them, so each admin signs
-// once: one transaction for a keypair admin, one Squads proposal for a multisig (with
-// --squads-member or SQUADS_MEMBER; printed without). The vault pays the rent of new role accounts,
-// so keep a little SOL in it.
+// once: one transaction for a keypair admin; for a multisig, one base58 transaction for the Squads
+// app (a member imports it, the members approve it with their Ledgers). The vault pays the rent of
+// new role accounts, so keep a little SOL in it.
 //   NETWORK=mainnet tsx scripts/sync-roles.ts [--dry-run]
 //     [--admin <keypair.json|squads multisig>] [--compliance-admin <keypair.json|squads multisig>]
 // --admin / --compliance-admin default to the config's; pass a keypair file on a test network where
