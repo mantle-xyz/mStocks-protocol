@@ -1,0 +1,29 @@
+# Solana mainnet configuration for mstocks-core, mirroring the Mantle config.toml: the same roles,
+# multisig signer groups, thresholds and time locks. Fill in the addresses before launch, then check
+# with: RPC_URL=<mainnet rpc> tsx scripts/check-config.ts --config config.mainnet.toml
+# Squads vaults use Squads v4 with a time lock on the multisig.
+
+[program]
+id = "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd"
+min_notice_seconds = 300           # = Mantle minMultiplierNotice (fixed in the program)
+max_horizon_seconds = 31536000     # 365 days, as on Mantle (fixed in the program)
+
+[admins]
+upgrade_authority = ""   # Squads mirroring multisig 2: 3/6 + 24 h time lock (Mantle Beacon / ProxyAdmin owner)
+admin = ""               # Squads mirroring multisig 1: 3/6 + 12 h time lock (Mantle factory / ScaledToken admin)
+compliance_admin = ""    # Squads mirroring multisig 4: 3/6 + 12 h time lock (Mantle compliance / pause registries admin); signs clawback
+hook_authority = ""      # Transfer Hook authority of every mint: the admin's Squads vault (Mantle: ScaledToken admin)
+
+[roles]
+mint_registrar = []          # RWA-Bycustody, as Mantle EOA1 (factory OPS_ROLE)
+multiplier_scheduler = []    # RWA-Bycustody, as Mantle EOA3 (MULTIPLIER_SCHEDULER_ROLE)
+metadata_ops = []            # RWA-Bycustody, as Mantle EOA2 (ScaledToken OPS_ROLE)
+pauser = []                  # RWA-Bycustody, as Mantle EOA6 (PAUSE_ROLE)
+unpauser = []                # Squads mirroring multisig 5, no time lock (UNPAUSE_ROLE)
+freezer = []                 # Mantle compliance backend KMS, as Mantle EOA5 (ComplianceRegistry OPS_ROLE)
+unfreezer = []               # same key as freezer
+
+[ccip]
+# Pool owner and CCIP token admin of each token, on both chains: the admin's multisig (multisig 1).
+mantle_pool_owner = ""       # Mantle multisig 1 (Safe) or its timelock
+solana_ccip_admin = ""       # the admin's Squads vault

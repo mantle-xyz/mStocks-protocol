@@ -1,0 +1,26 @@
+# Devnet configuration of mstocks-core (test keys; the upgrade authority stays the deployer).
+#   RPC_URL=<devnet rpc> tsx scripts/check-config.ts --config config.devnet.toml
+
+[program]
+id = "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd"
+min_notice_seconds = 300
+max_horizon_seconds = 31536000
+
+[admins]
+upgrade_authority = "6XS768SMgF7iEt7ZX8iJBgu7mXHewc95aqAz6XAj1hu3"
+admin = "62hmcAVuA6M8dQj7zqG15vQyEiQbKCHz4yE4JBkaZRu"
+compliance_admin = "CHYQeS74Sb5j54CkZx76xQyGqHJqNgUGHRHq3bpdXJ9n"
+hook_authority = "DxdVvuhRfRUpyvtkGbyJ5nGR12Zxibwvte6Dj5bbE5vz"
+
+[roles]
+mint_registrar = ["6XS768SMgF7iEt7ZX8iJBgu7mXHewc95aqAz6XAj1hu3"]
+multiplier_scheduler = ["BduhSAGRfwePPv3j8zMtCrCa1FcSNkL793Hs66NgfmEL"]
+metadata_ops = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
+pauser = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
+unpauser = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
+freezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "E8SV8n8PQHiNNHZttcZ4PCYkFsC2rAHNYQNyZfXm6jQX"]
+unfreezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "E8SV8n8PQHiNNHZttcZ4PCYkFsC2rAHNYQNyZfXm6jQX"]
+
+[ccip]
+mantle_pool_owner = ""
+solana_ccip_admin = ""
