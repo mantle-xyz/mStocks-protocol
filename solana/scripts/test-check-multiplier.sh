@@ -6,6 +6,8 @@
 # Prerequisites: anchor build, scripts/fetch-fixtures.sh, npm install, Foundry.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Every address is passed explicitly: no network config, no Mantle reads by create-mint.
+unset NETWORK MANTLE_RPC_URL
 REPO=$(cd .. && pwd)
 WORK=$(mktemp -d)
 # A free port, so the test never collides with a developer's own anvil instances.

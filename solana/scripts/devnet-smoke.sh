@@ -5,6 +5,8 @@
 # deployer (program upgrade authority) funds the other keys. Core is initialized only once.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Every address is passed explicitly: no network config, no Mantle reads by create-mint.
+unset NETWORK MANTLE_RPC_URL
 : "${RPC_URL:?set RPC_URL to a devnet RPC endpoint}"
 KEYS=${KEYS:-$HOME/.config/solana/mstocks-devnet}
 DEPLOYER=${DEPLOYER:-$HOME/.config/solana/id.json}

@@ -7,6 +7,8 @@
 # npm install, Foundry.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Every address is passed explicitly: no network config, no Mantle reads by create-mint.
+unset NETWORK MANTLE_RPC_URL
 REPO=$(cd .. && pwd)
 WORK=$(mktemp -d)
 free_port() { python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
