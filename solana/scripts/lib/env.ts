@@ -59,6 +59,9 @@ export async function loadKeypair(path: string): Promise<KeyPairSigner> {
   return createKeyPairSignerFromBytes(new Uint8Array(JSON.parse(readFileSync(resolved, "utf8"))));
 }
 
+/** Largest serialized transaction Solana accepts (signatures included). */
+export const TRANSACTION_SIZE_LIMIT = 1232;
+
 /**
  * Signs with every signer embedded in the instructions (plus the fee payer), sends over HTTP and
  * polls until confirmed. Polling instead of WebSocket subscriptions keeps it working with RPC
@@ -74,9 +77,11 @@ export async function send(payer: KeyPairSigner, instructions: Instruction[]): P
     (m) => signTransactionMessageWithSigners(m),
   );
   const signature = getSignatureFromTransaction(tx);
-  await withRetry(() =>
-    rpc.sendTransaction(getBase64EncodedWireTransaction(tx), { encoding: "base64", preflightCommitment: "confirmed" }).send(),
-  );
+  const wire = getBase64EncodedWireTransaction(tx);
+  const size = Buffer.from(wire, "base64").length;
+  if (size > TRANSACTION_SIZE_LIMIT)
+    throw new Error(`transaction is ${size} bytes, over Solana's ${TRANSACTION_SIZE_LIMIT}-byte limit; nothing was sent`);
+  await withRetry(() => rpc.sendTransaction(wire, { encoding: "base64", preflightCommitment: "confirmed" }).send());
   for (let i = 0; i < 90; i++) {
     const { value } = await withRetry(() => rpc.getSignatureStatuses([signature]).send());
     const status = value[0];

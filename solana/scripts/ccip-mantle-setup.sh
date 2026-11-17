@@ -15,7 +15,9 @@
 #                registers as the token's CCIP admin, accepts, and sets the pool;
 #              - <pool-owner> accepts the pool's ownership.
 #            For a timelock the calls are wrapped as scheduleBatch (file 1) and executeBatch (file 2,
-#            after the timelock's delay); when <pool-owner> is the same timelock, one batch does both.
+#            after the timelock's delay); when <pool-owner> is the same timelock, one batch does both;
+#            when <pool-owner> is a proposer of that timelock (multisig 1's Safe), its acceptance is
+#            part of file 1, so the Safe signs twice in all.
 #            For a Safe or EOA they are plain calls. Steps already done on chain are left out.
 #   execute  <key-file> <json>...      Testnet only: sends a JSON file's calls from <key-file>, standing
 #                                      in for a multisig that is a plain key in a test deployment.
@@ -185,7 +187,9 @@ batch_files() { # actor tag (target data)... → JSON files for one actor
     exec=$(cast calldata "executeBatch(address[],uint256[],bytes[],bytes32,bytes32)" "[$targets]" "[$values]" "[$datas]" 0x"$(printf '0%.0s' {1..64})" "$salt")
     id=$(call "$actor" "hashOperationBatch(address[],uint256[],bytes[],bytes32,bytes32)(bytes32)" "[$targets]" "[$values]" "[$datas]" 0x"$(printf '0%.0s' {1..64})" "$salt")
     echo "  $actor is a timelock (delay $delay s): $n call(s) as one batch, operation $id"
-    safe_json "$OUT/$tag-1-schedule.json" "$tag: schedule" "Proposer Safe of timelock $actor schedules $n call(s); execute file 2 after $delay s" "$actor" "$sched"
+    local extra=${#PROPOSER_EXTRA[@]} desc="Proposer Safe of timelock $actor schedules $n call(s); execute file 2 after $delay s"
+    [ "$extra" -gt 0 ] && desc+="; the same Safe transaction makes $(( extra / 2 )) direct call(s) (pool ownership)"
+    safe_json "$OUT/$tag-1-schedule.json" "$tag: schedule" "$desc" "$actor" "$sched" ${PROPOSER_EXTRA[@]+"${PROPOSER_EXTRA[@]}"}
     safe_json "$OUT/$tag-2-execute.json" "$tag: execute" "Executor of timelock $actor executes operation $id after $delay s" "$actor" "$exec"
   else
     echo "  $actor is not a timelock: $n plain call(s)"
@@ -213,6 +217,14 @@ cmd_multisig() {
   [ "$(lower "$(call "$POOL_ADDR" "owner()(address)")")" = "$(lower "$owner")" ] ||
     owner_calls+=("$POOL_ADDR" "$(cast calldata "acceptOwnership()")")
   if [ "$(lower "$owner")" = "$(lower "$admin")" ]; then admin_calls+=("${owner_calls[@]}"); owner_calls=(); fi
+  # A pool owner that is also a proposer of the token admin's timelock (multisig 1's Safe on
+  # mainnet) accepts the pool in the same Safe transaction that schedules the timelock batch.
+  PROPOSER_EXTRA=()
+  if [ ${#admin_calls[@]} -gt 0 ] && [ ${#owner_calls[@]} -gt 0 ] && is_timelock "$admin" &&
+    [ "$(call "$admin" "hasRole(bytes32,address)(bool)" "$(cast keccak PROPOSER_ROLE)" "$owner")" = true ]; then
+    echo "  pool owner $owner is a proposer of $admin: its acceptance goes into the schedule file"
+    PROPOSER_EXTRA=("${owner_calls[@]}"); owner_calls=()
+  fi
   [ ${#admin_calls[@]} -gt 0 ] && batch_files "$admin" "ccip-$sym-token-admin" "${admin_calls[@]}"
   [ ${#owner_calls[@]} -gt 0 ] && batch_files "$owner" "ccip-$sym-pool-owner" "${owner_calls[@]}"
   [ ${#admin_calls[@]} -eq 0 ] && [ ${#owner_calls[@]} -eq 0 ] && echo "nothing to do"

@@ -195,6 +195,8 @@ Run once per stock, in this order:
 
 **Why step 6 must come before step 8:** CCIP self-registration needs the mint authority's signature, which is no longer possible once it belongs to a PDA.
 
+**Transactions:** with the Mantle token already in place, the operators send three Solana transactions and one Mantle command: steps 1–4 are one transaction (`create-mint.ts`, all or nothing, about 1,130 of Solana's 1,232 bytes), step 5 is the Mantle deployer's command, and steps 6, 8 and the Solana proposals of step 7 are two transactions (`ccip-register.ts --handoff-to --handoff-mint-authority`, 1,067 and 879 bytes), followed by the Squads proposal holding the multisig's acceptances. The multisigs then sign: on Mantle twice (schedule, which also accepts the pool, and execute after the delay), on Solana one proposal. Steps 6–8 cannot be a single transaction: together they are about 1,500 bytes, over the limit even with a lookup table.
+
 **Initial multiplier:** a new mint's initial value must equal Mantle's current `uiMultiplier()`. If Mantle has a pending value, schedule it on Solana right after launch.
 
 **Why the deployer writes the metadata first:** extra fields such as the ISIN can only be written with `update_field`, which needs the update authority's signature. Writing them with the deployer before handing the authority to Core avoids a separate `METADATA_OPS` step at launch.
@@ -205,13 +207,13 @@ Run once per stock, in this order:
 | --- | --- |
 | Deploy and initialize Core (once) | Deploy with the deployer as upgrade authority → `init-core.ts` (signed by the upgrade authority) → hand the upgrade authority to the upgrade multisig's vault (Squads, 24 h time lock); later upgrades are Squads proposals (`squads.ts upgrade`) |
 | Grant roles | `grant-role.ts` / `revoke-role.ts` |
-| Steps 1–4 | `create-mint.ts` |
+| Steps 1–4 | `create-mint.ts` (one transaction) |
 | Schedule a pending multiplier | `schedule-multiplier.ts` |
 | Compare the multiplier on both chains (option B) | `check-multiplier.ts` |
-| Step 6, CCIP registration | `ccip-register.ts`: token admin registration (propose + accept), BurnMint pool initialization, pool token account, remote chain config (token, pool, decimals), rate limits, address lookup table, `set_pool`; steps already done are skipped. On mainnet the token admin role and pool ownership are then handed to the admin's Squads (`ccip-handoff.ts`, step 7) |
+| Step 6, CCIP registration | `ccip-register.ts`, two transactions: (1) token admin registration (propose + accept), BurnMint pool initialization, pool token account, address lookup table; (2) remote chain config (token, pool, decimals), rate limits, `set_pool`, and with `--handoff-to` / `--handoff-mint-authority` the proposals to the admin's Squads (step 7) and the mint authority handoff (step 8); then the Squads proposal with the acceptances. Steps already done are skipped |
 | Step 5, Mantle pool | `ccip-mantle-setup.sh deploy` (deployer key) |
-| Step 7, multisigs | Mantle: `ccip-mantle-setup.sh multisig` writes Safe Transaction Builder files (timelock schedule, then execute after the delay; pool owner acceptance). Solana: `ccip-handoff.ts` proposes the Squads vault and puts both acceptances in one Squads proposal |
-| Step 8 | `handoff-mint-authority.ts` (dry run by default, `--yes` to execute) |
+| Step 7, multisigs | Mantle: `ccip-mantle-setup.sh multisig` writes two Safe Transaction Builder files (timelock schedule plus the pool owner's acceptance when the Safe is a timelock proposer; execute after the delay). Solana: the admin's Squads approves and executes the proposal from step 6 (`ccip-handoff.ts` does the handoff on its own and confirms it) |
+| Step 8 | Part of step 6 (`--handoff-mint-authority`); on its own `handoff-mint-authority.ts --yes` |
 | Step 9 | `ccip-mantle-setup.sh verify` (exits 1 on a problem), `show-mint.ts` |
 | Check the result | `show-mint.ts` |
 
@@ -277,6 +279,8 @@ Mantle is the issuing chain, so each token gets a **LockReleaseTokenPool**: send
 **Rehearsal (2026-11-16, Mantle Sepolia ↔ Solana devnet):** a new ScaledToken whose admin is a TimelockController (60 s delay standing in for 12 h), a separate pool owner standing in for a Safe, and a key standing in for the Squads vault. The deploy, the timelock batch (an early execute was rejected; it executed after the delay), the pool owner acceptance, the Solana handoff in both modes (printing the Squads instructions, then signing them), the mint authority handoff and `verify` all passed. Then 0.01 went Mantle → Solana (delivered in about 26 minutes) and 0.005 came back (released on Mantle within a minute), and `check-supply.ts` reconciled exactly (0.005 on Solana, 0.005 locked).
 
 **Squads handoff (2026-11-17, devnet):** the rehearsal mint's CCIP token admin and pool ownership then moved from the stand-in key to a real Squads v4 multisig (2/3, 60 s time lock): `ccip-handoff.ts --to <multisig> --squads-member <m1>` proposed the vault and created one Squads proposal with both acceptances; executing it with one approval (`InvalidProposalStatus`) and inside the time lock (`TimeLockNotReleased`) was rejected; after the second approval and the time lock it executed, and the vault now holds both roles.
+
+**Packed launch (2026-11-17, Mantle Sepolia ↔ Solana devnet, 3/6 Squads):** a second ScaledToken (MRB2) whose admin is the timelock; `create-mint.ts` created and registered the mint in one transaction (1,091 bytes); the Mantle deploy command; `ccip-register.ts --handoff-to <Squads> --handoff-mint-authority` in two transactions (1,067 and 879 bytes) and one Squads proposal; the Mantle multisig signed twice (schedule with the pool acceptance, execute after 60 s); the Squads proposal executed after 3/6 approvals and the time lock. `verify`, `check-multiplier`, `check-supply` and `check-config` passed.
 
 ---
 

@@ -1,13 +1,14 @@
 // Creates one mStocks Token-2022 mint exactly as the TD §6 requires and registers it with Core.
 // Registration is signed by a holder of the MintRegistrar role (operations; defaults to the payer).
-// Each Mantle token can be registered for only one mint.
+// Each Mantle token can be registered for only one mint. Everything is one transaction.
 //
-//   tsx scripts/create-mint.ts --payer <keypair> [--registrar <keypair>] \
+//   tsx scripts/create-mint.ts --payer <keypair> [--registrar <keypair>] [--mint-keypair <keypair>] \
 //     --hook-authority <squads multisig> --name "Apple mStock" --symbol AAPLm --uri https://... \
 //     --isin US0378331005 --mantle-token 0x... --initial-multiplier-1e18 <Mantle uiMultiplier()>
 //
-// The payer stays mint authority until the CCIP pool is registered (run handoff-mint-authority.ts
-// afterwards). If Mantle has a pending multiplier, schedule it on this mint right after creation.
+// The payer stays mint authority until the CCIP pool is registered (ccip-register.ts
+// --handoff-mint-authority hands it to the pool). If Mantle has a pending multiplier, schedule it on
+// this mint right after creation.
 import { address, generateKeyPairSigner } from "@solana/kit";
 import { getCreateAccountInstruction } from "@solana-program/system";
 import {
@@ -72,30 +73,11 @@ const metadata = extension("TokenMetadata", {
 const space = BigInt(getMintSize(fixed));
 const lamports = await rpc.getMinimumBalanceForRentExemption(BigInt(getMintSize([...fixed, metadata]))).send();
 
-// 1. Account, extensions and mint. The payer is the temporary mint authority (until CCIP handoff).
-const create = await send(payer, [
-  getCreateAccountInstruction({ payer, newAccount: mintSigner, lamports, space, programAddress: TOKEN_2022_PROGRAM_ID }),
-  getInitializeScaledUiAmountMintInstruction({ mint, authority, multiplier: initialMultiplier }),
-  getInitializePausableConfigInstruction({ mint, authority }),
-  getInitializeMetadataPointerInstruction({ mint, authority, metadataAddress: mint }),
-  getInitializeDefaultAccountStateInstruction({ mint, state: AccountState.Initialized }),
-  getInitializeTransferHookInstruction({ mint, authority: hookAuthority, programId: NO_HOOK_PROGRAM }),
-  getInitializePermanentDelegateInstruction({ mint, delegate: authority }),
-  getInitializeMint2Instruction({ mint, decimals: DECIMALS, mintAuthority: payer.address, freezeAuthority: authority }),
-]);
-console.log(`create mint ${mint}: ${create}`);
-
-// 2. Metadata, written by the payer, then handed to Core.
-const meta = await send(payer, [
-  getInitializeTokenMetadataInstruction({ metadata: mint, updateAuthority: payer.address, mint, mintAuthority: payer, name, symbol, uri }),
-  ...(isin
-    ? [getUpdateTokenMetadataFieldInstruction({ metadata: mint, updateAuthority: payer, field: { __kind: "Key", fields: ["isin"] }, value: isin })]
-    : []),
-  getUpdateTokenMetadataUpdateAuthorityInstruction({ metadata: mint, updateAuthority: payer, newUpdateAuthority: authority }),
-]);
-console.log(`metadata: ${meta}`);
-
-// 3. Register with Core (validates the whole configuration on-chain).
+// One transaction, so a mint is either fully configured and registered or not created at all:
+// account, extensions and mint (the payer is the temporary mint authority until the CCIP
+// handoff); metadata written by the payer, then handed to Core; register_mint, which validates the
+// whole configuration on chain. With realistic metadata it is about 1130 bytes when the registrar
+// is the payer (about 1230 when it is a separate signer); send() refuses anything over 1232.
 const register = coreInstruction(
   "register_mint",
   {
@@ -110,5 +92,21 @@ const register = coreInstruction(
   },
   mantleToken,
 );
-console.log(`register_mint (registrar ${registrar.address}): ${await send(payer, [register])}`);
+const signature = await send(payer, [
+  getCreateAccountInstruction({ payer, newAccount: mintSigner, lamports, space, programAddress: TOKEN_2022_PROGRAM_ID }),
+  getInitializeScaledUiAmountMintInstruction({ mint, authority, multiplier: initialMultiplier }),
+  getInitializePausableConfigInstruction({ mint, authority }),
+  getInitializeMetadataPointerInstruction({ mint, authority, metadataAddress: mint }),
+  getInitializeDefaultAccountStateInstruction({ mint, state: AccountState.Initialized }),
+  getInitializeTransferHookInstruction({ mint, authority: hookAuthority, programId: NO_HOOK_PROGRAM }),
+  getInitializePermanentDelegateInstruction({ mint, delegate: authority }),
+  getInitializeMint2Instruction({ mint, decimals: DECIMALS, mintAuthority: payer.address, freezeAuthority: authority }),
+  getInitializeTokenMetadataInstruction({ metadata: mint, updateAuthority: payer.address, mint, mintAuthority: payer, name, symbol, uri }),
+  ...(isin
+    ? [getUpdateTokenMetadataFieldInstruction({ metadata: mint, updateAuthority: payer, field: { __kind: "Key", fields: ["isin"] }, value: isin })]
+    : []),
+  getUpdateTokenMetadataUpdateAuthorityInstruction({ metadata: mint, updateAuthority: payer, newUpdateAuthority: authority }),
+  register,
+]);
+console.log(`create and register mint ${mint} (registrar ${registrar.address}): ${signature}`);
 console.log(`mint: ${mint}`);
