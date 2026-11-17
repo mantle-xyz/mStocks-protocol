@@ -5,13 +5,14 @@
 // Unfreezer (and revoking a retired Clawback), the admin for the others. Clawback can no longer be
 // granted: clawback.ts is signed by the compliance admin.
 import { adminAddress, resolveAdmin, sendOrPrint, signerAddress } from "./lib/admin.ts";
-import { configPda, coreInstruction, concat, encodePubkey, encodeU8, roleIndex, rolePda } from "./lib/core.ts";
+import { assertRoleAdmin, configPda, coreInstruction, concat, encodePubkey, encodeU8, roleIndex, rolePda } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required } from "./lib/env.ts";
 
 const args = parseArgs();
 const payer = await loadKeypair(required(args, "payer"));
 const admin = await resolveAdmin(required(args, "admin"));
 const role = required(args, "role");
+await assertRoleAdmin(role, adminAddress(admin)); // fail now, not when a multisig proposal executes
 // A Squads multisig member is granted through its vault, the address that signs.
 const member = await signerAddress(required(args, "member"));
 

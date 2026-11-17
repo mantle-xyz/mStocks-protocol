@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import {
   AccountRole,
   address,
+  fetchEncodedAccount,
+  getAddressDecoder,
   getAddressEncoder,
   getProgramDerivedAddress,
   getUtf8Encoder,
@@ -11,6 +13,7 @@ import {
   type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
+import { rpc, withRetry } from "./env.ts";
 
 const idl = JSON.parse(
   readFileSync(new URL("../../target/idl/mstocks_core.json", import.meta.url), "utf8"),
@@ -48,6 +51,51 @@ export function roleIndex(role: string): number {
   const i = ROLES.indexOf(role);
   if (i < 0) throw new Error(`unknown role ${role}; expected one of ${ROLES.join(", ")}`);
   return i;
+}
+
+/** Roles governed by the compliance admin (Role::is_compliance); the admin governs the others. */
+const COMPLIANCE_ROLES = ["Pauser", "Unpauser", "Freezer", "Unfreezer", "Clawback"];
+
+export type CoreConfig = {
+  admin: Address;
+  pendingAdmin: Address | null;
+  hookAuthority: Address;
+  minNotice: bigint;
+  maxHorizon: bigint;
+  complianceAdmin: Address;
+  pendingComplianceAdmin: Address | null;
+};
+
+/** Reads the Config account (Borsh: an Option is one byte when None), or null before `initialize`. */
+export async function fetchConfig(): Promise<CoreConfig | null> {
+  const acc = await withRetry(async () => fetchEncodedAccount(rpc, await configPda()));
+  if (!acc.exists) return null;
+  const d = acc.data;
+  const dec = getAddressDecoder();
+  let o = 8;
+  const key = () => dec.decode(d.subarray(o, (o += 32)));
+  const opt = () => (d[o++] === 1 ? key() : null);
+  const i64 = () => {
+    const v = new DataView(d.buffer, d.byteOffset + o, 8).getBigInt64(0, true);
+    o += 8;
+    return v;
+  };
+  const head = { admin: key(), pendingAdmin: opt(), hookAuthority: key(), minNotice: i64(), maxHorizon: i64() };
+  o += 2; // bump, authority_bump
+  return { ...head, complianceAdmin: key(), pendingComplianceAdmin: opt() };
+}
+
+/**
+ * Throws unless `admin` governs `role` on chain. Core would reject it too, but for a multisig only
+ * when the proposal executes, after its time lock.
+ */
+export async function assertRoleAdmin(role: string, admin: Address) {
+  const config = await fetchConfig();
+  if (!config) throw new Error("Core is not initialized");
+  const compliance = COMPLIANCE_ROLES.includes(role);
+  const governing = compliance ? config.complianceAdmin : config.admin;
+  if (governing !== admin)
+    throw new Error(`${role} is governed by the ${compliance ? "compliance admin" : "admin"} ${governing}, not ${admin}`);
 }
 
 type AccountInput = Address | KeyPairSigner;

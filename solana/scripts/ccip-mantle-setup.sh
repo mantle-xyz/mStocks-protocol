@@ -26,6 +26,9 @@
 # Env: MANTLE_RPC_URL (required), NETWORK=mainnet|testnet (default mainnet: Mantle ↔ Solana mainnet;
 # testnet: Mantle Sepolia ↔ Solana devnet). The Solana side is ccip-register.ts / ccip-handoff.ts.
 set -euo pipefail
+# File arguments (key files, --out, JSON files) are relative to the caller's directory.
+CALLER=$PWD
+abspath() { case $1 in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$CALLER" "$1" ;; esac; }
 cd "$(dirname "$0")/.."
 RPC=${MANTLE_RPC_URL:?set MANTLE_RPC_URL}
 NETWORK=${NETWORK:-mainnet}
@@ -43,7 +46,15 @@ ZERO=0x0000000000000000000000000000000000000000
 RL="(bool,uint128,uint128)"
 
 die() { echo "error: $*" >&2; exit 1; }
-call() { cast call "$@" --rpc-url "$RPC" | sed -E 's/ \[[0-9.]+e[0-9]+\]//g'; } # drop cast's "[1.6e19]" annotations
+call() { # cast call; retries transport errors (not reverts), drops cast's "[1.6e19]" annotations
+  local out i
+  for i in 1 2 3 4; do
+    if out=$(cast call "$@" --rpc-url "$RPC" 2>&1); then sed -E 's/ \[[0-9.]+e[0-9]+\]//g' <<<"$out"; return 0; fi
+    grep -qiE 'error sending request|connection|timed? ?out|429|50[234]' <<<"$out" || break
+    sleep 2
+  done
+  echo "$out" >&2; return 1
+}
 lower() { tr '[:upper:]' '[:lower:]' <<<"$1"; }
 tx_result() { # cast send --json output → "<tx hash>" (exit 0) or "FAILED: <reason>" (exit 1)
   python3 -I -c '
@@ -116,7 +127,7 @@ PY
 
 cmd_deploy() {
   [ $# -ge 4 ] || die "usage: deploy <deployer-key-file> <token> <solana-mint> <pool-owner> (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit) [--rate-limit-admin <addr>]"
-  local key=$1 token=$2 mint=$3 owner=$4; shift 4
+  local key token=$2 mint=$3 owner=$4; key=$(abspath "$1"); shift 4
   local cap="" rate="" nolimit="" rladmin=""
   while [ $# -gt 0 ]; do case $1 in
     --rate-capacity) cap=$2; shift 2 ;; --rate-per-second) rate=$2; shift 2 ;;
@@ -185,7 +196,7 @@ batch_files() { # actor tag (target data)... → JSON files for one actor
 cmd_multisig() {
   [ $# -ge 3 ] || die "usage: multisig <token> <pool> <pool-owner> [--out <dir>]"
   TOKEN_ADDR=$1; POOL_ADDR=$2; local owner=$3; shift 3
-  OUT=.; while [ $# -gt 0 ]; do case $1 in --out) OUT=$2; shift 2 ;; *) die "unknown option $1" ;; esac; done
+  OUT=$CALLER; while [ $# -gt 0 ]; do case $1 in --out) OUT=$(abspath "$2"); shift 2 ;; *) die "unknown option $1" ;; esac; done
   mkdir -p "$OUT"
   local sym admin; sym=$(call "$TOKEN_ADDR" "symbol()(string)" | tr -d '"'); admin=$(token_admin "$TOKEN_ADDR")
   local cfg; cfg=$(call $TAR "getTokenConfig(address)((address,address,address))" "$TOKEN_ADDR" | tr -d '() ')
@@ -210,8 +221,9 @@ cmd_multisig() {
 
 cmd_execute() {
   [ "$NETWORK" = testnet ] || die "execute is for testnet only; on mainnet import the JSON into the Safe"
-  local key=$1; shift
+  local key; key=$(abspath "$1"); shift
   for f in "$@"; do
+    f=$(abspath "$f")
     python3 -I -c 'import sys,json; [print(t["to"], t["data"]) for t in json.load(open(sys.argv[1]))["transactions"]]' "$f" |
       while read -r to data; do
         local out; out=$(cast send "$to" "$data" --rpc-url "$RPC" --private-key "$(cat "$key")" --json 2>&1) || true

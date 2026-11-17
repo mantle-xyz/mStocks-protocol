@@ -17,7 +17,7 @@ import {
 } from "@solana/kit";
 import { parse } from "smol-toml";
 import { signerAddress } from "./lib/admin.ts";
-import { configPda, programDataPda } from "./lib/core.ts";
+import { fetchConfig, programDataPda } from "./lib/core.ts";
 import { parseArgs, required, rpc, RPC_URL, withRetry } from "./lib/env.ts";
 
 const args = parseArgs();
@@ -66,27 +66,12 @@ for (const [role, members] of Object.entries(cfg.roles)) {
 }
 
 console.log("== Config account");
-const conf = await (async () => {
-  const acc = await withRetry(async () => fetchEncodedAccount(rpc, await configPda()));
-  if (!acc.exists) return null;
-  const d = acc.data;
-  let o = 8;
-  const key = () => dec.decode(d.subarray(o, (o += 32)));
-  const opt = () => (d[o++] === 1 ? key() : null);
-  const i64 = () => {
-    const v = new DataView(d.buffer, d.byteOffset + o, 8).getBigInt64(0, true);
-    o += 8;
-    return v;
-  };
-  const c = { admin: key(), pendingAdmin: opt(), hook: key(), minNotice: i64(), maxHorizon: i64() };
-  o += 2; // bump, authority_bump
-  return { ...c, complianceAdmin: key(), pendingComplianceAdmin: opt() };
-})();
+const conf = await fetchConfig();
 if (!conf) fail("Config", "not initialized");
 else {
   expect("admin", conf.admin, admin);
   expect("compliance admin", conf.complianceAdmin, complianceAdmin);
-  expect("hook authority", conf.hook, hook);
+  expect("hook authority", conf.hookAuthority, hook);
   expect("pending admin", String(conf.pendingAdmin), "null");
   expect("pending compliance admin", String(conf.pendingComplianceAdmin), "null");
   expect("min notice", String(conf.minNotice), String(cfg.program.min_notice_seconds));

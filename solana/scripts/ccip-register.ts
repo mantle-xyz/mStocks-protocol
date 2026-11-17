@@ -175,4 +175,4 @@ if (currentLut !== SYSTEM_PROGRAM) {
     ix(router, "set_pool", [[routerConfig, "r"], [tokenAdminRegistry, "w"], [mint, "r"], [lut, "r"], [authority, "sw"]], bytesVec(Uint8Array.of(3, 4, 7))),
   ]);
 }
-console.log("done; next: handoff-mint-authority.ts --yes");
+console.log("done; next: ccip-handoff.ts (hand CCIP admin and pool ownership to the multisig), then handoff-mint-authority.ts --yes");
