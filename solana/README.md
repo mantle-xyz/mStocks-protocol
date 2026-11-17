@@ -47,10 +47,19 @@ dependencies, refresh the lockfile with `npx npm@10 install --package-lock-only`
 ## Network configuration
 
 `config.mainnet.toml` (Solana mainnet ↔ Mantle) and `config.testnet.toml` (Solana devnet ↔ Mantle
-Sepolia) hold everything that is not a secret: public RPC endpoints, the program id, the admins,
-the role holders and the CCIP settings (Mantle selector, TokenAdminRegistry, pool owner, Solana CCIP
-admin). `NETWORK=mainnet|testnet` selects one; the scripts then take addresses from it, and a
-command-line value still overrides it. The operator's whole environment is:
+Sepolia) hold everything that is not a secret, with the same keys in both:
+
+| Section | Holds |
+| --- | --- |
+| `[solana]` | public RPC, an RPC that allows `getProgramAccounts`, Solana's CCIP chain selector |
+| `[mantle]` | chain id, public RPC, Mantle's CCIP chain selector, Router, RMN, TokenAdminRegistry, RegistryModuleOwnerCustom, the expected token admin (multisig 1's timelock) and the pool owner (multisig 1's Safe) |
+| `[program]`, `[admins]`, `[roles]` | program id and limits, the Squads multisigs, the role holders |
+| `[ccip]` | the Solana CCIP token admin and pool owner (the admin's Squads) |
+
+`NETWORK=mainnet|testnet` selects one, for the TypeScript scripts (`lib/config.ts`) and the Mantle
+bash scripts (`lib/config.sh`) alike; a command-line value still overrides it. A network-specific
+address lives only in these files, so a new deployment or a changed Chainlink address is a one-line
+config change. The operator's whole environment is:
 
 ```bash
 export NETWORK=mainnet           # or testnet
@@ -58,8 +67,10 @@ export RPC_URL=...               # provider URL with an API key (keys never go i
 export SQUADS_MEMBER=...         # your Squads member keypair, if you sign for a multisig
 ```
 
-Without `NETWORK` the scripts are in local mode (every address on the command line, RPC = a local
-validator), which the local tests use. `NETWORK` may also be a path to a `.toml` file.
+Without `NETWORK` the TypeScript scripts are in local mode (every address on the command line, RPC =
+a local validator), which the local tests use; the Mantle scripts (`ccip-mantle-setup.sh`,
+`ccip-send-evm.sh`, `ccip-manual-exec-evm.sh`) refuse to run without it. `NETWORK` may also be a
+path to a `.toml` file. `MANTLE_RPC_URL` overrides `[mantle].rpc`.
 
 Commands that work from the config alone:
 
@@ -115,14 +126,14 @@ program (`scripts/fetch-fixtures.sh` dumps it).
 | `check-multiplier.ts` | — | Reconcile each mint's multiplier with its Mantle `ScaledToken` (address read from Core); exits 1 on mismatch for alerting. Needs `MANTLE_RPC_URL` |
 | `check-config.ts` | — | Check a deployment against `config.mainnet.toml` / `config.testnet.toml`: admins, hook authority, notice and horizon, the program's upgrade authority, and every role's holders (no missing, no extra; the retired Clawback has none). Exits 1 on a problem. Listing holders needs `getProgramAccounts` (`--roles-rpc`) |
 | `check-supply.ts` | — | Check each mint's Solana supply against the tokens locked in its Mantle pool (token from Core, pool from `--registry`, the Mantle TokenAdminRegistry); exits 1 if Solana holds more than is locked. Needs `MANTLE_RPC_URL` |
-| `ccip-mantle-setup.sh` | Deployer, then the multisigs | Mantle side of CCIP for one token: `deploy` the LockRelease pool (pinned CCIP 1.6.4) and point it at Solana; `multisig` writes Safe Transaction Builder files for the token admin's timelock (CCIP admin registration, `setPool`) and the pool owner — when the pool owner is a proposer of that timelock (multisig 1's Safe), its acceptance is in the schedule file, so the Safe signs twice; `verify`. `NETWORK=mainnet` (default) or `testnet`; needs `MANTLE_RPC_URL` |
+| `ccip-mantle-setup.sh` | Deployer, then the multisigs | Mantle side of CCIP for one token: `deploy` the LockRelease pool (pinned CCIP 1.6.4) and point it at Solana; `multisig` writes Safe Transaction Builder files for the token admin's timelock (CCIP admin registration, `setPool`) and the pool owner — when the pool owner is a proposer of that timelock (multisig 1's Safe), its acceptance is in the schedule file, so the Safe signs twice; `verify` (also checks the token admin against `[mantle].token_admin`). Network constants and the default pool owner come from the config; `NETWORK` is required |
 | `ccip-handoff.ts` | Deployer, then Squads | Hand a mint's CCIP token admin and BurnMint pool ownership to the Squads vault: proposes, then signs the acceptance (keypair) or puts both acceptances in one Squads proposal (multisig address). `ccip-register.ts --handoff-to` does the same; re-run this without a member key to confirm the handoff |
 | `handoff-mint-authority.ts` | Deployer (current mint authority) | Give the mint authority to the CCIP pool signer PDA (dry run unless `--yes`); `ccip-register.ts --handoff-mint-authority` does it as part of the registration |
 | `ccip-register.ts` | Deployer (current mint authority) | Register the mint with CCIP for one remote EVM chain in two transactions: (1) token admin (propose + accept), BurnMint pool, pool token account, pool lookup table; (2) remote chain (token, pool, decimals), rate limits, `set_pool`, and with `--handoff-to <multisig>` the proposals to the multisig, with `--handoff-mint-authority` the mint authority to the pool. Then the multisig's acceptance as one Squads proposal (`--squads-member`). Skips steps already done |
 | `ccip-send.ts` | Token holder | Send tokens to an EVM address through CCIP, paying in SOL (testing / ops checks) |
-| `ccip-send-evm.sh` | Token holder on Mantle | The other direction: send a Mantle token to a Solana wallet through CCIP, paying in MNT; prints the message id |
+| `ccip-send-evm.sh` | Token holder on Mantle | The other direction: send a Mantle token to a Solana wallet through CCIP, paying in MNT; prints the message id. Router, selector and RPC from the config (`NETWORK` required) |
 | `ccip-manual-exec.ts` | Anyone (pays the fee) | Re-execute an inbound CCIP message whose automatic execution failed (e.g. it arrived while the mint was paused; the DON does not retry), from the failed execution transaction. Allowed 20 minutes after the commit; a second run is skipped by the OffRamp |
-| `ccip-manual-exec-evm.sh` | Anyone (pays the gas) | Same for the Mantle side (Solana → Mantle): re-execute a message whose execution failed (Mantle token paused, receiver sanctioned, inbound rate limit, or out of gas), from the failed execution transaction. `TOKEN_GAS` raises the per-token gas, e.g. 150000 for a receiver that has never held the token |
+| `ccip-manual-exec-evm.sh` | Anyone (pays the gas) | Same for the Mantle side (Solana → Mantle): re-execute a message whose execution failed (Mantle token paused, receiver sanctioned, inbound rate limit, or out of gas), from the failed execution transaction. `TOKEN_GAS` raises the per-token gas, e.g. 150000 for a receiver that has never held the token. RPC from the config (`NETWORK` required) |
 | `devnet-ccip-smoke.sh` | Role keys + a holder | Basic-function smoke on a CCIP-connected mint against devnet and Mantle Sepolia: transfer, pause, freeze, clawback, metadata, the same multiplier on both chains, `ccip_send` after it, holder burn |
 | `pause.ts` | `Pauser` / `Unpauser` (`--resume`) | Pause or resume one mint (the mainnet Unpauser is a multisig: `--operator <multisig> --squads-member <kp>`) |
 | `pause-all.ts` | `Pauser` | Emergency pause of every registered mint, 8 per transaction (`--dry-run` lists them; `--mints` if the RPC rejects `getProgramAccounts`) |

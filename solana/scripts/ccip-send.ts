@@ -39,7 +39,7 @@ const args = parseArgs();
 const sender = await loadKeypair(required(args, "sender"));
 const mint = address(required(args, "mint"));
 const amount = BigInt(required(args, "amount"));
-const destSelector = BigInt(setting(args["dest-selector"], "ccip.mantle_selector", "dest-selector"));
+const destSelector = BigInt(setting(args["dest-selector"], "mantle.chain_selector", "dest-selector"));
 const receiver = encodeEvmAddress(required(args, "receiver"));
 const router = address(args.router ?? "Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C");
 

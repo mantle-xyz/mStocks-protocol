@@ -78,7 +78,7 @@ else {
 }
 
 console.log(`== Mantle`);
-const mantlePool = await registeredPool(config.ccip.mantle_token_admin_registry, token);
+const mantlePool = await registeredPool(config.mantle.token_admin_registry, token);
 const sub = (label: string, cmd: string, cmdArgs: string[]) => {
   const r = spawnSync(cmd, cmdArgs, { cwd: ROOT, encoding: "utf8", env: process.env });
   const out = `${r.stdout}${r.stderr}`.split("\n").filter((l) => l && !l.includes("npm warn"));

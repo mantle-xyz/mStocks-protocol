@@ -25,33 +25,26 @@
 #            Checks registry, pool owner, remote chain, rate limits, rebalancer, sanctions; exits 1 on a
 #            problem.
 #
-# Env: NETWORK=mainnet|testnet (required: Mantle ↔ Solana mainnet, or Mantle Sepolia ↔ Solana devnet)
-# selects config.<network>.toml, which gives the Mantle RPC (MANTLE_RPC_URL overrides it) and the
-# default <pool-owner> (ccip.mantle_pool_owner). The Solana side is ccip-register.ts / ccip-handoff.ts.
+# Env: NETWORK=mainnet|testnet (required) selects config.<network>.toml: the Mantle chain and its
+# CCIP contracts ([mantle]), the Solana selector ([solana]), the expected token admin and the default
+# <pool-owner>. MANTLE_RPC_URL overrides [mantle].rpc. The Solana side is ccip-register.ts.
 set -euo pipefail
 # File arguments (key files, --out, JSON files) are relative to the caller's directory.
 CALLER=$PWD
 abspath() { case $1 in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$CALLER" "$1" ;; esac; }
 cd "$(dirname "$0")/.."
-NETWORK=${NETWORK:?set NETWORK=mainnet or NETWORK=testnet}
-CONFIG_FILE=config.$NETWORK.toml
-cfg() { # dotted key of the network config → value ("" when unset)
-  python3 -I -c 'import sys, tomllib
-d = tomllib.load(open(sys.argv[1], "rb"))
-for k in sys.argv[2].split("."): d = d.get(k, "") if isinstance(d, dict) else ""
-print(d)' "$CONFIG_FILE" "$1"
-}
-[ -f "$CONFIG_FILE" ] || { echo "no $CONFIG_FILE for NETWORK=$NETWORK" >&2; exit 1; }
-RPC=${MANTLE_RPC_URL:-$(cfg network.mantle_rpc)}
+source scripts/lib/config.sh
+require_network
+RPC=${MANTLE_RPC_URL:-$(cfg_required mantle.rpc)}
+CHAIN_ID=$(cfg_required mantle.chain_id)
+ROUTER=$(cfg_required mantle.router)
+RMN=$(cfg_required mantle.rmn)
+TAR=$(cfg_required mantle.token_admin_registry)
+MODULE=$(cfg_required mantle.registry_module)
+SOLANA_SELECTOR=$(cfg_required solana.chain_selector)
+TOKEN_ADMIN=$(cfg mantle.token_admin)   # expected admin of every token; checked when set
 CCIP_VERSION=1.6.4
 POOL_PROGRAM=41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB
-case $NETWORK in
-  mainnet) CHAIN_ID=5000; ROUTER=0x670052635a9850bb45882Cb2eCcF66bCff0F41B7; RMN=0x91E2186E93F0ECeDDCdf9850078F104daB085E79
-           TAR=0x000A744940eB5D857c0d61d97015DFc83107404F; MODULE=0xf49f81b3d2F2a79b706621FA2D5934136352140c; SOLANA_SELECTOR=124615329519749607 ;;
-  testnet) CHAIN_ID=5003; ROUTER=0xFd33fd627017fEf041445FC19a2B6521C9778f86; RMN=0xcCB84Ec3F6AFdD2052134f74aaAc95Ae41A7B333
-           TAR=0x0F1eE88A582f31d92510E300fc1330AA5a525D51; MODULE=0xf76cE612250eeEb8889F49FBCB11f1c2705305F6; SOLANA_SELECTOR=16423721717087811551 ;;
-  *) echo "NETWORK must be mainnet or testnet" >&2; exit 1 ;;
-esac
 DEFAULT_ADMIN_ROLE=0x0000000000000000000000000000000000000000000000000000000000000000
 ZERO=0x0000000000000000000000000000000000000000
 RL="(bool,uint128,uint128)"
@@ -83,6 +76,10 @@ send() { # key-file to sig args... → prints the tx hash; exits on failure
   tx_result "$out" || die "transaction failed"
 }
 is_timelock() { call "$1" "getMinDelay()(uint256)" >/dev/null 2>&1; }
+expect_token_admin() { # the token's admin must be the config's mantle.token_admin (multisig 1's timelock)
+  [ -z "$TOKEN_ADMIN" ] || [ "$(lower "$1")" = "$(lower "$TOKEN_ADMIN")" ] ||
+    die "token admin is $1, not mantle.token_admin $TOKEN_ADMIN in $CONFIG_FILE"
+}
 token_admin() { # the token's single DEFAULT_ADMIN_ROLE holder
   local n; n=$(call "$1" "getRoleMemberCount(bytes32)(uint256)" $DEFAULT_ADMIN_ROLE | awk '{print $1}')
   [ "$n" = 1 ] || die "token has $n DEFAULT_ADMIN_ROLE holders; expected exactly one"
@@ -139,8 +136,8 @@ PY
 cmd_deploy() {
   [ $# -ge 3 ] || die "usage: deploy <deployer-key-file> <token> <solana-mint> [<pool-owner>] (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit) [--rate-limit-admin <addr>]"
   local key token=$2 mint=$3 owner; key=$(abspath "$1"); shift 3
-  if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then owner=$1; shift; else owner=$(cfg ccip.mantle_pool_owner); fi
-  [ -n "$owner" ] || die "no <pool-owner>: pass it or fill ccip.mantle_pool_owner in $CONFIG_FILE"
+  if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then owner=$1; shift; else owner=$(cfg mantle.pool_owner); fi
+  [ -n "$owner" ] || die "no <pool-owner>: pass it or fill mantle.pool_owner in $CONFIG_FILE"
   local cap="" rate="" nolimit="" rladmin=""
   while [ $# -gt 0 ]; do case $1 in
     --rate-capacity) cap=$2; shift 2 ;; --rate-per-second) rate=$2; shift 2 ;;
@@ -155,6 +152,7 @@ cmd_deploy() {
   echo "== checks ($NETWORK)"
   [ "$(call "$token" "decimals()(uint8)")" = 18 ] || die "token decimals are not 18"
   local admin; admin=$(token_admin "$token")
+  expect_token_admin "$admin"
   echo "  token $token ($(call "$token" "symbol()(string)")), admin $admin$(is_timelock "$admin" && echo " (timelock, delay $(call "$admin" "getMinDelay()(uint256)" | awk '{print $1}') s)")"
   [ "$(call $ROUTER "isChainSupported(uint64)(bool)" $SOLANA_SELECTOR)" = true ] || die "router does not support the Solana lane"
   local pool_in_registry; pool_in_registry=$(call $TAR "getPool(address)(address)" "$token")
@@ -211,11 +209,12 @@ batch_files() { # actor tag (target data)... → JSON files for one actor
 cmd_multisig() {
   [ $# -ge 2 ] || die "usage: multisig <token> <pool> [<pool-owner>] [--out <dir>]"
   TOKEN_ADDR=$1; POOL_ADDR=$2; local owner; shift 2
-  if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then owner=$1; shift; else owner=$(cfg ccip.mantle_pool_owner); fi
-  [ -n "$owner" ] || die "no <pool-owner>: pass it or fill ccip.mantle_pool_owner in $CONFIG_FILE"
+  if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then owner=$1; shift; else owner=$(cfg mantle.pool_owner); fi
+  [ -n "$owner" ] || die "no <pool-owner>: pass it or fill mantle.pool_owner in $CONFIG_FILE"
   OUT=$CALLER; while [ $# -gt 0 ]; do case $1 in --out) OUT=$(abspath "$2"); shift 2 ;; *) die "unknown option $1" ;; esac; done
   mkdir -p "$OUT"
   local sym admin; sym=$(call "$TOKEN_ADDR" "symbol()(string)" | tr -d '"'); admin=$(token_admin "$TOKEN_ADDR")
+  expect_token_admin "$admin"
   local cfg; cfg=$(call $TAR "getTokenConfig(address)((address,address,address))" "$TOKEN_ADDR" | tr -d '() ')
   local reg_admin=${cfg%%,*} rest=${cfg#*,}; local reg_pending=${rest%%,*} reg_pool=${rest#*,}
   echo "token $TOKEN_ADDR ($sym), admin $admin; registry admin $reg_admin pending $reg_pending pool $reg_pool"
@@ -278,6 +277,7 @@ cmd_verify() {
   local cfg; cfg=$(call $TAR "getTokenConfig(address)((address,address,address))" "$token" | tr -d '() ')
   check "registry pool" "${cfg##*,}" "$pool"
   check "registry admin (= token admin)" "${cfg%%,*}" "$admin"
+  [ -z "$TOKEN_ADMIN" ] || check "token admin (= mantle.token_admin)" "$admin" "$TOKEN_ADMIN"
   local compliance; compliance=$(call "$token" "compliance()(address)")
   for a in "$pool" $ROUTER; do check "$a not sanctioned" "$(call "$compliance" "isSanctioned(address)(bool)" "$a")" false; done
   [ $bad = 0 ] && echo "PASS" || { echo "FAILED"; exit 1; }

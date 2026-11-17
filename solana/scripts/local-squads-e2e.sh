@@ -52,10 +52,12 @@ MEMBERS="$(pk m1),$(pk m2),$(pk m3)"
 create() { RPC_URL=$LOCAL ts scripts/squads.ts create --creator "$D" --members "$MEMBERS" --threshold 2 --time-lock "$1" | awk '/^multisig /{print $2}'; }
 ADMIN_MS=$(create "$TL"); COMPLIANCE_MS=$(create "$TL"); UPGRADE_MS=$(create $((TL * 2))); UNPAUSER_MS=$(create 0)
 cat >"$WORK/config.toml" <<EOF
-[network]
-solana_rpc = "$LOCAL"
+[solana]
+rpc = "$LOCAL"
 roles_rpc = "$LOCAL"
-mantle_rpc = ""
+chain_selector = ""
+[mantle]
+rpc = ""
 [program]
 id = "$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)"
 min_notice_seconds = 300
@@ -74,9 +76,6 @@ unpauser = ["$UNPAUSER_MS"]
 freezer = ["$(pk kms)"]
 unfreezer = ["$(pk kms)"]
 [ccip]
-mantle_selector = ""
-mantle_token_admin_registry = ""
-mantle_pool_owner = ""
 solana_ccip_admin = ""
 EOF
 export NETWORK=$WORK/config.toml SQUADS_MEMBER=$WORK/m1.json

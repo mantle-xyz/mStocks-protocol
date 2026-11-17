@@ -52,7 +52,7 @@ const mantleToken = encodeEvmAddress(mantleTokenHex);
 // nothing is copied by hand; --name / --symbol / --isin / --initial-multiplier-1e18 override them.
 // Read whenever Mantle is reachable (network config or MANTLE_RPC_URL), and in any case when a
 // value is missing; local tests pass everything and have no Mantle.
-const mantleReachable = Boolean(process.env.MANTLE_RPC_URL || config?.network.mantle_rpc);
+const mantleReachable = Boolean(process.env.MANTLE_RPC_URL || config?.mantle.rpc);
 const needsMantle = mantleReachable || !args.name || !args.symbol || !args["initial-multiplier-1e18"];
 const fromMantle = needsMantle ? await scaledToken(mantleTokenHex) : null;
 if (fromMantle)

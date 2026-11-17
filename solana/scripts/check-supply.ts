@@ -26,8 +26,8 @@ const SELECTORS = {
 };
 
 const args = parseArgs();
-const mantleRpc = process.env.MANTLE_RPC_URL || config?.network.mantle_rpc || required(args, "mantle-rpc");
-const registry = setting(args.registry, "ccip.mantle_token_admin_registry", "registry");
+const mantleRpc = process.env.MANTLE_RPC_URL || config?.mantle.rpc || required(args, "mantle-rpc");
+const registry = setting(args.registry, "mantle.token_admin_registry", "registry");
 const mints: Address[] = required(args, "mints")
   .split(",")
   .map((m) => address(m.trim()));

@@ -6,9 +6,13 @@
 # OffRamp's manuallyExecute. A FAILURE message can be re-executed at once; messages in the report
 # that already succeeded are skipped by the OffRamp. TOKEN_GAS raises the gas for each token
 # transfer (releaseOrMint) when the original destGasAmount was too low; 0 keeps it.
-#   MANTLE_RPC_URL=<rpc> [TOKEN_GAS=150000] scripts/ccip-manual-exec-evm.sh <failed execution tx hash> <private key file>
+#   NETWORK=mainnet|testnet [TOKEN_GAS=150000] scripts/ccip-manual-exec-evm.sh <failed execution tx hash> <private key file>
+# The Mantle RPC comes from config.<network>.toml ([mantle].rpc); MANTLE_RPC_URL overrides it. The
+# OffRamp is the failed transaction's target, so nothing else is network-specific.
 set -euo pipefail
-: "${MANTLE_RPC_URL:?set MANTLE_RPC_URL}"
+source "$(dirname "$0")/lib/config.sh"
+require_network
+MANTLE_RPC_URL=${MANTLE_RPC_URL:-$(cfg_required mantle.rpc)}
 TX=${1:?failed execution tx hash}
 KEY=${2:?file with the hex private key that pays the gas}
 

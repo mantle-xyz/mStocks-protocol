@@ -52,7 +52,7 @@ import { loadKeypair, parseArgs, required, rpc, send, withRetry } from "./lib/en
 const args = parseArgs();
 const authority = await loadKeypair(required(args, "authority"));
 const mint = address(required(args, "mint"));
-const remoteSelector = BigInt(setting(args["remote-selector"], "ccip.mantle_selector", "remote-selector"));
+const remoteSelector = BigInt(setting(args["remote-selector"], "mantle.chain_selector", "remote-selector"));
 const remoteToken = encodeEvmAddress(required(args, "remote-token"));
 const remotePool = encodeEvmAddress(required(args, "remote-pool"));
 const remoteDecimals = Number(args["remote-decimals"] ?? 18);

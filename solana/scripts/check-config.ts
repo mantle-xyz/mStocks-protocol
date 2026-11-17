@@ -5,7 +5,7 @@
 // problem, so it can gate each launch step. Addresses in the config may be Squads multisig accounts;
 // they are checked as their vaults, the addresses that sign.
 //   NETWORK=mainnet tsx scripts/check-config.ts [--config <file>] [--roles-rpc <rpc>]
-// Listing role holders needs getProgramAccounts: the config's network.roles_rpc, or --roles-rpc.
+// Listing role holders needs getProgramAccounts: the config's solana.roles_rpc, or --roles-rpc.
 import { readFileSync } from "node:fs";
 import { fetchEncodedAccount, getAddressDecoder } from "@solana/kit";
 import { parse } from "smol-toml";
@@ -20,7 +20,7 @@ if (!path) throw new Error("set NETWORK=mainnet|testnet or pass --config <file>"
 const cfg = parse(readFileSync(path, "utf8")) as unknown as Config;
 const toSigner = (v: string) => (v ? signerAddress(v) : Promise.resolve(v));
 for (const k of Object.keys(cfg.admins) as (keyof Config["admins"])[]) cfg.admins[k] = await toSigner(cfg.admins[k]);
-const rolesRpc = args["roles-rpc"] ?? cfg.network?.roles_rpc ?? RPC_URL;
+const rolesRpc = args["roles-rpc"] ?? cfg.solana?.roles_rpc ?? RPC_URL;
 const dec = getAddressDecoder();
 
 let failures = 0;

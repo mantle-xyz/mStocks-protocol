@@ -31,7 +31,7 @@ for (const [k, chainValue] of [["admin", onChain.admin], ["compliance", onChain.
 }
 
 const want = await configuredRoles(config.roles);
-const have = await roleHolders(args["roles-rpc"] ?? config.network.roles_rpc ?? RPC_URL);
+const have = await roleHolders(args["roles-rpc"] ?? config.solana.roles_rpc ?? RPC_URL);
 const changes: Record<"admin" | "compliance", { ixs: Instruction[]; lines: string[] }> = {
   admin: { ixs: [], lines: [] },
   compliance: { ixs: [], lines: [] },

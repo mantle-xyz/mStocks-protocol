@@ -17,7 +17,7 @@ const SKEW_SECONDS = 60n;
 const SELECTORS = { uiMultiplier: "0xa60bf13d", newUIMultiplier: "0xdc767007", effectiveAt: "0x97a4064f" };
 
 const args = parseArgs();
-const mantleRpc = process.env.MANTLE_RPC_URL || config?.network.mantle_rpc || required(args, "mantle-rpc");
+const mantleRpc = process.env.MANTLE_RPC_URL || config?.mantle.rpc || required(args, "mantle-rpc");
 const mints: Address[] = required(args, "mints").split(",").map((m) => address(m.trim()));
 
 async function ethCall(to: string, data: string): Promise<bigint> {
