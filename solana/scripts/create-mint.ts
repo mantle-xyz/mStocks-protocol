@@ -11,34 +11,13 @@
 // The payer stays mint authority until the CCIP pool is registered (ccip-register.ts
 // --handoff-mint-authority hands it to the pool). If Mantle has a pending multiplier, schedule it on
 // this mint right after creation.
-import { address, generateKeyPairSigner } from "@solana/kit";
-import { getCreateAccountInstruction } from "@solana-program/system";
-import {
-  AccountState,
-  extension,
-  getInitializeDefaultAccountStateInstruction,
-  getInitializeMetadataPointerInstruction,
-  getInitializeMint2Instruction,
-  getInitializePausableConfigInstruction,
-  getInitializePermanentDelegateInstruction,
-  getInitializeScaledUiAmountMintInstruction,
-  getInitializeTokenMetadataInstruction,
-  getInitializeTransferHookInstruction,
-  getMintSize,
-  getUpdateTokenMetadataFieldInstruction,
-  getUpdateTokenMetadataUpdateAuthorityInstruction,
-} from "@solana-program/token-2022";
-import {
-  authorityPda, configPda, coreInstruction, encodeEvmAddress, mantleTokenPda, mintStatePda, rolePda, toF64,
-  TOKEN_2022_PROGRAM_ID,
-} from "./lib/core.ts";
+import { AccountRole, generateKeyPairSigner, type Instruction } from "@solana/kit";
 import { signerAddress } from "./lib/admin.ts";
 import { config, setting } from "./lib/config.ts";
+import { CORE_PROGRAM_ID } from "./lib/core.ts";
+import { loadKeypair, parseArgs, required, rpc, send, transactionSize } from "./lib/env.ts";
 import { scaledToken } from "./lib/mantle.ts";
-import { loadKeypair, parseArgs, required, rpc, send } from "./lib/env.ts";
-
-const DECIMALS = 9;
-const NO_HOOK_PROGRAM = address("11111111111111111111111111111111");
+import { createMintInstructions, evmAddressBytes, mintSizes } from "./lib/mint.ts";
 
 const args = parseArgs();
 const payer = await loadKeypair(required(args, "payer"));
@@ -47,7 +26,7 @@ const registrarKey = args.registrar ? await loadKeypair(args.registrar) : payer;
 const registrar = registrarKey.address === payer.address ? payer : registrarKey;
 const hookAuthority = await signerAddress(setting(args["hook-authority"], "admins.hook_authority", "hook-authority"));
 const mantleTokenHex = required(args, "mantle-token");
-const mantleToken = encodeEvmAddress(mantleTokenHex);
+evmAddressBytes(mantleTokenHex); // a malformed address fails here, before anything is read
 // Name, symbol, ISIN and the initial multiplier default to the Mantle token's, read on chain, so
 // nothing is copied by hand; --name / --symbol / --isin / --initial-multiplier-1e18 override them.
 // Read whenever Mantle is reachable (network config or MANTLE_RPC_URL), and in any case when a
@@ -64,66 +43,29 @@ const isin = args.isin ?? (fromMantle?.assetCode || undefined);
 const multiplier1e18 = BigInt(args["initial-multiplier-1e18"] ?? fromMantle!.multiplier);
 if (fromMantle && multiplier1e18 !== fromMantle.multiplier)
   throw new Error(`--initial-multiplier-1e18 ${multiplier1e18} differs from Mantle's uiMultiplier ${fromMantle.multiplier}`);
-const initialMultiplier = toF64(multiplier1e18);
-const mintSigner = args["mint-keypair"] ? await loadKeypair(args["mint-keypair"]) : await generateKeyPairSigner();
-const mint = mintSigner.address;
-const authority = await authorityPda();
+const mint = args["mint-keypair"] ? await loadKeypair(args["mint-keypair"]) : await generateKeyPairSigner();
 
-// Fixed-size extensions decide the account size at creation; token metadata is appended later
-// (Token-2022 reallocates), so the rent covers the final size up front.
-const fixed = [
-  extension("ScaledUiAmountConfig", { authority, multiplier: initialMultiplier, newMultiplierEffectiveTimestamp: 0n, newMultiplier: initialMultiplier }),
-  extension("PausableConfig", { authority, paused: false }),
-  extension("MetadataPointer", { authority, metadataAddress: mint }),
-  extension("DefaultAccountState", { state: AccountState.Initialized }),
-  extension("TransferHook", { authority: hookAuthority, programId: NO_HOOK_PROGRAM }),
-  extension("PermanentDelegate", { delegate: authority }),
-];
-const metadata = extension("TokenMetadata", {
-  updateAuthority: authority,
-  mint,
-  name,
-  symbol,
-  uri,
-  additionalMetadata: new Map(isin ? [["isin", isin]] : []),
-});
-const space = BigInt(getMintSize(fixed));
-const lamports = await rpc.getMinimumBalanceForRentExemption(BigInt(getMintSize([...fixed, metadata]))).send();
-
-// One transaction, so a mint is either fully configured and registered or not created at all:
-// account, extensions and mint (the payer is the temporary mint authority until the CCIP
-// handoff); metadata written by the payer, then handed to Core; register_mint, which validates the
-// whole configuration on chain. With realistic metadata it is about 1130 bytes when the registrar
-// is the payer (about 1230 when it is a separate signer); send() refuses anything over 1232.
-const register = coreInstruction(
-  "register_mint",
-  {
-    payer,
-    registrar,
-    config: await configPda(),
-    role_entry: await rolePda("MintRegistrar", registrar.address),
-    mint,
-    mint_state: await mintStatePda(mint),
-    mantle_index: await mantleTokenPda(mantleToken),
-    authority,
-  },
-  mantleToken,
-);
-const signature = await send(payer, [
-  getCreateAccountInstruction({ payer, newAccount: mintSigner, lamports, space, programAddress: TOKEN_2022_PROGRAM_ID }),
-  getInitializeScaledUiAmountMintInstruction({ mint, authority, multiplier: initialMultiplier }),
-  getInitializePausableConfigInstruction({ mint, authority }),
-  getInitializeMetadataPointerInstruction({ mint, authority, metadataAddress: mint }),
-  getInitializeDefaultAccountStateInstruction({ mint, state: AccountState.Initialized }),
-  getInitializeTransferHookInstruction({ mint, authority: hookAuthority, programId: NO_HOOK_PROGRAM }),
-  getInitializePermanentDelegateInstruction({ mint, delegate: authority }),
-  getInitializeMint2Instruction({ mint, decimals: DECIMALS, mintAuthority: payer.address, freezeAuthority: authority }),
-  getInitializeTokenMetadataInstruction({ metadata: mint, updateAuthority: payer.address, mint, mintAuthority: payer, name, symbol, uri }),
-  ...(isin
-    ? [getUpdateTokenMetadataFieldInstruction({ metadata: mint, updateAuthority: payer, field: { __kind: "Key", fields: ["isin"] }, value: isin })]
-    : []),
-  getUpdateTokenMetadataUpdateAuthorityInstruction({ metadata: mint, updateAuthority: payer, newUpdateAuthority: authority }),
-  register,
-]);
-console.log(`create and register mint ${mint} (registrar ${registrar.address}): ${signature}`);
-console.log(`mint: ${mint}`);
+// One transaction, so a mint is either fully configured and registered or not created at all; the
+// instructions come from lib/mint.ts, the reference for the backend. With realistic metadata it is
+// about 1130 bytes when the registrar is the payer (about 1230 when it is a separate signer); send()
+// refuses anything over 1232.
+const params = {
+  coreProgram: CORE_PROGRAM_ID, payer, registrar, mint, hookAuthority,
+  mantleToken: mantleTokenHex, name, symbol, uri, isin, multiplier1e18,
+};
+const lamports = await rpc.getMinimumBalanceForRentExemption((await mintSizes(params)).finalSize).send();
+const ixs = await createMintInstructions(params, lamports);
+if (args["dry-run"] === "true") {
+  // Test vectors for another implementation: every instruction byte for byte; nothing is sent.
+  const roles = { [AccountRole.READONLY]: "r", [AccountRole.WRITABLE]: "w", [AccountRole.READONLY_SIGNER]: "rs", [AccountRole.WRITABLE_SIGNER]: "ws" };
+  ixs.forEach((ix: Instruction, i) => {
+    console.log(`${i + 1}. program ${ix.programAddress}`);
+    ix.accounts?.forEach((a) => console.log(`     ${roles[a.role].padEnd(2)} ${a.address}`));
+    console.log(`     data ${Buffer.from(ix.data ?? []).toString("hex")}`);
+  });
+  console.log(`rent ${lamports} lamports; transaction ${await transactionSize(payer, ixs)} bytes; mint ${mint.address} (not sent)`);
+  process.exit(0);
+}
+const signature = await send(payer, ixs);
+console.log(`create and register mint ${mint.address} (registrar ${registrar.address}): ${signature}`);
+console.log(`mint: ${mint.address}`);

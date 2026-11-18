@@ -29,7 +29,13 @@ echo "== grant MultiplierScheduler, and MintRegistrar to the deployer"
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MultiplierScheduler --member "$(pk scheduler)"
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MintRegistrar --member "$(pk deployer)"
 
-echo "== create-mint"
+echo "== create-mint (--dry-run prints the instructions, the backend's test vectors, and sends nothing)"
+DRY=$(npx tsx scripts/create-mint.ts --dry-run --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
+  --name "Apple mStock" --symbol AAPLm --uri https://example.com/aaplm.json --isin US0378331005 \
+  --mantle-token 0x00000000000000000000000000000000000000aa --initial-multiplier-1e18 1000000000000000000)
+echo "$DRY" | grep -E "^12\. program|^rent " || { echo "$DRY"; echo "FAIL: dry run"; exit 1; }
+DRY_MINT=$(echo "$DRY" | awk '/^rent /{print $(NF-2)}')
+if solana -u l account "$DRY_MINT" >/dev/null 2>&1; then echo "FAIL: the dry run created $DRY_MINT"; exit 1; fi
 OUT=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
   --name "Apple mStock" --symbol AAPLm --uri https://example.com/aaplm.json --isin US0378331005 \
   --mantle-token 0x00000000000000000000000000000000000000aa --initial-multiplier-1e18 1000000000000000000)

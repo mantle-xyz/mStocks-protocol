@@ -197,7 +197,7 @@ Run once per stock, in this order:
 
 **Transactions:** with the Mantle token already in place, the operators send three Solana transactions and one Mantle command: steps 1–4 are one transaction (`create-mint.ts`, all or nothing, about 1,130 of Solana's 1,232 bytes), step 5 is the Mantle deployer's command, and steps 6, 8 and the Solana proposals of step 7 are two transactions (`ccip-register.ts --handoff-to --handoff-mint-authority`, 1,067 and 879 bytes), followed by the Squads proposal holding the multisig's acceptances. The multisigs then sign: on Mantle twice (schedule, which also accepts the pool, and execute after the delay), on Solana one proposal. Steps 6–8 cannot be a single transaction: together they are about 1,500 bytes, over the limit even with a lookup table.
 
-**Creating a mint by contract call (backend integration):** on mainnet the mint is created by a backend, not by the runbook. It is one transaction, signed by the MintRegistrar key (fee payer and temporary mint authority) and the new mint's keypair, with these instructions in order; `create-mint.ts` is the reference implementation:
+**Creating a mint by contract call (backend integration):** on mainnet the mint is created by a backend, not by the runbook. It is one transaction, signed by the MintRegistrar key (fee payer and temporary mint authority) and the new mint's keypair, with these instructions in order. The reference implementation is `scripts/lib/mint.ts` (used by `create-mint.ts`): it stands alone (`@solana/kit` and the System / Token-2022 clients, no config, IDL file or RPC) and takes any kit `TransactionSigner`, so a KMS-backed key can sign; `create-mint.ts --dry-run` prints every instruction byte for byte for given inputs, as test vectors for an implementation in another language:
 
 | # | Program | Instruction | Arguments |
 | --- | --- | --- | --- |
@@ -429,3 +429,26 @@ The DON does not retry a message whose execution failed on the destination chain
 On Mantle, failures that need a fix first (token paused, receiver sanctioned, inbound rate limit exceeded) stay `TOKEN_ERROR` and are not retried automatically: once the cause is removed, operations run `ccip-manual-exec-evm.sh`. Messages that failed on Solana (mint paused, receiver account frozen, rate limit exceeded) are executed with `ccip-manual-exec.ts`. The service's rate-limit monitor only exports pool bucket metrics (`ccip_ratelimit_*`); it does not re-execute anything.
 
 **Before launch (runbook Step 4):** a release with #48 and #49 (mainnet runs `ccip-retry-service/v1.1.0`, which has neither); in `app-mainnet-v133.yaml` a `mantle` chain (selector `1556008542357238666`; its OffRamp for Solana messages, `0x010771998A1F4736BD844939d0bf01ac5cA0f8fa`, as returned by the Mantle Router's `getOffRamps()`), an OffRamp entry for Mantle messages on the `solana` chain (`offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm`), `min_signer_balance` on both chains and `signer_balance_monitor` enabled; the EVM signer funded in MNT. **Per stock (runbook Step 10):** the Mantle token and the Solana mint on `watched_tokens`, and both pools on `ratelimit_monitor.pools`.
+
+---
+
+## 13. Companion service: CCIP binding (to be built)
+
+Once the Mantle ScaledToken exists and the backend has created and registered the Solana mint (§6), the binding connects the two over CCIP. Today it is runbook Steps 6–10, done by hand; it is meant to become a service. What the service has to do, with the scripts as executable references. Each script checks the chain and skips what is already done, so after any failure the service resumes by running the same step again.
+
+| # | Step | Signer | Reference | Done when |
+| --- | --- | --- | --- | --- |
+| 1 | Mantle pool: deploy the LockReleaseTokenPool, point it at the Solana pool and mint, set the rate limits (both directions), propose the pool owner (`[mantle].pool_owner`) | Mantle deployer key (MNT for gas) | `ccip-mantle-setup.sh deploy` | pool deployed; its pending owner is the pool owner |
+| 2 | Solana registration, two transactions: token admin, BurnMint pool, pool token account, lookup table; then the remote chain (Mantle token and pool, 18 decimals), rate limits, `set_pool`, the proposals handing the token admin and the pool to the CCIP admin's Squads, and the mint authority to the pool signer | the mint's temporary mint authority, the key that created the mint (MintRegistrar) | `ccip-register.ts --handoff-to --handoff-mint-authority` | pending token admin and pool owner are the CCIP admin's vault; mint authority is the pool signer |
+| 3 | Multisig files for the signers: Mantle Safe Transaction Builder JSON for the token admin's timelock (schedule, which also accepts the pool when the Safe is a timelock proposer; execute after 12 h); Solana one base58 message for the Squads app with both acceptances | none: the service only produces files | `ccip-mantle-setup.sh multisig`; the `accept … base58` line of step 2 | handed to the signers |
+| 4 | Wait for the multisigs: Mantle TokenAdminRegistry `getTokenConfig(token)` (administrator = the token admin, nothing pending, pool set) and the pool's `owner()`; Solana registry administrator and pool owner = the CCIP admin's vault, nothing pending | — | `ccip-mantle-setup.sh verify`; `registryState` / `poolOwnership` in `lib/ccip.ts` | all set |
+| 5 | Verify the stock | — | `check-stock.ts --mint` | `PASS` |
+| 6 | Companion configuration: mstocks-aml `solana.mints`; retry service `watched_tokens` (token and mint) and `ratelimit_monitor.pools` (both pools); the reconciliation jobs | — (a mantle-config PR, applied by devops) | runbook Step 10 | merged and applied |
+
+**Inputs:** the Mantle token, the Solana mint, rate limits per direction (capacity and refill per second, in each chain's units: 18 decimals on Mantle, 9 on Solana; or explicitly none) and the network config, which holds every address.
+
+**Keys:** the service holds only the Mantle deployer key and the mint's temporary mint authority (it must sign the CCIP self-registration, which is why registration comes before the mint authority goes to the pool). Both keep control of their side's pool configuration only until the multisigs accept (step 4, after the 12 h time locks); then neither has any power over the stock, and `check-stock.ts` verifies the whole configuration. The scripts load keypair files; a service with KMS keys sends the same transactions with a remote signer: the Solana instructions are built in `ccip-register.ts` with `@solana/kit`, whose signers can be any `TransactionSigner`, and the Mantle side is plain contract calls (`ccip-mantle-setup.sh`, via `cast`).
+
+**State per stock:** the step reached, the pool address, transaction signatures, and which multisig files were handed to whom and when, so a restart resumes and operators can see where each stock stands.
+
+**Failures:** a failed or dropped transaction is retried by re-running its step; multisig files not executed in time (for example a day after the time lock) are re-sent and escalated; a failed check stops that stock and alerts. Parameters are never changed automatically on retry.
