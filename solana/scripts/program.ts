@@ -8,7 +8,8 @@
 //                               base58 transaction message for the Squads app; after the members approve and
 //                               execute it, run verify
 //   NETWORK=mainnet DEPLOYER=<keypair> tsx scripts/program.ts <command> [--deployer <keypair>] [--to <squads multisig>]
-// --deployer defaults to the DEPLOYER environment variable.
+// --deployer defaults to the DEPLOYER environment variable: a keypair file or a private key (base58 or a
+// JSON byte array); an inline key goes to the Solana CLI through an owner-only temporary file.
 // The Solana CLI gets -k explicitly: some subcommands otherwise fall back to the configured keypair.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -18,7 +19,7 @@ import { address, fetchEncodedAccount, getAddressDecoder } from "@solana/kit";
 import { printSquadsImport, signerAddress } from "./lib/admin.ts";
 import { setting } from "./lib/config.ts";
 import { CORE_PROGRAM_ID, fetchConfig, programDataPda } from "./lib/core.ts";
-import { deployerPath, loadKeypair, parseArgs, rpc, RPC_URL, withRetry } from "./lib/env.ts";
+import { deployerKey, keypairFile, loadKeypair, parseArgs, rpc, RPC_URL, withRetry } from "./lib/env.ts";
 import { multisigFromConfig, upgradeIx, vaultOf } from "./lib/squads.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
@@ -63,7 +64,7 @@ switch (command) {
     break;
   }
   case "deploy": {
-    const deployer = deployerPath(args, "deployer");
+    const deployer = await keypairFile(deployerKey(args, "deployer"));
     const current = await upgradeAuthority();
     if (current !== "not deployed") throw new Error(`program ${CORE_PROGRAM_ID} is already deployed (upgrade authority ${current}); use upgrade`);
     run("solana", ["program", "deploy", SO, "--program-id", PROGRAM_KEYPAIR, "--upgrade-authority", deployer, "-k", deployer, "-u", RPC_URL, "--use-rpc"]);
@@ -74,7 +75,7 @@ switch (command) {
     if (!(await verify())) process.exit(1);
     break;
   case "handoff": {
-    const deployer = deployerPath(args, "deployer");
+    const deployer = await keypairFile(deployerKey(args, "deployer"));
     if (!(await fetchConfig())) throw new Error("Core is not initialized: run init-core.ts first (it needs the current upgrade authority)");
     const vault = await signerAddress(setting(args.to, "admins.upgrade_authority", "to"));
     if (vault === (await loadKeypair(deployer)).address) throw new Error("the new upgrade authority is the deployer itself");
@@ -84,7 +85,7 @@ switch (command) {
     break;
   }
   case "upgrade": {
-    const deployer = deployerPath(args, "deployer");
+    const deployer = await keypairFile(deployerKey(args, "deployer"));
     const multisigPda = multisigFromConfig(args.to ?? "upgrade_authority");
     const vault = address(vaultOf(multisigPda).toBase58());
     const current = await upgradeAuthority();

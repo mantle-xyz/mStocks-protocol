@@ -64,7 +64,7 @@ config change. The operator's whole environment is:
 ```bash
 export NETWORK=mainnet           # or testnet
 export RPC_URL=...               # provider URL with an API key (keys never go in files); optional
-export DEPLOYER=...              # deployer keypair file, for program.ts and init-core.ts (the deployment steps)
+export DEPLOYER=...              # deployer keypair file or private key (base58 / JSON array), for program.ts and init-core.ts
 ```
 
 Without `NETWORK` the TypeScript scripts are in local mode (every address on the command line, RPC =

@@ -8,11 +8,12 @@
 import { signerAddress } from "./lib/admin.ts";
 import { setting } from "./lib/config.ts";
 import { authorityPda, configPda, coreInstruction, concat, CORE_PROGRAM_ID, encodePubkey, programDataPda } from "./lib/core.ts";
-import { deployerPath, loadKeypair, parseArgs, send } from "./lib/env.ts";
+import { deployerKey, loadSigner, parseArgs, send } from "./lib/env.ts";
 
 const args = parseArgs();
-// The upgrade authority is the deployer until program.ts handoff: --upgrade-authority, else DEPLOYER.
-const upgradeAuthority = await loadKeypair(deployerPath(args, "upgrade-authority"));
+// The upgrade authority is the deployer until program.ts handoff: --upgrade-authority, else DEPLOYER
+// (a keypair file or a private key).
+const upgradeAuthority = await loadSigner(deployerKey(args, "upgrade-authority"));
 const admin = await signerAddress(setting(args.admin, "admins.admin", "admin"));
 const complianceAdmin = await signerAddress(setting(args["compliance-admin"], "admins.compliance_admin", "compliance-admin"));
 const hookAuthority = await signerAddress(setting(args["hook-authority"], "admins.hook_authority", "hook-authority"));

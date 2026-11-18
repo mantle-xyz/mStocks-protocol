@@ -1,9 +1,13 @@
 // Shared plumbing for the mStocks Solana scripts: CLI args, keypairs, RPC and transaction sending.
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   appendTransactionMessageInstructions,
   createKeyPairSignerFromBytes,
+  createKeyPairSignerFromPrivateKeyBytes,
+  getAddressEncoder,
+  getBase58Encoder,
   createSolanaRpc,
   createTransactionMessage,
   getBase64EncodedWireTransaction,
@@ -58,11 +62,57 @@ export function required(args: Record<string, string>, name: string): string {
   return v;
 }
 
-/** The deployer keypair file: --<flag>, else the DEPLOYER environment variable. */
-export function deployerPath(args: Record<string, string>, flag: string): string {
+/** The deployer key: --<flag>, else the DEPLOYER environment variable (see secretKeyBytes). */
+export function deployerKey(args: Record<string, string>, flag: string): string {
   const v = args[flag] ?? process.env.DEPLOYER;
-  if (!v) throw new Error(`missing --${flag} (or export DEPLOYER=<deployer keypair file>)`);
+  if (!v) throw new Error(`missing --${flag} (or export DEPLOYER=<keypair file or private key>)`);
   return v;
+}
+
+const BAD_KEY = "the key is not an existing keypair file, a JSON byte array or a base58 private key";
+
+/**
+ * A key's 64 bytes (secret + public) from a keypair file path, a JSON byte array ("[12,34,…]", the
+ * file's content) or a base58 private key (64 bytes as wallets export it, or a 32-byte seed). The
+ * value itself is never printed.
+ */
+export async function secretKeyBytes(value: string): Promise<Uint8Array> {
+  const path = value.replace(/^~/, homedir());
+  let bytes: Uint8Array;
+  try {
+    if (existsSync(path)) bytes = Uint8Array.from(JSON.parse(readFileSync(path, "utf8")));
+    else if (value.trim().startsWith("[")) bytes = Uint8Array.from(JSON.parse(value));
+    else bytes = Uint8Array.from(getBase58Encoder().encode(value.trim()));
+  } catch {
+    throw new Error(BAD_KEY);
+  }
+  if (bytes.length === 32) {
+    const signer = await createKeyPairSignerFromPrivateKeyBytes(bytes);
+    bytes = Uint8Array.from([...bytes, ...getAddressEncoder().encode(signer.address)]);
+  }
+  if (bytes.length !== 64) throw new Error(BAD_KEY);
+  return bytes;
+}
+
+/** A signer from a keypair file path or an inline private key (see secretKeyBytes). */
+export async function loadSigner(value: string): Promise<KeyPairSigner> {
+  return createKeyPairSignerFromBytes(await secretKeyBytes(value));
+}
+
+/**
+ * A keypair file for the Solana CLI: the path itself, or, for an inline private key, a temporary
+ * file readable only by the owner and removed when the process exits.
+ */
+export async function keypairFile(value: string): Promise<string> {
+  const path = value.replace(/^~/, homedir());
+  if (existsSync(path)) return path;
+  const bytes = await secretKeyBytes(value);
+  const dir = mkdtempSync(join(tmpdir(), "mstocks-key-"));
+  const file = join(dir, "keypair.json");
+  writeFileSync(file, JSON.stringify(Array.from(bytes)), { mode: 0o600 });
+  process.on("exit", () => rmSync(dir, { recursive: true, force: true }));
+  for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => process.exit(130));
+  return file;
 }
 
 export async function loadKeypair(path: string): Promise<KeyPairSigner> {

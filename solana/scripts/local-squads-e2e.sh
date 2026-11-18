@@ -87,7 +87,13 @@ unfreezer = ["$(pk kms)"]
 [ccip]
 solana_ccip_admin = ""
 EOF
-export NETWORK=$WORK/config.toml DEPLOYER=$D
+# DEPLOYER as an inline base58 private key (a keypair file path works the same way).
+b58key() { python3 -I -c 'import sys, json
+a = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; b = bytes(json.load(open(sys.argv[1])))
+n = int.from_bytes(b, "big"); s = ""
+while n: n, r = divmod(n, 58); s = a[r] + s
+print("1" * (len(b) - len(b.lstrip(b"\0"))) + s)' "$1"; }
+export NETWORK=$WORK/config.toml DEPLOYER=$(b58key "$D")
 for ms in admin compliance_admin upgrade_authority unpauser; do
   v=$(ts scripts/squads.ts status --multisig $ms | awk '/^multisig /{print $NF}')
   sol transfer --allow-unfunded-recipient "$v" 1 >/dev/null
