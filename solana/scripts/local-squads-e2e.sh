@@ -6,7 +6,7 @@
 #              unpauser (2/3, no time lock); EOAs: registrar, scheduler, ops (metadata), pauser, kms
 # Multisig actions go the mainnet way: each script prints a base58 transaction, which squads.ts
 # propose imports as the Squads app does (a member's key file stands in for a Ledger).
-# Covers: program.ts deploy / handoff / upgrade / verify, init-core and sync-roles from the config
+# Covers: program.ts deploy / idl / handoff / upgrade / verify (program bytes and IDL), init-core and sync-roles from the config
 # (one proposal per admin, grants and a revoke), check-config, a mint, resume by the unpauser
 # multisig, clawback by the compliance multisig, unregister by the admin multisig, and the negative
 # cases (below threshold, non-member, inside the time lock, wrong admin, handoff before init, old
@@ -30,7 +30,8 @@ sol() { solana -u "$LOCAL" -k "$D" "$@"; }
 solana-test-validator --reset --quiet --ledger "$WORK/ledger" --rpc-port "$PORT" --faucet-port $((PORT + 1001)) \
   --bpf-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb tests/fixtures/token2022.so \
   --bpf-program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf tests/fixtures/squads_v4.so \
-  --account BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr tests/fixtures/squads_program_config.json &
+  --account BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr tests/fixtures/squads_program_config.json \
+  --bpf-program ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S tests/fixtures/program_metadata.so &
 VALIDATOR=$!
 trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
 until sol cluster-version >/dev/null 2>&1; do sleep 1; done
@@ -100,8 +101,20 @@ for ms in admin compliance_admin upgrade_authority unpauser; do
   echo "   $ms: vault $v"
 done
 
-echo "== Step: program.ts deploy (deploy + byte comparison)"
-ts scripts/program.ts deploy | grep -E "matches|DIFFERS|upgrade authority" || fail "deploy"
+echo "== Step: program.ts deploy (deploy, IDL upload, byte and IDL comparison)"
+ts scripts/program.ts deploy | grep -E "IDL|matches|DIFFERS|upgrade authority" || fail "deploy"
+# A smaller IDL (no docs) replaces it directly while the deployer is the upgrade authority; the
+# upgrade below then restores the full IDL through the upgrade multisig.
+python3 -I -c 'import json, sys
+def strip(o):
+    if isinstance(o, dict): return {k: strip(v) for k, v in o.items() if k != "docs"}
+    if isinstance(o, list): return [strip(v) for v in o]
+    return o
+json.dump(strip(json.load(open(sys.argv[1]))), open(sys.argv[2], "w"))' target/idl/mstocks_core.json "$WORK/idl-small.json"
+ts scripts/program.ts idl --idl "$WORK/idl-small.json" | grep -E "^IDL|matches|DIFFERS" || fail "idl (direct)"
+ts scripts/program.ts verify >"$WORK/verify" && fail "verify passed with a different IDL"
+grep -q "on-chain IDL DIFFERS" "$WORK/verify" || fail "verify should see the smaller IDL"
+echo "   verify detects the IDL difference"
 expect_fail "handoff before init-core" "not initialized" npx tsx scripts/program.ts handoff
 
 echo "== Step: init-core (addresses from the config), handoff, sync-roles"
@@ -169,11 +182,12 @@ expect_fail "unregistered mint" "not registered" npx tsx scripts/unregister-mint
 echo "== program.ts upgrade through the upgrade multisig"
 expect_fail "upgrade by the old deployer key" "does not match" \
   sol program deploy target/deploy/mstocks_core.so --program-id "$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)" --upgrade-authority "$D"
-ts scripts/program.ts upgrade >"$WORK/up"; grep -E "^  1\. " "$WORK/up" | cut -c1-160
+ts scripts/program.ts upgrade >"$WORK/up"; grep -E "^IDL|^  [0-9]\. " "$WORK/up" | cut -c1-160
 UP=$(imp upgrade_authority "upgrade" "$WORK/up")
 [ -n "$UP" ] || { cat "$WORK/up"; fail "upgrade proposal"; }
 approve upgrade_authority "$UP"; after_time_lock $((TL * 2)); execute upgrade_authority "$UP"
-ts scripts/program.ts verify | grep -E "matches|DIFFERS"
+ts scripts/program.ts verify | tee "$WORK/verify" | grep -E "matches|DIFFERS|MISSING"
+grep -q "on-chain IDL matches" "$WORK/verify" || fail "IDL not updated by the upgrade"
 ts scripts/check-config.ts | grep -q "^PASS" || fail "check-config after upgrade"
 ts scripts/freeze.ts --operator "$WORK/kms.json" --mint "$MINT" --owner "$(pk user)" --thaw | grep -E "^thaw" | head -1
 echo PASS

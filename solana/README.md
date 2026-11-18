@@ -76,7 +76,7 @@ Commands that work from the config alone:
 
 | Command | Does |
 | --- | --- |
-| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` | `DEPLOYER` (or `--deployer <kp>`) signs. Build and test; first deployment and byte comparison; upgrade authority → the upgrade multisig (only after `init-core`); upgrade: buffer to the vault, then the upgrade as a base58 transaction message for the Squads app |
+| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` / `idl` | `DEPLOYER` (or `--deployer <kp>`) signs. Build and test; first deployment with the IDL uploaded; verify the program bytes and the IDL; upgrade authority → the upgrade multisig (only after `init-core`); upgrade: program buffer and, when the IDL changed, an IDL buffer handed to the vault, then one base58 transaction message for the Squads app that upgrades the program and replaces the IDL; `idl` updates the IDL alone |
 | `init-core.ts` | Initialize with the config's admins and hook authority, signed by `DEPLOYER` (or `--upgrade-authority <kp>`) |
 | `sync-roles.ts [--dry-run]` | Grant every configured role holder that is missing and revoke every holder not configured, one transaction or Squads action per admin |
 | `check-config.ts` | Config vs chain: admins, upgrade authority, every role holder |
@@ -118,11 +118,11 @@ imports the same message the way the app does (decoded exactly as in Squads' ope
 `local-squads-e2e.sh` runs every multisig action like this.
 
 `scripts/local-squads-e2e.sh` rehearses this on a local validator with the mainnet Squads v4
-program (`scripts/fetch-fixtures.sh` dumps it).
+and Program Metadata programs (`scripts/fetch-fixtures.sh` dumps them).
 
 | Script | Who signs | Purpose |
 | --- | --- | --- |
-| `program.ts` | Deployer, then the upgrade multisig | `build` (anchor build + tests + sha256), `deploy` (first deployment + byte comparison), `verify`, `handoff` (upgrade authority → the config's upgrade multisig vault; refused before `init-core`), `upgrade` (buffer → vault → Squads upgrade proposal) |
+| `program.ts` | Deployer, then the upgrade multisig | `build` (anchor build + tests + sha256), `deploy` (first deployment, IDL upload, byte and IDL comparison), `verify` (program bytes and on-chain IDL against the build), `handoff` (upgrade authority → the config's upgrade multisig vault; refused before `init-core`), `upgrade` (program buffer + IDL buffer → vault → one Squads message upgrading the program and the IDL), `idl` (the IDL alone; directly while the deployer is the upgrade authority). The IDL lives where Anchor 1.x keeps it: the program's canonical account in Solana's Program Metadata program, written only by the upgrade authority (`anchor idl fetch` reads it) |
 | `sync-roles.ts` | Admin and compliance admin | Make the on-chain role holders match the config: grants and revokes, one transaction or Squads action per admin (`--dry-run` lists them) |
 | `check-stock.ts` | — | Every check of one launched stock against the config, PASS / FAIL |
 | `init-core.ts` | Program upgrade authority | One-time setup: admin (Squads, Mantle multisig 1's role), compliance admin (Squads, multisig 4's role) and hook authority (Squads). On mainnet: deploy with the deployer as upgrade authority, run this, then transfer the upgrade authority to the upgrade multisig's vault (Squads, 24 h time lock). Pass multisig addresses; they are stored as their vaults |
