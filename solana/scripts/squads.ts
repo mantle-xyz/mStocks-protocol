@@ -1,5 +1,5 @@
 // Squads v4 multisig tools. On mainnet the members use the Squads app with their Ledgers: a script
-// prints a multisig action as a base58 transaction, a member imports it there to create the
+// prints a multisig action as a base58 transaction message, a member imports it there to create the
 // proposal, the members approve it and execute it after the time lock. `status` works for anyone;
 // the other commands sign with a member's key file (--member, default SQUADS_MEMBER) and are for
 // test multisigs and rehearsals, where `propose` imports a base58 exactly as the app does.

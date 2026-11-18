@@ -4,7 +4,7 @@
 //   1. the current holder (the key that ran ccip-register.ts) proposes the new holder — sent here;
 //   2. the new holder accepts — signed and sent here when --to is a keypair file (devnet / local);
 //      when --to is a Squads multisig (mainnet), its vault becomes the holder and both accepts are
-//      one Squads action, printed as a base58 transaction for the Squads app.
+//      one Squads action, printed as a base58 transaction message for the Squads app.
 // Steps already done on chain are skipped, so it can be re-run (e.g. after the proposal executed).
 // ccip-register.ts --handoff-to does the same as part of the registration.
 //   tsx scripts/ccip-handoff.ts --authority <current holder keypair> --mint <mint> [--to <keypair.json|squads multisig>]

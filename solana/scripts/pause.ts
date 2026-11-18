@@ -1,6 +1,6 @@
 // Pauses (Pauser role) or resumes (Unpauser role) one mint. --operator is a keypair file (signs and
 // sends) or, for a multisig role holder such as the mainnet Unpauser, its Squads multisig address
-// (the action is printed as a base58 transaction for the Squads app).
+// (the action is printed as a base58 transaction message for the Squads app).
 //   tsx scripts/pause.ts --operator <keypair.json|squads multisig> --mint <mint> [--resume]
 // With --resume and no --operator, the network config's unpauser (the multisig) is used.
 import { address } from "@solana/kit";

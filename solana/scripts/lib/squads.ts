@@ -1,18 +1,21 @@
 // Squads v4 support. Admin actions on mainnet are signed by a Squads multisig's vault (index 0), whose
 // members sign with Ledgers in the Squads app. The scripts never sign for a multisig: they print the
-// action as a base58 transaction with the vault as fee payer and signer, which a member imports into
-// the Squads app to create the proposal; the members approve it there and execute it after the time
-// lock. squads.ts propose does the same import with a member's key file (tests and rehearsals).
+// action as a base58 transaction message with the vault as payer and signer, which a member imports
+// into the Squads app to create the proposal; the members approve it there and execute it after the
+// time lock. squads.ts propose does the same import with a member's key file (tests and rehearsals),
+// decoding it exactly as Squads' open-source client does.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import * as multisig from "@sqds/multisig";
 import {
   Connection,
   Keypair,
+  Message,
+  MessageV0,
   PublicKey,
-  Transaction,
   TransactionInstruction,
   TransactionMessage,
+  VersionedMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
 import { AccountRole, address, getBase58Decoder, getBase58Encoder, type Address, type Instruction } from "@solana/kit";
@@ -103,24 +106,52 @@ export async function propose(multisigPda: PublicKey, instructions: TransactionI
 }
 
 /**
- * The action as a base58 transaction for the Squads app's import: legacy, the vault as fee payer and
- * only signer, signatures left empty. Returns the base58 and its size (the import must fit 1232 bytes).
+ * The action in the format of the Squads app's import ("Import base58 encoded tx": a base58 encoded
+ * transaction *message*, not a transaction — as in Squads' open-source client, whose sample builds
+ * `Message.compile({ instructions, payerKey: vault, recentBlockhash })` and base58-encodes
+ * `message.serialize()`). Legacy message, the vault as payer and only signer. `wrapperSize` is the
+ * size of the transaction the app then sends (vaultTransactionCreate + proposalCreate), when the
+ * multisig is known; it must fit Solana's 1232 bytes.
  */
-export async function squadsImport(vault: Address, instructions: Instruction[]) {
+export async function squadsImport(vault: Address, instructions: Instruction[], multisigPda?: PublicKey) {
   const { blockhash } = await withRetry(() => connection.getLatestBlockhash());
-  const tx = new Transaction({ feePayer: new PublicKey(vault), recentBlockhash: blockhash });
-  tx.add(...instructions.map(toWeb3));
-  const message = tx.compileMessage();
+  const message = Message.compile({ instructions: instructions.map(toWeb3), payerKey: new PublicKey(vault), recentBlockhash: blockhash });
   const signers = message.accountKeys.slice(0, message.header.numRequiredSignatures).map(String);
   if (signers.some((k) => k !== vault)) throw new Error(`only the vault may sign a Squads transaction; signers: ${signers.join(", ")}`);
-  const bytes = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
-  return { base58: getBase58Decoder().decode(bytes), size: bytes.length };
+  const bytes = message.serialize();
+  let wrapperSize: number | undefined;
+  if (multisigPda) {
+    // What the app sends: vaultTransactionCreate + proposalCreate, signed by the creating member.
+    const creator = Keypair.generate().publicKey;
+    const common = { multisigPda, transactionIndex: 1n };
+    const wrapper = new TransactionMessage({
+      payerKey: creator,
+      recentBlockhash: blockhash,
+      instructions: [
+        multisig.instructions.vaultTransactionCreate({
+          ...common, creator, rentPayer: creator, vaultIndex: 0, ephemeralSigners: 0,
+          transactionMessage: decodeImportMessage(bytes),
+        }),
+        multisig.instructions.proposalCreate({ ...common, creator }),
+      ],
+    }).compileToV0Message();
+    wrapperSize = 1 + 64 + wrapper.serialize().length;
+  }
+  return { base58: getBase58Decoder().decode(bytes), messageSize: bytes.length, wrapperSize };
 }
 
-/** The instructions of an imported base58 transaction (legacy or v0 without lookup tables) and its fee payer. */
+/** Decodes an import the way Squads' client does: base58 → message (legacy or v0, no lookup tables). */
+function decodeImportMessage(bytes: Uint8Array): TransactionMessage {
+  if (VersionedMessage.deserializeMessageVersion(bytes) === "legacy") {
+    const legacy = Message.from(bytes);
+    return TransactionMessage.decompile(VersionedMessage.deserialize(new MessageV0(legacy).serialize()), { addressLookupTableAccounts: [] });
+  }
+  return TransactionMessage.decompile(VersionedMessage.deserialize(bytes), { addressLookupTableAccounts: [] });
+}
+
+/** The fee payer and instructions of a Squads import (a base58 transaction message). */
 export function decodeImport(base58: string): { payer: PublicKey; instructions: TransactionInstruction[] } {
-  const tx = VersionedTransaction.deserialize(Uint8Array.from(getBase58Encoder().encode(base58)));
-  const message = TransactionMessage.decompile(tx.message);
+  const message = decodeImportMessage(Uint8Array.from(getBase58Encoder().encode(base58)));
   return { payer: message.payerKey, instructions: message.instructions };
 }
 

@@ -1,6 +1,6 @@
 // Moves tokens out of a (blacklisted) account into custody as the permanent delegate. Signed by the
 // compliance admin: a keypair signs and sends (devnet / local); for the Squads multisig (mainnet) the
-// action is printed as a base58 transaction for the Squads app. The source always ends frozen;
+// action is printed as a base58 transaction message for the Squads app. The source always ends frozen;
 // freeze it first.
 //   tsx scripts/clawback.ts [--payer <keypair>] [--compliance-admin <keypair.json|squads multisig>] --mint <mint>
 //     --source <token account> --destination <custody token account> --amount <raw>

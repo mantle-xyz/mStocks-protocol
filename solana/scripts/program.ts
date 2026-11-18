@@ -5,7 +5,7 @@
 //   handoff --deployer <kp>     upgrade authority → the config's upgrade_authority multisig vault
 //                               (refused before init-core: initialize needs the upgrade authority)
 //   upgrade --deployer <kp>     writes a buffer, hands it to the vault and prints the upgrade as a
-//                               base58 transaction for the Squads app; after the members approve and
+//                               base58 transaction message for the Squads app; after the members approve and
 //                               execute it, run verify
 //   NETWORK=mainnet tsx scripts/program.ts <command> [--deployer <keypair>] [--to <squads multisig>]
 // The Solana CLI gets -k explicitly: some subcommands otherwise fall back to the configured keypair.
