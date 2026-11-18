@@ -87,7 +87,7 @@ unfreezer = ["$(pk kms)"]
 [ccip]
 solana_ccip_admin = ""
 EOF
-export NETWORK=$WORK/config.toml
+export NETWORK=$WORK/config.toml DEPLOYER=$D
 for ms in admin compliance_admin upgrade_authority unpauser; do
   v=$(ts scripts/squads.ts status --multisig $ms | awk '/^multisig /{print $NF}')
   sol transfer --allow-unfunded-recipient "$v" 1 >/dev/null
@@ -95,12 +95,12 @@ for ms in admin compliance_admin upgrade_authority unpauser; do
 done
 
 echo "== Step: program.ts deploy (deploy + byte comparison)"
-ts scripts/program.ts deploy --deployer "$D" | grep -E "matches|DIFFERS|upgrade authority" || fail "deploy"
-expect_fail "handoff before init-core" "not initialized" npx tsx scripts/program.ts handoff --deployer "$D"
+ts scripts/program.ts deploy | grep -E "matches|DIFFERS|upgrade authority" || fail "deploy"
+expect_fail "handoff before init-core" "not initialized" npx tsx scripts/program.ts handoff
 
 echo "== Step: init-core (addresses from the config), handoff, sync-roles"
-ts scripts/init-core.ts --upgrade-authority "$D" | grep -E "^initialize" || fail "init-core"
-ts scripts/program.ts handoff --deployer "$D" | grep "upgrade authority"
+ts scripts/init-core.ts | grep -E "^initialize" || fail "init-core"
+ts scripts/program.ts handoff | grep "upgrade authority"
 ts scripts/sync-roles.ts >"$WORK/sync"; grep -E "change|  [0-9]\. " "$WORK/sync" | cut -c1-150
 A=$(imp admin "admin roles" "$WORK/sync"); C=$(imp compliance_admin "compliance roles" "$WORK/sync")
 [ -n "$A" ] && [ -n "$C" ] || fail "sync-roles proposals"
@@ -163,7 +163,7 @@ expect_fail "unregistered mint" "not registered" npx tsx scripts/unregister-mint
 echo "== program.ts upgrade through the upgrade multisig"
 expect_fail "upgrade by the old deployer key" "does not match" \
   sol program deploy target/deploy/mstocks_core.so --program-id "$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)" --upgrade-authority "$D"
-ts scripts/program.ts upgrade --deployer "$D" >"$WORK/up"; grep -E "^  1\. " "$WORK/up" | cut -c1-160
+ts scripts/program.ts upgrade >"$WORK/up"; grep -E "^  1\. " "$WORK/up" | cut -c1-160
 UP=$(imp upgrade_authority "upgrade" "$WORK/up")
 [ -n "$UP" ] || { cat "$WORK/up"; fail "upgrade proposal"; }
 approve upgrade_authority "$UP"; after_time_lock $((TL * 2)); execute upgrade_authority "$UP"

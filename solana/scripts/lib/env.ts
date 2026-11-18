@@ -58,6 +58,13 @@ export function required(args: Record<string, string>, name: string): string {
   return v;
 }
 
+/** The deployer keypair file: --<flag>, else the DEPLOYER environment variable. */
+export function deployerPath(args: Record<string, string>, flag: string): string {
+  const v = args[flag] ?? process.env.DEPLOYER;
+  if (!v) throw new Error(`missing --${flag} (or export DEPLOYER=<deployer keypair file>)`);
+  return v;
+}
+
 export async function loadKeypair(path: string): Promise<KeyPairSigner> {
   const resolved = path.replace(/^~/, homedir());
   return createKeyPairSignerFromBytes(new Uint8Array(JSON.parse(readFileSync(resolved, "utf8"))));

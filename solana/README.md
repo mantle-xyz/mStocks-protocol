@@ -64,6 +64,7 @@ config change. The operator's whole environment is:
 ```bash
 export NETWORK=mainnet           # or testnet
 export RPC_URL=...               # provider URL with an API key (keys never go in files); optional
+export DEPLOYER=...              # deployer keypair file, for program.ts and init-core.ts (the deployment steps)
 ```
 
 Without `NETWORK` the TypeScript scripts are in local mode (every address on the command line, RPC =
@@ -75,8 +76,8 @@ Commands that work from the config alone:
 
 | Command | Does |
 | --- | --- |
-| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` | Build and test; first deployment and byte comparison; upgrade authority → the upgrade multisig (only after `init-core`); upgrade: buffer to the vault, then the upgrade as a base58 transaction message for the Squads app |
-| `init-core.ts --upgrade-authority <kp>` | Initialize with the config's admins and hook authority |
+| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` | `DEPLOYER` (or `--deployer <kp>`) signs. Build and test; first deployment and byte comparison; upgrade authority → the upgrade multisig (only after `init-core`); upgrade: buffer to the vault, then the upgrade as a base58 transaction message for the Squads app |
+| `init-core.ts` | Initialize with the config's admins and hook authority, signed by `DEPLOYER` (or `--upgrade-authority <kp>`) |
 | `sync-roles.ts [--dry-run]` | Grant every configured role holder that is missing and revoke every holder not configured, one transaction or Squads action per admin |
 | `check-config.ts` | Config vs chain: admins, upgrade authority, every role holder |
 | `create-mint.ts --payer <kp> --mantle-token <0x..> --uri <uri>` | Name, symbol, ISIN and initial multiplier read from the Mantle token |

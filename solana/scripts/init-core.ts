@@ -3,15 +3,16 @@
 // multisig 1), --compliance-admin the pause / freeze roles and clawback (Mantle multisig 4).
 // A Squads multisig address is stored as its vault, the address that signs. The addresses default to
 // the network config's admins.
-//   NETWORK=mainnet tsx scripts/init-core.ts --upgrade-authority <deployer keypair>
+//   NETWORK=mainnet DEPLOYER=<deployer keypair> tsx scripts/init-core.ts [--upgrade-authority <keypair>]
 //     [--admin <squads multisig>] [--compliance-admin <squads multisig>] [--hook-authority <squads multisig>]
 import { signerAddress } from "./lib/admin.ts";
 import { setting } from "./lib/config.ts";
 import { authorityPda, configPda, coreInstruction, concat, CORE_PROGRAM_ID, encodePubkey, programDataPda } from "./lib/core.ts";
-import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
+import { deployerPath, loadKeypair, parseArgs, send } from "./lib/env.ts";
 
 const args = parseArgs();
-const upgradeAuthority = await loadKeypair(required(args, "upgrade-authority"));
+// The upgrade authority is the deployer until program.ts handoff: --upgrade-authority, else DEPLOYER.
+const upgradeAuthority = await loadKeypair(deployerPath(args, "upgrade-authority"));
 const admin = await signerAddress(setting(args.admin, "admins.admin", "admin"));
 const complianceAdmin = await signerAddress(setting(args["compliance-admin"], "admins.compliance_admin", "compliance-admin"));
 const hookAuthority = await signerAddress(setting(args["hook-authority"], "admins.hook_authority", "hook-authority"));

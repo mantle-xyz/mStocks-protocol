@@ -6,7 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Local mode: every address on the command line, RPC = the local validator (no network config).
-unset NETWORK RPC_URL
+unset NETWORK RPC_URL DEPLOYER
 
 WORK=$(mktemp -d)
 LEDGER="$WORK/ledger"
