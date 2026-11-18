@@ -197,6 +197,25 @@ Run once per stock, in this order:
 
 **Transactions:** with the Mantle token already in place, the operators send three Solana transactions and one Mantle command: steps 1–4 are one transaction (`create-mint.ts`, all or nothing, about 1,130 of Solana's 1,232 bytes), step 5 is the Mantle deployer's command, and steps 6, 8 and the Solana proposals of step 7 are two transactions (`ccip-register.ts --handoff-to --handoff-mint-authority`, 1,067 and 879 bytes), followed by the Squads proposal holding the multisig's acceptances. The multisigs then sign: on Mantle twice (schedule, which also accepts the pool, and execute after the delay), on Solana one proposal. Steps 6–8 cannot be a single transaction: together they are about 1,500 bytes, over the limit even with a lookup table.
 
+**Creating a mint by contract call (backend integration):** on mainnet the mint is created by a backend, not by the runbook. It is one transaction, signed by the MintRegistrar key (fee payer and temporary mint authority) and the new mint's keypair, with these instructions in order; `create-mint.ts` is the reference implementation:
+
+| # | Program | Instruction | Arguments |
+| --- | --- | --- | --- |
+| 1 | System | `CreateAccount` | the new mint; space = a mint with the 6 fixed-size extensions of rows 2–7; lamports = rent for the final size, metadata included; owner = Token-2022 |
+| 2 | Token-2022 | `InitializeScaledUiAmountMint` | authority = Core authority PDA; multiplier = Mantle `uiMultiplier()` / 1e18 |
+| 3 | Token-2022 | `InitializePausableConfig` | authority = Core authority PDA |
+| 4 | Token-2022 | `InitializeMetadataPointer` | authority = Core authority PDA; metadata address = the mint |
+| 5 | Token-2022 | `InitializeDefaultAccountState` | `Initialized` |
+| 6 | Token-2022 | `InitializeTransferHook` | authority = `Config.hook_authority`; program = none |
+| 7 | Token-2022 | `InitializePermanentDelegate` | delegate = Core authority PDA |
+| 8 | Token-2022 | `InitializeMint2` | 9 decimals; mint authority = the fee payer; freeze authority = Core authority PDA |
+| 9 | Token-2022 (token metadata) | `Initialize` | name, symbol, uri (Mantle `name()`, `symbol()`); update authority = the fee payer |
+| 10 | Token-2022 (token metadata) | `UpdateField` | `isin` = Mantle `assetCode()` |
+| 11 | Token-2022 (token metadata) | `UpdateAuthority` | new update authority = Core authority PDA |
+| 12 | mstocks-core | `register_mint(mantle_token: [u8; 20])` | accounts: payer (writable, signer), registrar (signer, holds MintRegistrar), config `["config"]`, role_entry `["role", 7, registrar]`, mint, mint_state `["mint", mint]` (writable), mantle_index `["mantle_token", mantle_token]` (writable), authority `["authority"]`, system program |
+
+PDAs are of the Core program. `register_mint` checks the whole configuration (extension set, every authority, decimals, hook authority, metadata update authority, zero supply) and rejects anything else, so a mint built differently cannot be registered. If Mantle has a pending multiplier, the backend schedules the same one with `schedule_multiplier` (MultiplierScheduler) right after. The fee payer stays mint authority until the CCIP registration, which it signs (runbook Step 7, `ccip-register.ts --handoff-mint-authority`); the mint authority then belongs to the CCIP pool.
+
 **Initial multiplier:** a new mint's initial value must equal Mantle's current `uiMultiplier()`. If Mantle has a pending value, schedule it on Solana right after launch.
 
 **Why the deployer writes the metadata first:** extra fields such as the ISIN can only be written with `update_field`, which needs the update authority's signature. Writing them with the deployer before handing the authority to Core avoids a separate `METADATA_OPS` step at launch.

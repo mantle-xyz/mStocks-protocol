@@ -173,7 +173,9 @@ Keep provider URLs with API keys in the environment only. Some providers reject
 With the Mantle token already in place and `NETWORK` set, a stock takes three Solana transactions,
 one Mantle command and one approval round from each multisig:
 
-1. `create-mint.ts --payer <MintRegistrar kp> --mantle-token <token> --uri <uri>`: one transaction
+1. `create-mint.ts --payer <MintRegistrar kp> --mantle-token <token> --uri <uri>` (on mainnet a backend
+   sends the same transaction; TD §6 lists its instructions, and the runbook starts from the
+   registered mint): one transaction
    creates, configures and registers the mint; name, symbol, ISIN and the initial multiplier come
    from the Mantle token. If Mantle has a pending multiplier, run `schedule-multiplier.ts` with the
    same values right after.
