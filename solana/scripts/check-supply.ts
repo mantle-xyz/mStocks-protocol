@@ -15,15 +15,10 @@
 // The Mantle token comes from Core's MintState and its pool from the TokenAdminRegistry.
 import { address, fetchEncodedAccount, type Address } from "@solana/kit";
 import { getMintDecoder } from "@solana-program/token-2022";
-import { mintStatePda } from "./lib/core.ts";
+import { mantleTokenOf } from "./lib/core.ts";
 import { config, setting } from "./lib/config.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
-
-const SELECTORS = {
-  getPool: "0xbbe4f6db",
-  balanceOf: "0x70a08231",
-  decimals: "0x313ce567",
-};
+import { ethCall as mantleCall, registeredPool, SELECTORS, word } from "./lib/mantle.ts";
 
 const args = parseArgs();
 const mantleRpc = process.env.MANTLE_RPC_URL || config?.mantle.rpc || required(args, "mantle-rpc");
@@ -32,36 +27,7 @@ const mints: Address[] = required(args, "mints")
   .split(",")
   .map((m) => address(m.trim()));
 
-const word = (addr: string) => addr.toLowerCase().replace(/^0x/, "").padStart(64, "0");
-
-async function ethCall(to: string, data: string): Promise<bigint> {
-  return withRetry(async () => {
-    const res = await fetch(mantleRpc, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method: "eth_call",
-        params: [{ to, data }, "latest"],
-      }),
-    });
-    const json = (await res.json()) as {
-      result?: string;
-      error?: { message: string };
-    };
-    if (!json.result) throw new Error(`eth_call ${data.slice(0, 10)} on ${to}: ${json.error?.message ?? res.status}`);
-    return BigInt(json.result);
-  });
-}
-
-async function mantleTokenOf(mint: Address): Promise<string> {
-  const statePda = await mintStatePda(mint);
-  const state = await withRetry(() => fetchEncodedAccount(rpc, statePda));
-  if (!state.exists) throw new Error(`mint ${mint} is not registered with Core`);
-  // MintState: 8-byte discriminator, mint (32), mantle_token (20).
-  return "0x" + Buffer.from(state.data.subarray(40, 60)).toString("hex");
-}
+const ethCall = async (to: string, data: string) => BigInt(await mantleCall(to, data, mantleRpc));
 
 async function solanaSupply(mint: Address) {
   const account = await withRetry(() => fetchEncodedAccount(rpc, mint));
@@ -78,7 +44,8 @@ const fmt = (raw: bigint, decimals: number) => {
 let violations = 0;
 for (const mint of mints) {
   const token = await mantleTokenOf(mint);
-  const pool = "0x" + (await ethCall(registry, SELECTORS.getPool + word(token))).toString(16).padStart(40, "0");
+  if (!token) throw new Error(`mint ${mint} is not registered with Core`);
+  const pool = await registeredPool(registry, token, mantleRpc);
   if (BigInt(pool) === 0n) throw new Error(`no pool registered for ${token} in ${registry}`);
   const [solana, locked, mantleDecimals] = await Promise.all([
     solanaSupply(mint),

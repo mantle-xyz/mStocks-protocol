@@ -9,19 +9,10 @@ import { createHash } from "node:crypto";
 import {
   AccountRole,
   address,
-  appendTransactionMessageInstructions,
-  compressTransactionMessageUsingAddressLookupTables,
-  createTransactionMessage,
   getAddressDecoder,
   getAddressEncoder,
-  getBase64EncodedWireTransaction,
   getProgramDerivedAddress,
-  getSignatureFromTransaction,
   getUtf8Encoder,
-  pipe,
-  setTransactionMessageFeePayerSigner,
-  setTransactionMessageLifetimeUsingBlockhash,
-  signTransactionMessageWithSigners,
   type Address,
   type Instruction,
 } from "@solana/kit";
@@ -152,23 +143,7 @@ console.log(`approve ${amount} to ${feeBillingSigner}: ${await send(sender, [
   getApproveCheckedInstruction({ source: senderAta, mint, delegate: feeBillingSigner, owner: sender, amount, decimals: 9 }, { programAddress: TOKEN_2022_PROGRAM_ID }),
 ])}`);
 
-const { value: blockhash } = await withRetry(() => rpc.getLatestBlockhash().send());
-const tx = await pipe(
-  createTransactionMessage({ version: 0 }),
-  (m) => setTransactionMessageFeePayerSigner(sender, m),
-  (m) => setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
-  (m) => appendTransactionMessageInstructions([computeLimit, ccipSend], m),
-  (m) => compressTransactionMessageUsingAddressLookupTables(m, { [lut]: lutEntries }),
-  (m) => signTransactionMessageWithSigners(m),
-);
-const signature = getSignatureFromTransaction(tx);
-await withRetry(() => rpc.sendTransaction(getBase64EncodedWireTransaction(tx), { encoding: "base64", preflightCommitment: "confirmed" }).send());
-for (let i = 0; i < 60; i++) {
-  const { value } = await withRetry(() => rpc.getSignatureStatuses([signature]).send());
-  if (value[0]?.err) throw new Error(`ccip_send ${signature} failed: ${JSON.stringify(value[0].err)}`);
-  if (value[0]?.confirmationStatus === "confirmed" || value[0]?.confirmationStatus === "finalized") break;
-  await new Promise((r) => setTimeout(r, 1000));
-}
+const signature = await send(sender, [computeLimit, ccipSend], { [lut]: lutEntries });
 const sent = await withRetry(() => rpc.getTransaction(signature, { maxSupportedTransactionVersion: 0, encoding: "json" }).send());
 const msgLog = sent?.meta?.logMessages?.find((l) => l.includes("message_id") || l.includes("messageId"));
 console.log(`ccip_send: ${signature}${msgLog ? `\n${msgLog}` : ""}`);

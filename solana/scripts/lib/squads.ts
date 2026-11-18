@@ -78,8 +78,12 @@ export async function sendWeb3(instructions: TransactionInstruction[], signers: 
   }
 }
 
-/** Creates a vault transaction with `instructions` (signed by the vault), its proposal and the proposer's approval. */
-export async function propose(multisigPda: PublicKey, instructions: TransactionInstruction[], proposerPath: string, memo: string) {
+/**
+ * What the Squads app does when a member imports a transaction: one transaction with
+ * vaultTransactionCreate (no memo) and proposalCreate, exactly what squadsImport sizes; the proposer
+ * then approves in a second transaction, as in the app.
+ */
+export async function propose(multisigPda: PublicKey, instructions: TransactionInstruction[], proposerPath: string, memo?: string) {
   const proposer = loadWeb3Keypair(proposerPath);
   const ms = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
   const transactionIndex = BigInt(ms.transactionIndex.toString()) + 1n;
@@ -92,16 +96,17 @@ export async function propose(multisigPda: PublicKey, instructions: TransactionI
       multisig.instructions.vaultTransactionCreate({
         ...common,
         creator: proposer.publicKey,
+        rentPayer: proposer.publicKey,
         vaultIndex: 0,
         ephemeralSigners: 0,
         transactionMessage,
         memo,
       }),
       multisig.instructions.proposalCreate({ ...common, creator: proposer.publicKey }),
-      multisig.instructions.proposalApprove({ ...common, member: proposer.publicKey }),
     ],
     [proposer],
   );
+  await sendWeb3([multisig.instructions.proposalApprove({ ...common, member: proposer.publicKey })], [proposer]);
   return { transactionIndex, signature: sig, threshold: ms.threshold, timeLock: ms.timeLock };
 }
 
@@ -113,12 +118,13 @@ export async function propose(multisigPda: PublicKey, instructions: TransactionI
  * size of the transaction the app then sends (vaultTransactionCreate + proposalCreate), when the
  * multisig is known; it must fit Solana's 1232 bytes.
  */
-export async function squadsImport(vault: Address, instructions: Instruction[], multisigPda?: PublicKey) {
-  const { blockhash } = await withRetry(() => connection.getLatestBlockhash());
+export async function squadsImport(vault: Address, instructions: Instruction[], multisigPda?: PublicKey, recentBlockhash?: string) {
+  const blockhash = recentBlockhash ?? (await withRetry(() => connection.getLatestBlockhash())).blockhash;
   const message = Message.compile({ instructions: instructions.map(toWeb3), payerKey: new PublicKey(vault), recentBlockhash: blockhash });
   const signers = message.accountKeys.slice(0, message.header.numRequiredSignatures).map(String);
   if (signers.some((k) => k !== vault)) throw new Error(`only the vault may sign a Squads transaction; signers: ${signers.join(", ")}`);
-  const bytes = message.serialize();
+  const bytes = serializeOrNull(message);
+  if (!bytes) return { base58: undefined, messageSize: Infinity, wrapperSize: Infinity };
   let wrapperSize: number | undefined;
   if (multisigPda) {
     // What the app sends: vaultTransactionCreate + proposalCreate, signed by the creating member.
@@ -135,9 +141,20 @@ export async function squadsImport(vault: Address, instructions: Instruction[], 
         multisig.instructions.proposalCreate({ ...common, creator }),
       ],
     }).compileToV0Message();
-    wrapperSize = 1 + 64 + wrapper.serialize().length;
+    const wrapperBytes = serializeOrNull(wrapper);
+    wrapperSize = wrapperBytes ? 1 + 64 + wrapperBytes.length : Infinity;
   }
   return { base58: getBase58Decoder().decode(bytes), messageSize: bytes.length, wrapperSize };
+}
+
+/** A message's bytes, or null when it is larger than a transaction (web3.js then throws a RangeError). */
+function serializeOrNull(message: { serialize(): Uint8Array }): Uint8Array | null {
+  try {
+    return message.serialize();
+  } catch (e) {
+    if (e instanceof RangeError) return null;
+    throw e;
+  }
 }
 
 /** Decodes an import the way Squads' client does: base58 → message (legacy or v0, no lookup tables). */

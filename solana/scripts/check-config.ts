@@ -4,20 +4,20 @@
 // holders on chain (no missing and no extra holder; the retired Clawback has none). Exits 1 on any
 // problem, so it can gate each launch step. Addresses in the config may be Squads multisig accounts;
 // they are checked as their vaults, the addresses that sign.
-//   NETWORK=mainnet tsx scripts/check-config.ts [--config <file>] [--roles-rpc <rpc>]
-// Listing role holders needs getProgramAccounts: the config's solana.roles_rpc, or --roles-rpc.
-import { readFileSync } from "node:fs";
+//   NETWORK=mainnet tsx scripts/check-config.ts [--roles-rpc <rpc>]
+// The chain is the one the same config points at (RPC_URL overrides its endpoint); to check another
+// file, give its path as NETWORK. Listing role holders needs getProgramAccounts: the config's
+// solana.roles_rpc, or --roles-rpc.
 import { fetchEncodedAccount, getAddressDecoder } from "@solana/kit";
-import { parse } from "smol-toml";
 import { configuredRoles, signerAddress } from "./lib/admin.ts";
-import { CONFIG_PATH, ROLE_NAMES, type Config } from "./lib/config.ts";
+import { CONFIG_PATH, config, ROLE_NAMES, type Config } from "./lib/config.ts";
 import { fetchConfig, programDataPda, ROLE_NAMES_IN_ORDER, roleHolders } from "./lib/core.ts";
 import { parseArgs, rpc, RPC_URL, withRetry } from "./lib/env.ts";
 
 const args = parseArgs();
-const path = args.config ?? CONFIG_PATH;
-if (!path) throw new Error("set NETWORK=mainnet|testnet or pass --config <file>");
-const cfg = parse(readFileSync(path, "utf8")) as unknown as Config;
+if (!config) throw new Error("set NETWORK=mainnet|testnet (or NETWORK=<file>.toml)");
+const path = CONFIG_PATH;
+const cfg: Config = structuredClone(config);
 const toSigner = (v: string) => (v ? signerAddress(v) : Promise.resolve(v));
 for (const k of Object.keys(cfg.admins) as (keyof Config["admins"])[]) cfg.admins[k] = await toSigner(cfg.admins[k]);
 const rolesRpc = args["roles-rpc"] ?? cfg.solana?.roles_rpc ?? RPC_URL;

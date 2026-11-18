@@ -9,27 +9,18 @@
 // as a warning instead.
 import { address, fetchEncodedAccount, type Address } from "@solana/kit";
 import { getMintDecoder } from "@solana-program/token-2022";
-import { mintStatePda, toF64 } from "./lib/core.ts";
+import { mantleTokenOf, toF64 } from "./lib/core.ts";
 import { config } from "./lib/config.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
+import { ethCall as mantleCall, SELECTORS } from "./lib/mantle.ts";
 
 const SKEW_SECONDS = 60n;
-const SELECTORS = { uiMultiplier: "0xa60bf13d", newUIMultiplier: "0xdc767007", effectiveAt: "0x97a4064f" };
 
 const args = parseArgs();
 const mantleRpc = process.env.MANTLE_RPC_URL || config?.mantle.rpc || required(args, "mantle-rpc");
 const mints: Address[] = required(args, "mints").split(",").map((m) => address(m.trim()));
 
-async function ethCall(to: string, data: string): Promise<bigint> {
-  const res = await fetch(mantleRpc, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params: [{ to, data }, "latest"] }),
-  });
-  const json = (await res.json()) as { result?: string; error?: { message: string } };
-  if (!json.result) throw new Error(`eth_call ${data} on ${to}: ${json.error?.message ?? res.status}`);
-  return BigInt(json.result);
-}
+const ethCall = async (to: string, data: string) => BigInt(await mantleCall(to, data, mantleRpc));
 
 /** Mantle state in Token-2022 terms: effective value and optional pending (value, time). */
 async function mantleState(token: string) {
@@ -56,17 +47,10 @@ async function solanaState(mint: Address, now: bigint) {
     : { current: ext.multiplier, pending: { value: ext.newMultiplier, at } };
 }
 
-async function mantleTokenOf(mint: Address): Promise<string> {
-  const statePda = await mintStatePda(mint);
-  const state = await withRetry(() => fetchEncodedAccount(rpc, statePda));
-  if (!state.exists) throw new Error(`mint ${mint} is not registered with Core`);
-  // MintState: 8-byte discriminator, mint (32), mantle_token (20).
-  return "0x" + Buffer.from(state.data.subarray(40, 60)).toString("hex");
-}
-
 let mismatches = 0;
 for (const mint of mints) {
   const token = await mantleTokenOf(mint);
+  if (!token) throw new Error(`mint ${mint} is not registered with Core`);
   const now = BigInt(Math.floor(Date.now() / 1000));
   const [m, s] = await Promise.all([mantleState(token), solanaState(mint, now)]);
   const fmt = (x: { current: number; pending: { value: number; at: bigint } | null }) =>

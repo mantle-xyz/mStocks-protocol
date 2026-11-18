@@ -6,11 +6,12 @@
 #              unpauser (2/3, no time lock); EOAs: registrar, scheduler, ops (metadata), pauser, kms
 # Multisig actions go the mainnet way: each script prints a base58 transaction, which squads.ts
 # propose imports as the Squads app does (a member's key file stands in for a Ledger).
-# Covers: program.ts deploy / idl / handoff / upgrade / verify (program bytes and IDL), init-core and sync-roles from the config
-# (one proposal per admin, grants and a revoke), check-config, a mint, resume by the unpauser
-# multisig, clawback by the compliance multisig, unregister by the admin multisig, and the negative
-# cases (below threshold, non-member, inside the time lock, wrong admin, handoff before init, old
-# upgrade key).
+# Covers: program.ts deploy / idl / handoff / upgrade / verify (program bytes and IDL; the IDL
+# created, replaced, shrunk, recovered from an unfinished upload, created through the upgrade
+# multisig), init-core and sync-roles from the config (grants split over two compliance proposals,
+# a revoke), check-config, a mint, resume by the unpauser multisig, clawback by the compliance
+# multisig, unregister by the admin multisig, and the negative cases (below threshold, non-member,
+# inside the time lock, wrong admin, handoff before init, old upgrade key).
 # Prerequisites: `anchor build`, `scripts/fetch-fixtures.sh`, `npm install`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -19,7 +20,7 @@ TL=${TL:-15}
 PORT=${PORT:-18899}
 unset RPC_URL MANTLE_RPC_URL
 WORK=$(mktemp -d)
-for k in deployer m1 m2 m3 outsider registrar scheduler ops pauser kms user custody; do
+for k in deployer m1 m2 m3 outsider registrar scheduler ops pauser kms user custody f1 f2 f3 f4 f5 f6; do
   solana-keygen new --no-bip39-passphrase --silent -o "$WORK/$k.json" >/dev/null
 done
 pk() { solana-keygen pubkey "$WORK/$1.json"; }
@@ -53,6 +54,15 @@ imp() { # multisig, label prefix, file with the script's output
   [ -n "$b58" ] || { cat "$3"; fail "$2: no base58"; }
   ts scripts/squads.ts propose --multisig "$1" --base58 "$b58" --member "$WORK/m1.json" | idx "propose:"
 }
+imp_all() { # every "<label…> base58:" line of the file (a split action has several); one index per line
+  local b58 n=0
+  for b58 in $(awk -v l="$2" 'index($0, l) == 1 && / base58: / {print $NF}' "$3"); do
+    n=$((n + 1))
+    ts scripts/squads.ts propose --multisig "$1" --base58 "$b58" --member "$WORK/m1.json" >"$WORK/imp$n" || { cat "$WORK/imp$n" >&2; fail "$2 #$n: propose"; }
+    idx "propose:" <"$WORK/imp$n"
+  done
+  [ "$n" -gt 0 ] || { cat "$3"; fail "$2: no base58"; }
+}
 approve() { ts scripts/squads.ts approve --multisig "$1" --index "$2" --member "$WORK/m2.json" >/dev/null; }
 execute() { ts scripts/squads.ts execute --multisig "$1" --index "$2" --member "$WORK/m3.json" | grep -E "^execute" || fail "execute $1 #$2"; }
 after_time_lock() { sleep $(( $1 + 2 )); }
@@ -83,8 +93,8 @@ multiplier_scheduler = ["$(pk scheduler)"]
 metadata_ops = ["$(pk ops)"]
 pauser = ["$(pk pauser)"]
 unpauser = ["$UNPAUSER_MS"]
-freezer = ["$(pk kms)"]
-unfreezer = ["$(pk kms)"]
+freezer = ["$(pk kms)", "$(pk f1)", "$(pk f2)", "$(pk f3)"]
+unfreezer = ["$(pk kms)", "$(pk f4)", "$(pk f5)", "$(pk f6)"]
 [ccip]
 solana_ccip_admin = ""
 EOF
@@ -115,24 +125,38 @@ ts scripts/program.ts idl --idl "$WORK/idl-small.json" | grep -E "^IDL|matches|D
 ts scripts/program.ts verify >"$WORK/verify" && fail "verify passed with a different IDL"
 grep -q "on-chain IDL DIFFERS" "$WORK/verify" || fail "verify should see the smaller IDL"
 echo "   verify detects the IDL difference"
+# An IDL upload interrupted before initialize: idl closes the leftover and uploads again.
+ts scripts/test-idl-state.ts unfinished | grep -q "IDL account: buffer" || fail "unfinished upload setup"
+ts scripts/program.ts idl --idl "$WORK/idl-small.json" | grep -E "^IDL|matches" | cut -c1-150
+ts scripts/program.ts verify --idl "$WORK/idl-small.json" | grep -q "on-chain IDL matches" || fail "IDL after the unfinished upload"
 expect_fail "handoff before init-core" "not initialized" npx tsx scripts/program.ts handoff
 
 echo "== Step: init-core (addresses from the config), handoff, sync-roles"
 ts scripts/init-core.ts | grep -E "^initialize" || fail "init-core"
+# Leave another unfinished upload for after the handoff (the vault cannot write the deployer's).
+ts scripts/test-idl-state.ts unfinished | grep -q "IDL account: buffer" || fail "unfinished upload setup"
 ts scripts/program.ts handoff | grep "upgrade authority"
-ts scripts/sync-roles.ts >"$WORK/sync"; grep -E "change|  [0-9]\. " "$WORK/sync" | cut -c1-150
-A=$(imp admin "admin roles" "$WORK/sync"); C=$(imp compliance_admin "compliance roles" "$WORK/sync")
-[ -n "$A" ] && [ -n "$C" ] || fail "sync-roles proposals"
+ts scripts/sync-roles.ts >"$WORK/sync" || { cat "$WORK/sync"; fail "sync-roles"; }
+grep -E "change|  [0-9]\. " "$WORK/sync" | cut -c1-150
+A=$(imp admin "admin roles" "$WORK/sync"); C=$(imp_all compliance_admin "compliance roles" "$WORK/sync")
+[ -n "$A" ] && [ "$(echo "$C" | wc -l)" -eq 2 ] || fail "sync-roles proposals (want 1 admin, 2 compliance: $A / $C)"
+echo "   compliance grants split over proposals $(echo $C)"
 expect_fail "execute with 1/2 approvals" "InvalidProposalStatus" \
   npx tsx scripts/squads.ts execute --multisig admin --index "$A" --member "$WORK/m3.json"
 expect_fail "approve by a non-member" "NotAMember" \
   npx tsx scripts/squads.ts approve --multisig admin --index "$A" --member "$WORK/outsider.json"
-approve admin "$A"; approve compliance_admin "$C"
+approve admin "$A"; for c in $C; do approve compliance_admin "$c"; done
 expect_fail "execute inside the time lock" "TimeLockNotReleased" \
   npx tsx scripts/squads.ts execute --multisig admin --index "$A" --member "$WORK/m3.json"
-after_time_lock "$TL"; execute admin "$A"; execute compliance_admin "$C"
+after_time_lock "$TL"; execute admin "$A"; for c in $C; do execute compliance_admin "$c"; done
 ts scripts/check-config.ts | tee "$WORK/check" | grep -vE "^  ok"
 grep -q "^PASS" "$WORK/check" || fail "check-config"
+
+echo "== program.ts idl through the upgrade multisig (no IDL on chain: the vault creates it from a buffer)"
+ts scripts/program.ts idl --idl "$WORK/idl-small.json" >"$WORK/idl"; grep -E "^IDL|^  [0-9]\. " "$WORK/idl" | cut -c1-150
+I=$(imp upgrade_authority "idl" "$WORK/idl"); approve upgrade_authority "$I"; after_time_lock $((TL * 2)); execute upgrade_authority "$I"
+ts scripts/program.ts verify --idl "$WORK/idl-small.json" | grep -q "on-chain IDL matches" || fail "IDL created by the vault"
+echo "   IDL created by the upgrade multisig"
 ts scripts/sync-roles.ts | grep -q "roles match the config" || fail "sync-roles after execution"
 echo "   sync-roles again: roles match the config"
 expect_fail "grant-role with the wrong admin" "is governed by the admin" \

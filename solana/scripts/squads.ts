@@ -132,7 +132,7 @@ async function main() {
       const vault = vaultOf(multisigPda);
       const { payer, instructions } = decodeImport(required(args, "base58"));
       if (!payer.equals(vault)) throw new Error(`the transaction's fee payer is ${payer.toBase58()}, not the vault ${vault.toBase58()}`);
-      const p = await propose(multisigPda, instructions, member(), args.memo ?? "imported");
+      const p = await propose(multisigPda, instructions, member(), args.memo);
       console.log(`propose: Squads proposal #${p.transactionIndex} on ${multisigPda.toBase58()} (${p.signature}), ${instructions.length} instruction(s)`);
       console.log(`  approved by the proposer; needs ${p.threshold} approval(s), then executable ${p.timeLock}s after approval`);
       break;

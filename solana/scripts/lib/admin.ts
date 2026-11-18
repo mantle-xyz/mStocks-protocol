@@ -9,7 +9,7 @@ import { asSquadsMultisig, squadsImport, vaultAddress } from "./squads.ts";
 import { describeInstruction } from "./describe.ts";
 import { ROLE_NAMES, setting } from "./config.ts";
 import { COMPLIANCE_ROLES, concat, configPda, coreInstruction, encodePubkey, encodeU8, roleIndex, rolePda } from "./core.ts";
-import { loadKeypair, send } from "./env.ts";
+import { loadKeypair, send, TRANSACTION_SIZE_LIMIT, transactionSize } from "./env.ts";
 import type { PublicKey } from "@solana/web3.js";
 
 export type Admin = KeyPairSigner | Address;
@@ -98,6 +98,41 @@ export async function sendOrPrint(
 }
 
 /**
+ * sendOrPrint for a list of independent instructions that may not fit one transaction: splits them,
+ * in order, into as few transactions (keypair admin) or Squads transaction messages (multisig) as
+ * fit Solana's transaction size, labelled "<label> 1/n", "<label> 2/n", ….
+ */
+export async function sendOrPrintBatches(payer: KeyPairSigner | null, admin: Admin, ixs: Instruction[], label: string) {
+  const fits = async (group: Instruction[]) =>
+    typeof admin === "string"
+      ? importFits(await squadsImport(admin, group, multisigOfVault.get(admin), PLACEHOLDER_BLOCKHASH))
+      : (await transactionSize(payer ?? admin, group)) <= TRANSACTION_SIZE_LIMIT;
+  const batches: Instruction[][] = [];
+  for (const ix of ixs) {
+    const last = batches.at(-1);
+    if (last && (await fits([...last, ix]))) last.push(ix);
+    else batches.push([ix]);
+  }
+  for (const [i, batch] of batches.entries())
+    await sendOrPrint(payer, admin, batch, batches.length > 1 ? `${label} ${i + 1}/${batches.length}` : label);
+}
+
+// Sizes do not depend on the blockhash; measuring with a placeholder saves a request per try.
+const PLACEHOLDER_BLOCKHASH = "11111111111111111111111111111111";
+/** Whether the Squads app can create the proposal: about 315 bytes are added to the message, so without the multisig, stay well clear. */
+const importFits = ({ messageSize, wrapperSize }: { messageSize: number; wrapperSize?: number }) =>
+  wrapperSize !== undefined ? wrapperSize <= TRANSACTION_SIZE_LIMIT : messageSize <= 900;
+
+const tooLarge = ({ messageSize }: { messageSize: number }) =>
+  new Error(`creating this proposal would exceed Solana's ${TRANSACTION_SIZE_LIMIT}-byte transaction (message ${Number.isFinite(messageSize) ? `${messageSize} bytes` : "over the limit by itself"}); split the action`);
+
+/** Throws unless `ixs`, signed by `vault`, can be imported as one Squads proposal (checked before spending anything). */
+export async function assertImportFits(vault: Address, ixs: Instruction[]) {
+  const sizes = await squadsImport(vault, ixs, multisigOfVault.get(vault), PLACEHOLDER_BLOCKHASH);
+  if (!importFits(sizes)) throw tooLarge(sizes);
+}
+
+/**
  * Prints a multisig action: a readable list of the instructions (what the members approve) and the
  * base58 transaction message a member imports into the Squads app (TX Builder → Create transaction →
  * Add instruction → Import base58 encoded tx; Squads' open-source client: Import Transaction); the
@@ -106,12 +141,10 @@ export async function sendOrPrint(
  */
 export async function printSquadsImport(vault: Address, ixs: Instruction[], label: string) {
   const multisig = multisigOfVault.get(vault);
-  const { base58, messageSize, wrapperSize } = await squadsImport(vault, ixs, multisig);
+  const sizes = await squadsImport(vault, ixs, multisig);
   console.log(`${label}: signed by ${multisig ? `the Squads multisig ${multisig.toBase58()} (vault ${vault})` : `the vault ${vault}`};`);
   console.log(`  import the base58 transaction message below into the Squads app (TX Builder → Create transaction → Add instruction → Import base58 encoded tx), ${ixs.length} instruction(s):`);
   ixs.forEach((ix, i) => console.log(`  ${i + 1}. ${describeInstruction(ix)}`));
-  // Creating the proposal adds about 315 bytes to the message; without the multisig, stay well clear.
-  if (wrapperSize !== undefined ? wrapperSize > 1232 : messageSize > 900)
-    throw new Error(`creating this proposal would exceed Solana's 1232-byte transaction (message ${messageSize} bytes); split the action`);
-  console.log(`${label} base58: ${base58}`);
+  if (!importFits(sizes)) throw tooLarge(sizes);
+  console.log(`${label} base58: ${sizes.base58}`);
 }

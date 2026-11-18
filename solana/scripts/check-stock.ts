@@ -13,7 +13,7 @@ import { getMintDecoder } from "@solana-program/token-2022";
 import { signerAddress } from "./lib/admin.ts";
 import { ccipAccounts, poolOwnership, registryState, SYSTEM_PROGRAM } from "./lib/ccip.ts";
 import { ccipAdmin, config, NETWORK, setting } from "./lib/config.ts";
-import { authorityPda, mintStatePda } from "./lib/core.ts";
+import { authorityPda, mantleTokenOf } from "./lib/core.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
 import { registeredPool } from "./lib/mantle.ts";
 
@@ -32,13 +32,11 @@ const expect = (label: string, actual: unknown, wanted: unknown) =>
   actual === wanted ? ok(label, String(actual)) : fail(label, `${actual} (want ${wanted})`);
 
 console.log(`== Core registration`);
-const state = await withRetry(async () => fetchEncodedAccount(rpc, await mintStatePda(mint)));
-if (!state.exists) {
+const token = await mantleTokenOf(mint);
+if (!token) {
   fail("MintState", `${mint} is not registered with Core`);
   process.exit(1);
 }
-// MintState: 8-byte discriminator, mint (32), mantle_token (20).
-const token = `0x${Buffer.from(state.data.subarray(40, 60)).toString("hex")}`;
 ok("Mantle token", token);
 
 console.log(`== mint`);

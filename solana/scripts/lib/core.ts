@@ -115,6 +115,14 @@ export async function fetchConfig(): Promise<CoreConfig | null> {
   return { ...head, complianceAdmin: key(), pendingComplianceAdmin: opt() };
 }
 
+/** The Mantle token (0x…) a mint is registered for, from its MintState; null when it is not registered. */
+export async function mantleTokenOf(mint: Address): Promise<string | null> {
+  const state = await withRetry(async () => fetchEncodedAccount(rpc, await mintStatePda(mint)));
+  if (!state.exists) return null;
+  // MintState: 8-byte discriminator, mint (32), mantle_token (20).
+  return `0x${Buffer.from(state.data.subarray(40, 60)).toString("hex")}`;
+}
+
 /**
  * Throws unless `admin` governs `role` on chain. Core would reject it too, but for a multisig only
  * when the proposal executes, after its time lock.

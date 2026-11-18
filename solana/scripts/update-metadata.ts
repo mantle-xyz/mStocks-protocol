@@ -12,10 +12,10 @@ const mint = address(required(args, "mint"));
 const field = required(args, "field");
 const value = required(args, "value");
 
-// Worst case the field is new: key + value + two length prefixes.
+// Worst case the field is new: key + value + two length prefixes, in UTF-8 bytes as Token-2022 stores them.
 const account = await fetchEncodedAccount(rpc, mint);
 if (!account.exists) throw new Error(`mint ${mint} not found`);
-const grownSize = BigInt(account.data.length + field.length + value.length + 8);
+const grownSize = BigInt(account.data.length + Buffer.byteLength(field, "utf8") + Buffer.byteLength(value, "utf8") + 8);
 const needed = await rpc.getMinimumBalanceForRentExemption(grownSize).send();
 const topUp = needed > account.lamports ? needed - account.lamports : 0n;
 

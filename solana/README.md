@@ -76,9 +76,9 @@ Commands that work from the config alone:
 
 | Command | Does |
 | --- | --- |
-| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` / `idl` | `DEPLOYER` (or `--deployer <kp>`) signs. Build and test; first deployment with the IDL uploaded; verify the program bytes and the IDL; upgrade authority → the upgrade multisig (only after `init-core`); upgrade: program buffer and, when the IDL changed, an IDL buffer handed to the vault, then one base58 transaction message for the Squads app that upgrades the program and replaces the IDL; `idl` updates the IDL alone |
+| `program.ts build` / `deploy` / `verify` / `handoff` / `upgrade` / `idl` | `DEPLOYER` (or `--deployer <kp>`) signs. Build and test; first deployment with the IDL uploaded; verify the program bytes and the IDL; upgrade authority → the upgrade multisig (only after `init-core`); upgrade: program buffer and, when the IDL changed, an IDL buffer handed to the vault, then one base58 transaction message for the Squads app that upgrades the program and replaces (or creates) the IDL; `idl` updates the IDL alone. `upgrade` and `idl` check the Squads message fits before spending anything |
 | `init-core.ts` | Initialize with the config's admins and hook authority, signed by `DEPLOYER` (or `--upgrade-authority <kp>`) |
-| `sync-roles.ts [--dry-run]` | Grant every configured role holder that is missing and revoke every holder not configured, one transaction or Squads action per admin |
+| `sync-roles.ts [--dry-run]` | Grant every configured role holder that is missing and revoke every holder not configured, one transaction or Squads action per admin (split into `1/n`, `2/n`, … when too large; import each) |
 | `check-config.ts` | Config vs chain: admins, upgrade authority, every role holder |
 | `create-mint.ts --payer <kp> --mantle-token <0x..> --uri <uri>` | Name, symbol, ISIN and initial multiplier read from the Mantle token |
 | `check-stock.ts --mint <mint>` | Every check of a launched stock: authorities, CCIP admin and pool owner, Mantle verify, multiplier, supply |
@@ -122,8 +122,8 @@ and Program Metadata programs (`scripts/fetch-fixtures.sh` dumps them).
 
 | Script | Who signs | Purpose |
 | --- | --- | --- |
-| `program.ts` | Deployer, then the upgrade multisig | `build` (anchor build + tests + sha256), `deploy` (first deployment, IDL upload, byte and IDL comparison), `verify` (program bytes and on-chain IDL against the build), `handoff` (upgrade authority → the config's upgrade multisig vault; refused before `init-core`), `upgrade` (program buffer + IDL buffer → vault → one Squads message upgrading the program and the IDL), `idl` (the IDL alone; directly while the deployer is the upgrade authority). The IDL lives where Anchor 1.x keeps it: the program's canonical account in Solana's Program Metadata program, written only by the upgrade authority (`anchor idl fetch` reads it) |
-| `sync-roles.ts` | Admin and compliance admin | Make the on-chain role holders match the config: grants and revokes, one transaction or Squads action per admin (`--dry-run` lists them) |
+| `program.ts` | Deployer, then the upgrade multisig | `build` (anchor build + tests + sha256), `deploy` (first deployment, IDL upload, byte and IDL comparison), `verify` (program bytes and on-chain IDL against the build), `handoff` (upgrade authority → the config's upgrade multisig vault; refused before `init-core`), `upgrade` (program buffer + IDL buffer → vault → one Squads message upgrading the program and the IDL), `idl` (the IDL alone; directly while the deployer is the upgrade authority; also finishes an interrupted upload). The IDL lives where Anchor 1.x keeps it: the program's canonical account in Solana's Program Metadata program, written only by the upgrade authority (`anchor idl fetch` reads it) |
+| `sync-roles.ts` | Admin and compliance admin | Make the on-chain role holders match the config: grants and revokes, one transaction or Squads action per admin, split in order when too large for one (`--dry-run` lists them) |
 | `check-stock.ts` | — | Every check of one launched stock against the config, PASS / FAIL |
 | `init-core.ts` | Program upgrade authority | One-time setup: admin (Squads, Mantle multisig 1's role), compliance admin (Squads, multisig 4's role) and hook authority (Squads). On mainnet: deploy with the deployer as upgrade authority, run this, then transfer the upgrade authority to the upgrade multisig's vault (Squads, 24 h time lock). Pass multisig addresses; they are stored as their vaults |
 | `grant-role.ts` | Admin or compliance admin | Grant a role. The admin grants `MultiplierScheduler`, `MetadataOps`, `MintRegistrar`; the compliance admin grants `Pauser`, `Unpauser`, `Freezer`, `Unfreezer`. The script checks on chain that `--admin` governs the role before it sends or proposes (with a multisig, Core would only reject it when the proposal executes) |
@@ -150,7 +150,7 @@ and Program Metadata programs (`scripts/fetch-fixtures.sh` dumps them).
 | `revoke-role.ts` | Admin or compliance admin | Revoke a role (the admin that governs it) |
 | `set-default-account-state.ts` | Admin | Compliance policy switch: new token accounts start frozen (`--frozen`) or usable (default) |
 | `squads.ts` | Anyone / test members | `status` (members, threshold, time lock, recent proposals). For test multisigs with key-file members: `create`, `propose --base58` (import as the Squads app does), `approve` / `reject` / `execute` |
-| `local-squads-e2e.sh` | — | Runbook rehearsal with real Squads multisigs on a local validator: init, roles, check-config, resume, clawback, unregister, a program upgrade, and the negative cases |
+| `local-squads-e2e.sh` | — | Runbook rehearsal with real Squads multisigs on a local validator: init, roles (a split sync), check-config, resume, clawback, unregister, the IDL (direct, interrupted upload, created by the vault), a program upgrade, and the negative cases |
 | `show-mint.ts` / `show-account.ts` | — | Print a mint's configuration / a token account's balance and state |
 | `dev-mint-to.ts` | Mint authority | Local/devnet only: mint before the CCIP handoff |
 

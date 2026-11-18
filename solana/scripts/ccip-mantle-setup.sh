@@ -228,7 +228,7 @@ cmd_multisig() {
     admin_calls+=($TAR "$(cast calldata "setPool(address,address)" "$TOKEN_ADDR" "$POOL_ADDR")")
   [ "$(lower "$(call "$POOL_ADDR" "owner()(address)")")" = "$(lower "$owner")" ] ||
     owner_calls+=("$POOL_ADDR" "$(cast calldata "acceptOwnership()")")
-  if [ "$(lower "$owner")" = "$(lower "$admin")" ]; then admin_calls+=("${owner_calls[@]}"); owner_calls=(); fi
+  if [ "$(lower "$owner")" = "$(lower "$admin")" ]; then admin_calls+=(${owner_calls[@]+"${owner_calls[@]}"}); owner_calls=(); fi
   # A pool owner that is also a proposer of the token admin's timelock (multisig 1's Safe on
   # mainnet) accepts the pool in the same Safe transaction that schedules the timelock batch.
   PROPOSER_EXTRA=()

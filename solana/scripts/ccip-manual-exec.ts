@@ -10,24 +10,15 @@ import { createHash } from "node:crypto";
 import {
   AccountRole,
   address,
-  appendTransactionMessageInstructions,
-  compressTransactionMessageUsingAddressLookupTables,
-  createTransactionMessage,
   getAddressDecoder,
   getBase58Encoder,
-  getBase64EncodedWireTransaction,
-  getSignatureFromTransaction,
-  pipe,
-  setTransactionMessageFeePayerSigner,
-  setTransactionMessageLifetimeUsingBlockhash,
-  signTransactionMessageWithSigners,
   signature as toSignature,
   type AccountMeta,
   type Address,
   type Instruction,
 } from "@solana/kit";
 import { concat } from "./lib/core.ts";
-import { loadKeypair, parseArgs, required, rpc, withRetry } from "./lib/env.ts";
+import { loadKeypair, parseArgs, required, rpc, send, withRetry } from "./lib/env.ts";
 
 const OFFRAMP = address("offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm");
 // execute / manually_execute accounts: config, reference_addresses, source_chain, commit_report,
@@ -101,21 +92,4 @@ for (const { accountKey } of "addressTableLookups" in msg ? (msg.addressTableLoo
   for (let at = 56; at + 32 <= raw.length; at += 32) tables[accountKey].push(dec.decode(raw.subarray(at, at + 32)));
 }
 
-const { value: blockhash } = await withRetry(() => rpc.getLatestBlockhash().send());
-const signed = await pipe(
-  createTransactionMessage({ version: 0 }),
-  (m) => setTransactionMessageFeePayerSigner(payer, m),
-  (m) => setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
-  (m) => appendTransactionMessageInstructions([computeLimit, manuallyExecute], m),
-  (m) => compressTransactionMessageUsingAddressLookupTables(m, tables),
-  (m) => signTransactionMessageWithSigners(m),
-);
-const sig = getSignatureFromTransaction(signed);
-await withRetry(() => rpc.sendTransaction(getBase64EncodedWireTransaction(signed), { encoding: "base64", preflightCommitment: "confirmed" }).send());
-for (let i = 0; i < 60; i++) {
-  const { value } = await withRetry(() => rpc.getSignatureStatuses([sig]).send());
-  if (value[0]?.err) throw new Error(`manually_execute ${sig} failed: ${JSON.stringify(value[0].err)}`);
-  if (value[0]?.confirmationStatus === "confirmed" || value[0]?.confirmationStatus === "finalized") break;
-  await new Promise((r) => setTimeout(r, 1000));
-}
-console.log(`manually_execute: ${sig}`);
+console.log(`manually_execute: ${await send(payer, [computeLimit, manuallyExecute], tables)}`);

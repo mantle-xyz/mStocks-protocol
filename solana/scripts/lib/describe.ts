@@ -60,7 +60,9 @@ export function describeInstruction(ix: Instruction): string {
     return `BPF loader upgrade: program ${accounts[1]} from buffer ${accounts[2]} (spill ${accounts[3]}), authority ${accounts[6]}`;
   if (ix.programAddress === "ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S") {
     const ops: Record<number, string> = { 0: "write", 1: "initialize", 2: "set_authority", 3: "set_data (from buffer)", 5: "trim", 6: "close", 7: "allocate", 8: "extend" };
-    return `IDL (Program Metadata) ${ops[data[0]] ?? `op ${data[0]}`}: account ${accounts[0]}${data[0] === 3 ? `, buffer ${accounts[2]}` : ""}`;
+    // A write without data copies a whole buffer (the third account) into the account.
+    const source = data[0] === 3 ? `, buffer ${accounts[2]}` : data[0] === 0 && data.length === 5 ? `, copy of buffer ${accounts[2]}` : "";
+    return `IDL (Program Metadata) ${ops[data[0]] ?? `op ${data[0]}`}: account ${accounts[0]}${source}`;
   }
   const ccip = ccipByDisc.get(hex(data.subarray(0, 8)));
   if (ccip) return `CCIP ${ccip} on ${ix.programAddress} [${accounts.join(", ")}]`;

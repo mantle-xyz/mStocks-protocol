@@ -2,14 +2,15 @@
 // that is missing and revokes every holder the config does not list (including any holder of the
 // retired Clawback). The changes are grouped by the admin that governs them, so each admin signs
 // once: one transaction for a keypair admin; for a multisig, one base58 transaction message for the
-// Squads app (a member imports it, the members approve it with their Ledgers). The vault pays the rent of
-// new role accounts, so keep a little SOL in it.
+// Squads app (a member imports it, the members approve it with their Ledgers). A group too large for
+// one transaction is split, in order, into "<admin> roles 1/n", "2/n", …: import each. The vault pays
+// the rent of new role accounts, so keep a little SOL in it.
 //   NETWORK=mainnet tsx scripts/sync-roles.ts [--dry-run]
 //     [--admin <keypair.json|squads multisig>] [--compliance-admin <keypair.json|squads multisig>]
 // --admin / --compliance-admin default to the config's; pass a keypair file on a test network where
 // an admin is a plain key.
 import { type Instruction } from "@solana/kit";
-import { adminAddress, configuredRoles, grantRoleIx, resolveAdmin, revokeRoleIx, sendOrPrint, signerAddress, type Admin } from "./lib/admin.ts";
+import { adminAddress, configuredRoles, grantRoleIx, resolveAdmin, revokeRoleIx, sendOrPrintBatches, signerAddress, type Admin } from "./lib/admin.ts";
 import { config, setting } from "./lib/config.ts";
 import { COMPLIANCE_ROLES, fetchConfig, ROLE_NAMES_IN_ORDER, roleHolders } from "./lib/core.ts";
 import { parseArgs, RPC_URL } from "./lib/env.ts";
@@ -61,5 +62,5 @@ for (const group of ["admin", "compliance"] as const) {
     continue;
   }
   console.log(`${who}: ${lines.length} change(s)\n${lines.map((l) => `  ${l}`).join("\n")}`);
-  if (args["dry-run"] !== "true") await sendOrPrint(null, admins[group], ixs, `${group} roles`);
+  if (args["dry-run"] !== "true") await sendOrPrintBatches(null, admins[group], ixs, `${group} roles`);
 }

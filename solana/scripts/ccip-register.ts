@@ -1,4 +1,4 @@
-// TD §6 step 5: registers a Core mint with CCIP using the shared BurnMint token pool, for one
+// TD §6 step 6: registers a Core mint with CCIP using the shared BurnMint token pool, for one
 // remote (EVM) chain, in two transactions signed by the current mint authority:
 //   1. token admin (propose + accept), the pool (self-served: the mint authority signs), the pool
 //      signer's token account, and the pool's address lookup table;

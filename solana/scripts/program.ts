@@ -10,10 +10,12 @@
 //                               hands them to the vault and prints the upgrade, with the IDL update,
 //                               as one base58 transaction message for the Squads app; after the
 //                               members approve and execute it, run verify
-//   idl     --deployer <kp>     makes the on-chain IDL match the local one: directly while the deployer
-//                               is the upgrade authority, else as a base58 message for the Squads app
-// The IDL is kept where Anchor 1.x keeps it (Program Metadata, see lib/idl.ts); --idl <file>
-// overrides target/idl/mstocks_core.json.
+//   idl     --deployer <kp>     makes the on-chain IDL match the local one (creates it, replaces it, or
+//                               finishes an interrupted upload): directly while the deployer is the
+//                               upgrade authority, else as a base58 message for the Squads app
+// upgrade and idl plan every transaction and check that the Squads message fits before the deployer
+// spends anything. The IDL is kept where Anchor 1.x keeps it (Program Metadata, see lib/idl.ts);
+// --idl <file> overrides target/idl/mstocks_core.json.
 //   NETWORK=mainnet DEPLOYER=<keypair> tsx scripts/program.ts <command> [--deployer <keypair>] [--to <squads multisig>]
 // --deployer defaults to the DEPLOYER environment variable: a keypair file or a private key (base58 or a
 // JSON byte array); an inline key goes to the Solana CLI through an owner-only temporary file.
@@ -22,13 +24,13 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { address, fetchEncodedAccount, getAddressDecoder, type Address, type Instruction, type KeyPairSigner } from "@solana/kit";
-import { printSquadsImport, signerAddress } from "./lib/admin.ts";
+import { address, fetchEncodedAccount, generateKeyPairSigner, getAddressDecoder, type Address, type Instruction, type KeyPairSigner } from "@solana/kit";
+import { assertImportFits, printSquadsImport, signerAddress } from "./lib/admin.ts";
 import { setting } from "./lib/config.ts";
 import { CORE_PROGRAM_ID, fetchConfig, programDataPda } from "./lib/core.ts";
 import { deployerKey, keypairFile, loadKeypair, parseArgs, rpc, RPC_URL, send, withRetry } from "./lib/env.ts";
-import { createIdl, encodeIdl, readIdl, replaceIdl, sameIdl, topUp, topUpInstruction, writeBuffer } from "./lib/idl.ts";
-import { multisigFromConfig, upgradeIx, vaultOf } from "./lib/squads.ts";
+import { planIdl, readIdl, sameIdl, type IdlPlan } from "./lib/idl.ts";
+import { multisigFromConfig, upgradeIx } from "./lib/squads.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SO = `${ROOT}target/deploy/mstocks_core.so`;
@@ -70,42 +72,20 @@ async function verifyIdl(): Promise<boolean> {
   console.log(`on-chain IDL ${!onChain ? "MISSING" : same ? "matches" : "DIFFERS FROM"} ${args.idl ?? IDL_FILE}`);
   return same;
 }
-const sendAll = async (payer: KeyPairSigner, txs: Instruction[][]) => {
-  for (const ixs of txs) await send(payer, ixs);
-};
+/** The IDL change for the upgrade authority `authority` (null when the chain already has the local IDL); nothing is sent. */
+const planLocalIdl = async (deployer: KeyPairSigner, authority: Address) =>
+  planIdl(CORE_PROGRAM_ID, await programDataPda(), deployer, authority, localIdl());
 
-/**
- * Brings the on-chain IDL in line with the local one. Creating it (none on chain) needs the deployer
- * as upgrade authority and is sent. Otherwise the deployer writes a buffer handed to `authority` and
- * tops up the rent; the returned instructions copy it in and must be signed by `authority` (sent here
- * when it is the deployer, else put into the multisig's transaction).
- */
-async function syncIdl(deployer: KeyPairSigner, authority: Address): Promise<Instruction[]> {
-  const json = localIdl();
-  const data = encodeIdl(json);
-  const onChain = await readIdl(CORE_PROGRAM_ID);
-  if (onChain && sameIdl(onChain.text, json)) {
+/** Sends the deployer's part of an IDL plan; returns the upgrade authority's instructions (none when that is the deployer). */
+async function runIdlPlan(deployer: KeyPairSigner, plan: IdlPlan | null): Promise<Instruction[]> {
+  if (!plan) {
     console.log("IDL: on chain already matches");
     return [];
   }
-  const programData = await programDataPda();
-  if (!onChain) {
-    if (authority !== deployer.address) throw new Error(`no IDL on chain and the upgrade authority is ${authority}, not the deployer`);
-    await sendAll(deployer, await createIdl(deployer, deployer, CORE_PROGRAM_ID, programData, data));
-    console.log(`IDL: uploaded (${data.length} bytes compressed)`);
-    return [];
-  }
-  const { buffer, txs } = await writeBuffer(deployer, data, authority);
-  await sendAll(deployer, txs);
-  const extra = await topUp(onChain.lamports, data.length);
-  if (extra > 0n) await send(deployer, [topUpInstruction(deployer, onChain.metadata, extra)]);
-  console.log(`IDL: buffer ${buffer} (${data.length} bytes, was ${onChain.dataLength}), authority ${authority}`);
-  const ixs = replaceIdl(onChain.metadata, authority === deployer.address ? deployer : authority, buffer,
-    CORE_PROGRAM_ID, programData, onChain.dataLength, data.length, deployer.address);
-  if (authority !== deployer.address) return ixs;
-  await send(deployer, ixs);
-  console.log("IDL: updated");
-  return [];
+  console.log(`IDL: ${plan.summary}`);
+  for (const ixs of plan.deployerTxs) await send(deployer, ixs);
+  if (!plan.authorityIxs.length) console.log("IDL: done");
+  return plan.authorityIxs;
 }
 
 switch (command) {
@@ -120,10 +100,11 @@ switch (command) {
   case "deploy": {
     const deployer = await keypairFile(deployerKey(args, "deployer"));
     const current = await upgradeAuthority();
-    if (current !== "not deployed") throw new Error(`program ${CORE_PROGRAM_ID} is already deployed (upgrade authority ${current}); use upgrade`);
+    if (current !== "not deployed")
+      throw new Error(`program ${CORE_PROGRAM_ID} is already deployed (upgrade authority ${current}); use upgrade (or idl to publish the IDL)`);
     run("solana", ["program", "deploy", SO, "--program-id", PROGRAM_KEYPAIR, "--upgrade-authority", deployer, "-k", deployer, "-u", RPC_URL, "--use-rpc"]);
     const signer = await loadKeypair(deployer);
-    await syncIdl(signer, signer.address);
+    await runIdlPlan(signer, await planLocalIdl(signer, signer.address));
     if (!((await verify()) && (await verifyIdl()))) process.exit(1);
     break;
   }
@@ -134,12 +115,20 @@ switch (command) {
   }
   case "idl": {
     const signer = await loadKeypair(await keypairFile(deployerKey(args, "deployer")));
-    const authority = await upgradeAuthority();
-    if (authority === "not deployed" || authority.startsWith("none")) throw new Error(`upgrade authority: ${authority}`);
-    const ixs = await syncIdl(signer, address(authority));
+    const current = await upgradeAuthority();
+    if (current === "not deployed" || current.startsWith("none")) throw new Error(`upgrade authority: ${current}`);
+    const authority = address(current);
+    if (authority !== signer.address) {
+      // The multisig behind the vault: it names the proposal and sets its size limit. Resolved
+      // before anything is spent.
+      const vault = await signerAddress(multisigFromConfig(args.to ?? "upgrade_authority").toBase58());
+      if (vault !== authority) throw new Error(`upgrade authority is ${authority}, not the multisig vault ${vault}`);
+    }
+    const plan = await planLocalIdl(signer, authority);
+    if (plan?.authorityIxs.length) await assertImportFits(authority, plan.authorityIxs);
+    const ixs = await runIdlPlan(signer, plan);
     if (ixs.length) {
-      await signerAddress(multisigFromConfig(args.to ?? "upgrade_authority").toBase58()); // names the multisig
-      await printSquadsImport(address(authority), ixs, "idl");
+      await printSquadsImport(authority, ixs, "idl");
       console.log("after the members approve and execute it (time lock), run: program.ts verify");
     } else if (!(await verifyIdl())) process.exit(1);
     break;
@@ -157,18 +146,23 @@ switch (command) {
   case "upgrade": {
     const deployer = await keypairFile(deployerKey(args, "deployer"));
     const multisigPda = multisigFromConfig(args.to ?? "upgrade_authority");
-    const vault = address(vaultOf(multisigPda).toBase58());
+    const vault = await signerAddress(multisigPda.toBase58()); // also names the multisig in the output
     const current = await upgradeAuthority();
     if (current !== vault) throw new Error(`upgrade authority is ${current}, not the multisig vault ${vault}`);
+    const signer = await loadKeypair(deployer);
+    // Plan the IDL change and check the whole proposal fits (sizes do not depend on the buffer's
+    // address) before writing the program buffer, which costs SOL and is handed to the vault.
+    const plan = await planLocalIdl(signer, vault);
+    const idlIxs = plan?.authorityIxs ?? [];
+    const placeholder = (await generateKeyPairSigner()).address;
+    await assertImportFits(vault, [upgradeIx(CORE_PROGRAM_ID, placeholder, signer.address, vault), ...idlIxs]);
     console.log(`new build sha256 ${sha256(readFileSync(SO))}`);
     const out = solana(deployer, "program", "write-buffer", SO, "--buffer-authority", deployer, "--use-rpc");
     const buffer = out.match(/Buffer:\s+(\w+)/)?.[1];
     if (!buffer) throw new Error(`no buffer address in: ${out}`);
     solana(deployer, "program", "set-buffer-authority", buffer, "--buffer-authority", deployer, "--new-buffer-authority", vault);
     console.log(`buffer ${buffer} (authority ${vault})`);
-    const signer = await loadKeypair(deployer);
-    const idlIxs = await syncIdl(signer, vault);
-    await signerAddress(multisigPda.toBase58()); // names the multisig in the output
+    await runIdlPlan(signer, plan);
     await printSquadsImport(vault, [upgradeIx(CORE_PROGRAM_ID, address(buffer), signer.address, vault), ...idlIxs], "upgrade");
     console.log("after the members approve and execute it (time lock), run: program.ts verify");
     break;
