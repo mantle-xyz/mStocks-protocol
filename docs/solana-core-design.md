@@ -86,7 +86,7 @@ Mantle's multisig 3 (TokenIssuer admin) has no Solana counterpart: minting on So
 - Each admin grants and revokes only its own roles (`NotRoleAdmin`).
 - No self-grant: neither admin can be given any role.
 - Operational instructions reject either admin's signature, even if it still holds a role from before.
-- Admin changes take two steps, separately for each admin: `propose_admin` → `accept_admin`, `propose_compliance_admin` → `accept_compliance_admin`; the two admins must differ.
+- Admin changes take two steps, separately for each admin: `propose_admin` → `accept_admin`, `propose_compliance_admin` → `accept_compliance_admin`; the two admins must differ, checked at both steps.
 - Role members can renounce their own role; the admins cannot.
 
 ---
@@ -98,13 +98,13 @@ Mantle's multisig 3 (TokenIssuer admin) has no Solana counterpart: minting on So
 | Instruction | Signer | Checks | Action |
 | --- | --- | --- | --- |
 | `initialize(admin, compliance_admin, hook_authority)` | Program upgrade authority | Once only; the signer must be the program's upgrade authority, so nobody can initialize first after deployment | Create `Config` |
-| `propose_admin(new)` / `accept_admin` | Current admin / new admin | Two-step confirmation; `new` ≠ compliance admin | Change the admin |
-| `propose_compliance_admin(new)` / `accept_compliance_admin` | Current compliance admin / new one | Two-step confirmation; `new` ≠ admin | Change the compliance admin |
+| `propose_admin(new)` / `accept_admin` | Current admin / new admin | Two-step confirmation; `new` ≠ compliance admin, at proposal and at acceptance | Change the admin |
+| `propose_compliance_admin(new)` / `accept_compliance_admin` | Current compliance admin / new one | Two-step confirmation; `new` ≠ admin, at proposal and at acceptance | Change the compliance admin |
 | `grant_role(role, member)` | The role's admin (compliance admin for `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`; admin for the others); the retired `Clawback` cannot be granted | `member` is neither admin | Create `RoleEntry` |
 | `revoke_role(role, member)` | The role's admin | — | Close `RoleEntry` |
 | `renounce_role(role)` | The member | — | Close their own `RoleEntry` |
 | `register_mint(mantle_token)` | `MINT_REGISTRAR` | See below; `mantle_token` non-zero and not yet registered for another mint | Create `MintState` and `MantleTokenIndex` |
-| `unregister_mint` | Admin | The mint's supply is 0 | Close `MintState` and `MantleTokenIndex`, so a registration made in error (wrong mint or wrong Mantle token) can be redone. Once tokens exist Core must keep operating the mint, so it stays registered |
+| `unregister_mint` | Admin | The mint's supply is 0, and its mint authority is not a program address (a mint the CCIP pool can mint into stays registered) | Close `MintState` and `MantleTokenIndex`, so a registration made in error (wrong mint or wrong Mantle token) can be redone. Once tokens exist Core must keep operating the mint, so it stays registered |
 | `set_default_account_state(frozen)` | Admin | Mint registered | Switch the compliance policy: new accounts start frozen (screen before use) or usable (screen after use, current). A policy change, so it is the Admin's (Squads) call, like the admin-only `updateCompliance` on Mantle |
 
 Mint checks in `register_mint` (so a token is under control from launch):
@@ -151,7 +151,7 @@ Consistency comes from the operating process and reconciliation: ops send the sa
 | --- | --- | --- |
 | `freeze(mint, token_accounts…)` | `FREEZER` | Batch CPI `FreezeAccount` on every given token account of the registered mint. Skipped without failing the batch: accounts already frozen (so the backend can resend), and accounts that are not, or no longer, token accounts of this mint (a wallet can close an empty account or re-create it for another mint between the backend's lookup and the freeze; that must not leave its funded accounts usable). Up to about 23 accounts per transaction; the script sends batches of 20 (measured 92k CU, 1132 bytes) |
 | `thaw(mint, token_accounts…)` | `UNFREEZER` | Batch CPI `ThawAccount`; same skipping rules as `freeze` |
-| `clawback(source, destination, amount)` | Compliance admin | In one instruction: thaw source → `transfer_checked` to destination as Permanent Delegate → freeze source again |
+| `clawback(source, destination, amount)` | Compliance admin | In one instruction: thaw source → `transfer_checked` to destination as Permanent Delegate → freeze source again (emits `Frozen` too when the source was not frozen before) |
 
 `clawback` thaws first because a frozen account cannot send even when the Permanent Delegate initiates the transfer (tested: a direct transfer fails with `AccountFrozen`; "thaw → transfer → freeze" in one transaction succeeds). The destination should be a custody account. Three consequences of how Token-2022 works: `clawback` fails while the mint is paused (a pause rejects every transfer, including the permanent delegate's; freeze and thaw still work, so freeze first and claw back after resuming); it fails if the Transfer Hook is ever given a program (the CPI passes no hook accounts; Core would need an upgrade first); and with `amount = 0` it succeeds and leaves the source frozen.
 
