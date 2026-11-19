@@ -6,7 +6,7 @@
 #              unpauser (2/3, no time lock); EOAs: registrar, scheduler, ops (metadata), pauser, kms
 # Multisig actions go the mainnet way: each script prints a base58 transaction, which squads.ts
 # propose imports as the Squads app does (a member's key file stands in for a Ledger).
-# Covers: program.ts deploy / idl / handoff / upgrade / verify (program bytes and IDL; the IDL
+# Covers: a practice memo proposal; program.ts deploy / idl / handoff / upgrade / verify (program bytes and IDL; the IDL
 # created, replaced, shrunk, recovered from an unfinished upload, created through the upgrade
 # multisig), init-core and sync-roles from the config (grants split over two compliance proposals,
 # a revoke), check-config, a mint, resume by the unpauser multisig, clawback by the compliance
@@ -110,6 +110,10 @@ for ms in admin compliance_admin upgrade_authority unpauser; do
   sol transfer --allow-unfunded-recipient "$v" 1 >/dev/null
   echo "   $ms: vault $v"
 done
+
+echo "== squads.ts memo: a practice proposal (the vault signs a Memo) through the unpauser multisig"
+ts scripts/squads.ts memo --multisig unpauser --text "Ledger practice" >"$WORK/memo"; grep -E "^  1\. " "$WORK/memo" | cut -c1-120
+M=$(imp unpauser "memo" "$WORK/memo"); approve unpauser "$M"; execute unpauser "$M"
 
 echo "== Step: program.ts deploy (deploy, IDL upload, byte and IDL comparison)"
 ts scripts/program.ts deploy | grep -E "IDL|matches|DIFFERS|upgrade authority" || fail "deploy"

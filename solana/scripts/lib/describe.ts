@@ -58,6 +58,8 @@ export function describeInstruction(ix: Instruction): string {
   }
   if (ix.programAddress === "BPFLoaderUpgradeab1e11111111111111111111111" && data[0] === 3)
     return `BPF loader upgrade: program ${accounts[1]} from buffer ${accounts[2]} (spill ${accounts[3]}), authority ${accounts[6]}`;
+  if (ix.programAddress === "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr")
+    return `Memo "${Buffer.from(data).toString("utf8")}" (signed by ${accounts.join(", ")}; changes nothing)`;
   if (ix.programAddress === "ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S") {
     const ops: Record<number, string> = { 0: "write", 1: "initialize", 2: "set_authority", 3: "set_data (from buffer)", 5: "trim", 6: "close", 7: "allocate", 8: "extend" };
     // A write without data copies a whole buffer (the third account) into the account.

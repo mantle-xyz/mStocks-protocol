@@ -149,7 +149,7 @@ and Program Metadata programs (`scripts/fetch-fixtures.sh` dumps them).
 | `update-metadata.ts` | `MetadataOps` | Update name / symbol / uri / any key (e.g. isin); tops up the mint's rent first |
 | `revoke-role.ts` | Admin or compliance admin | Revoke a role (the admin that governs it) |
 | `set-default-account-state.ts` | Admin | Compliance policy switch: new token accounts start frozen (`--frozen`) or usable (default) |
-| `squads.ts` | Anyone / test members | `status` (members, threshold, time lock, recent proposals). For test multisigs with key-file members: `create`, `propose --base58` (import as the Squads app does), `approve` / `reject` / `execute` |
+| `squads.ts` | Anyone / test members | `status` (members, threshold, time lock, recent proposals); `memo` (a practice proposal: the vault signs a Memo and nothing changes, so members can try the import and their Ledgers first; on devnet use backup.app.squads.so, app.squads.so is mainnet only). For test multisigs with key-file members: `create`, `propose --base58` (import as the Squads app does), `approve` / `reject` / `execute` |
 | `local-squads-e2e.sh` | — | Runbook rehearsal with real Squads multisigs on a local validator: init, roles (a split sync), check-config, resume, clawback, unregister, the IDL (direct, interrupted upload, created by the vault), a program upgrade, and the negative cases |
 | `show-mint.ts` / `show-account.ts` | — | Print a mint's configuration / a token account's balance and state |
 | `dev-mint-to.ts` | Mint authority | Local/devnet only: mint before the CCIP handoff |

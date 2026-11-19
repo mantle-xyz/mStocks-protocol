@@ -11,10 +11,15 @@
 //   tsx scripts/squads.ts approve --multisig <ms> --index <n> --member <kp>
 //   tsx scripts/squads.ts reject  --multisig <ms> --index <n> --member <kp>
 //   tsx scripts/squads.ts execute --multisig <ms> --index <n> --member <kp>
+//   tsx scripts/squads.ts memo    --multisig <ms> [--text <text>]
+// `memo` prints a harmless action for practice (the vault signs a Memo; nothing changes on chain), so
+// members can try importing, approving with their Ledgers and executing before a real action.
 // `create` gives every member all permissions (initiate, vote, execute) and no config authority, so
 // membership, threshold and time lock change only through the multisig's own config proposals.
 import * as multisig from "@sqds/multisig";
 import { Keypair, PublicKey } from "@solana/web3.js";
+import { AccountRole, address } from "@solana/kit";
+import { printSquadsImport, signerAddress } from "./lib/admin.ts";
 import { parseArgs, required } from "./lib/env.ts";
 import { connection, decodeImport, loadWeb3Keypair, multisigFromConfig, propose, sendWeb3, vaultOf } from "./lib/squads.ts";
 
@@ -137,8 +142,18 @@ async function main() {
       console.log(`  approved by the proposer; needs ${p.threshold} approval(s), then executable ${p.timeLock}s after approval`);
       break;
     }
+    case "memo": {
+      const vault = await signerAddress(msArg().toBase58()); // also names the multisig and its proposal size limit
+      const text = args.text ?? "mStocks Squads practice";
+      await printSquadsImport(vault, [{
+        programAddress: address("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr"),
+        accounts: [{ address: vault, role: AccountRole.READONLY_SIGNER }],
+        data: new TextEncoder().encode(text),
+      }], "memo");
+      break;
+    }
     default:
-      throw new Error("usage: tsx scripts/squads.ts <create|status|propose|approve|reject|execute> ...");
+      throw new Error("usage: tsx scripts/squads.ts <create|status|propose|approve|reject|execute|memo> ...");
   }
 }
 
