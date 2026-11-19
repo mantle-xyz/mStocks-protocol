@@ -1,0 +1,47 @@
+# Solana mainnet ↔ Mantle mainnet configuration of mstocks-core, mirroring the Mantle config.toml:
+# the same roles, multisig signer groups, thresholds and time locks. The scripts read it when
+# NETWORK=mainnet, so commands need no addresses; a command-line value overrides it. Fill in the
+# addresses before launch (reviewed like code), then: NETWORK=mainnet tsx scripts/check-config.ts
+# Squads entries use Squads v4 with a time lock on the multisig. Give the multisig account address:
+# the scripts use its vault (index 0), the address that signs and is stored on chain.
+
+[solana]
+# Public endpoint; a provider URL with an API key goes in the RPC_URL environment variable instead
+# (keys never go in files) and overrides rpc.
+rpc = "https://api.mainnet-beta.solana.com"
+roles_rpc = "https://api.mainnet-beta.solana.com"   # must allow getProgramAccounts (role holder listing)
+chain_selector = "124615329519749607"                # Solana mainnet, as seen from Mantle
+
+[mantle]
+chain_id = 5000
+rpc = "https://rpc.mantle.xyz"                      # MANTLE_RPC_URL overrides it
+chain_selector = "1556008542357238666"
+router = "0x670052635a9850bb45882Cb2eCcF66bCff0F41B7"
+rmn = "0x91E2186E93F0ECeDDCdf9850078F104daB085E79"
+token_admin_registry = "0x000A744940eB5D857c0d61d97015DFc83107404F"
+registry_module = "0xf49f81b3d2F2a79b706621FA2D5934136352140c"   # RegistryModuleOwnerCustom
+token_admin = "0x75FFd111A49fbeA4894A41F93F41D7071C1778D3"       # every ScaledToken's DEFAULT_ADMIN_ROLE: multisig 1's 12 h timelock
+pool_owner = ""                                                  # every LockRelease pool's owner: multisig 1 (Safe)
+
+[program]
+id = "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd"
+min_notice_seconds = 300           # = Mantle minMultiplierNotice (fixed in the program)
+max_horizon_seconds = 31536000     # 365 days, as on Mantle (fixed in the program)
+
+[admins]
+upgrade_authority = ""   # Squads mirroring multisig 2: 3/6 + 24 h time lock (Mantle Beacon / ProxyAdmin owner)
+admin = ""               # Squads mirroring multisig 1: 3/6 + 12 h time lock (Mantle factory / ScaledToken admin)
+compliance_admin = ""    # Squads mirroring multisig 4: 3/6 + 12 h time lock (Mantle compliance / pause registries admin); signs clawback
+hook_authority = ""      # Transfer Hook authority of every mint: the admin's Squads (Mantle: ScaledToken admin)
+
+[roles]
+mint_registrar = []          # RWA-Bycustody, as Mantle EOA1 (factory OPS_ROLE)
+multiplier_scheduler = []    # RWA-Bycustody, as Mantle EOA3 (MULTIPLIER_SCHEDULER_ROLE)
+metadata_ops = []            # RWA-Bycustody, as Mantle EOA2 (ScaledToken OPS_ROLE)
+pauser = []                  # RWA-Bycustody, as Mantle EOA6 (PAUSE_ROLE)
+unpauser = []                # Squads mirroring multisig 5, no time lock (UNPAUSE_ROLE)
+freezer = []                 # Mantle compliance backend KMS, as Mantle EOA5 (ComplianceRegistry OPS_ROLE)
+unfreezer = []               # same key as freezer
+
+[ccip]
+solana_ccip_admin = ""       # CCIP token admin and pool owner of every mint: the admin's Squads; empty: admins.admin

@@ -1,0 +1,36 @@
+[package]
+name = "mstocks-core"
+version = "0.1.0"
+description = "mStocks Solana core program: roles, multiplier scheduling, pause, freeze and clawback for Token-2022 mints"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "mstocks_core"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = "1.2.2"
+anchor-spl = { version = "1.2.2", default-features = false, features = ["token", "token_2022", "token_2022_extensions", "solana-v3"] }
+
+[dev-dependencies]
+litesvm = "0.18.2"
+solana-clock = "3.2"
+solana-keypair = "3.1.2"
+solana-signer = "3.0.1"
+solana-transaction = "4.1.5"
+spl-token-2022-interface = "2"
+spl-token-metadata-interface = "0.8"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
