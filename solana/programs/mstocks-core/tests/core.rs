@@ -212,8 +212,10 @@ impl Env {
             ExtensionType::MetadataPointer,
             ExtensionType::DefaultAccountState,
             ExtensionType::TransferHook,
-            ExtensionType::PermanentDelegate,
         ];
+        if !opts.without_delegate {
+            exts.push(ExtensionType::PermanentDelegate);
+        }
         if opts.close_authority {
             exts.push(ExtensionType::MintCloseAuthority);
         }
@@ -227,8 +229,14 @@ impl Env {
         let m = mint.pubkey();
         let mut ixs = vec![
             create_account(&self.payer.pubkey(), &m, lamports, space as u64, &TOKEN_2022),
-            scaled_ui_amount::instruction::initialize(&TOKEN_2022, &m, Some(auth), 1.0).unwrap(),
-            pausable::instruction::initialize(&TOKEN_2022, &m, &auth).unwrap(),
+            scaled_ui_amount::instruction::initialize(
+                &TOKEN_2022,
+                &m,
+                Some(opts.scaled_authority.unwrap_or(auth)),
+                1.0,
+            )
+            .unwrap(),
+            pausable::instruction::initialize(&TOKEN_2022, &m, &opts.pausable_authority.unwrap_or(auth)).unwrap(),
             metadata_pointer::instruction::initialize(
                 &TOKEN_2022,
                 &m,
@@ -239,12 +247,14 @@ impl Env {
             default_account_state::instruction::initialize_default_account_state(
                 &TOKEN_2022,
                 &m,
-                &AccountState::Initialized,
+                if opts.default_frozen { &AccountState::Frozen } else { &AccountState::Initialized },
             )
             .unwrap(),
             transfer_hook::instruction::initialize(&TOKEN_2022, &m, Some(hook_authority), opts.hook_program).unwrap(),
-            token_ix::initialize_permanent_delegate(&TOKEN_2022, &m, &auth).unwrap(),
         ];
+        if !opts.without_delegate {
+            ixs.push(token_ix::initialize_permanent_delegate(&TOKEN_2022, &m, &opts.delegate.unwrap_or(auth)).unwrap());
+        }
         if opts.close_authority {
             ixs.push(token_ix::initialize_mint_close_authority(&TOKEN_2022, &m, Some(&Pubkey::new_unique())).unwrap());
         }
@@ -254,7 +264,7 @@ impl Env {
             spl_token_metadata_interface::instruction::initialize(
                 &TOKEN_2022,
                 &m,
-                &auth,
+                &opts.update_authority.unwrap_or(auth),
                 &m,
                 &mint_authority.pubkey(),
                 "Apple mStock".into(),
@@ -500,6 +510,12 @@ struct MintOpts {
     mint_authority_is_core: bool,
     pointer_authority: Option<Pubkey>,
     close_authority: bool,
+    scaled_authority: Option<Pubkey>,
+    pausable_authority: Option<Pubkey>,
+    update_authority: Option<Pubkey>,
+    delegate: Option<Pubkey>,
+    default_frozen: bool,
+    without_delegate: bool,
 }
 
 impl MintOpts {
@@ -650,12 +666,115 @@ fn register_mint_rejects_each_misconfiguration() {
         (MintOpts { mint_authority_is_core: true, ..MintOpts::valid() }, "MintAuthorityIsCore"),
         (MintOpts { pointer_authority: Some(Pubkey::new_unique()), ..MintOpts::valid() }, "WrongMetadataPointer"),
         (MintOpts { close_authority: true, ..MintOpts::valid() }, "UnexpectedExtension"),
+        (MintOpts { scaled_authority: Some(Pubkey::new_unique()), ..MintOpts::valid() }, "WrongScaledUiConfig"),
+        (MintOpts { pausable_authority: Some(Pubkey::new_unique()), ..MintOpts::valid() }, "WrongPausableConfig"),
+        (MintOpts { update_authority: Some(Pubkey::new_unique()), ..MintOpts::valid() }, "WrongTokenMetadata"),
+        (MintOpts { delegate: Some(Pubkey::new_unique()), ..MintOpts::valid() }, "WrongPermanentDelegate"),
+        (MintOpts { without_delegate: true, ..MintOpts::valid() }, "WrongPermanentDelegate"),
+        (MintOpts { default_frozen: true, ..MintOpts::valid() }, "WrongDefaultAccountState"),
     ];
     for (opts, expected) in cases {
         let mut env = Env::new();
         let m = env.create_mint(opts);
         assert_err(env.register(&m.mint), expected);
     }
+}
+
+#[test]
+fn register_mint_rejects_a_mint_with_supply() {
+    // Tokens minted before registration would be unbacked by any lock on Mantle.
+    let mut env = Env::new();
+    let m = env.create_mint(MintOpts::valid());
+    let holder = env.token_account(&m.mint, &Pubkey::new_unique());
+    env.mint_to(&m, &holder, 1).unwrap();
+    assert_err(env.register(&m.mint), "MintHasSupply");
+}
+
+#[test]
+fn a_mint_held_by_a_program_is_never_unregistered() {
+    // Once the CCIP pool's signer (a program address) holds the mint authority, the pool could mint
+    // into the mint after it left Core.
+    let mut env = Env::new();
+    let m = env.create_mint(MintOpts::valid());
+    let registrar = env.registrar.as_ref().unwrap().insecure_clone();
+    env.register_as(&registrar, &m.mint, [30u8; 20]).unwrap();
+    let pool_signer =
+        Pubkey::find_program_address(&[b"ccip_tokenpool_signer", m.mint.as_ref()], &Pubkey::new_unique()).0;
+    let ix = token_ix::set_authority(
+        &TOKEN_2022,
+        &m.mint,
+        Some(&pool_signer),
+        token_ix::AuthorityType::MintTokens,
+        &m.mint_authority.pubkey(),
+        &[],
+    )
+    .unwrap();
+    env.send(&[ix], &[&m.mint_authority]).unwrap();
+    let admin = env.admin.insecure_clone();
+    assert_err(env.unregister_as(&admin, &m.mint, [30u8; 20]), "MintAuthorityIsProgram");
+}
+
+#[test]
+fn admins_still_differ_when_a_handover_is_accepted() {
+    // Each admin proposes the same key while it is not the other admin; the second acceptance fails.
+    let mut env = Env::new();
+    let (admin, compliance, key) = (env.admin.insecure_clone(), env.compliance_admin.insecure_clone(), Keypair::new());
+    let ix = env.core_ix(
+        mstocks_core::accounts::AdminOnly { admin: admin.pubkey(), config: env.config },
+        mstocks_core::instruction::ProposeAdmin { new_admin: key.pubkey() },
+        vec![],
+    );
+    env.send(&[ix], &[&admin]).unwrap();
+    let ix = env.core_ix(
+        mstocks_core::accounts::ComplianceAdminOnly { compliance_admin: compliance.pubkey(), config: env.config },
+        mstocks_core::instruction::ProposeComplianceAdmin { new_admin: key.pubkey() },
+        vec![],
+    );
+    env.send(&[ix], &[&compliance]).unwrap();
+    let ix = env.core_ix(
+        mstocks_core::accounts::AcceptComplianceAdmin { new_admin: key.pubkey(), config: env.config },
+        mstocks_core::instruction::AcceptComplianceAdmin {},
+        vec![],
+    );
+    env.send(&[ix], &[&key]).unwrap();
+    let ix = env.core_ix(
+        mstocks_core::accounts::AcceptAdmin { new_admin: key.pubkey(), config: env.config },
+        mstocks_core::instruction::AcceptAdmin {},
+        vec![],
+    );
+    assert_err(env.send(&[ix], &[&key]).map(|_| ()), "AdminsMustDiffer");
+    assert_eq!(env.config().admin, admin.pubkey());
+    assert_eq!(env.config().compliance_admin, key.pubkey());
+}
+
+/// How many times `E` was emitted in a transaction's logs.
+fn event_count<E: anchor_lang::Discriminator>(logs: &[String]) -> usize {
+    use anchor_lang::__private::base64::{engine::general_purpose::STANDARD, Engine};
+    logs.iter()
+        .filter_map(|l| l.strip_prefix("Program data: "))
+        .filter_map(|d| STANDARD.decode(d).ok())
+        .filter(|b| b.starts_with(E::DISCRIMINATOR))
+        .count()
+}
+
+#[test]
+fn clawback_reports_the_freeze_it_leaves() {
+    let mut env = Env::new();
+    let m = env.registered_mint();
+    let source = env.token_account(&m.mint, &Pubkey::new_unique());
+    let custody = env.token_account(&m.mint, &Pubkey::new_unique());
+    env.mint_to(&m, &source, 1_000).unwrap();
+    let compliance = env.compliance_admin.insecure_clone();
+    // From a usable account: it ends frozen, and Frozen says so.
+    let ix = env.clawback_ix(&compliance, &m.mint, source, custody, 400);
+    let meta = env.send(&[ix], &[&compliance]).unwrap();
+    assert_eq!(env.token(&source), (600, AccountState::Frozen));
+    assert_eq!(event_count::<mstocks_core::events::Frozen>(&meta.logs), 1);
+    assert_eq!(event_count::<mstocks_core::events::ClawedBack>(&meta.logs), 1);
+    // From an account that was already frozen: no second Frozen.
+    let ix = env.clawback_ix(&compliance, &m.mint, source, custody, 600);
+    let meta = env.send(&[ix], &[&compliance]).unwrap();
+    assert_eq!(event_count::<mstocks_core::events::Frozen>(&meta.logs), 0);
 }
 
 // ---------------------------------------------------------------------------------------------

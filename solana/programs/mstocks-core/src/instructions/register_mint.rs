@@ -72,7 +72,9 @@ pub fn register_mint(ctx: Context<RegisterMint>, mantle_token: [u8; 20]) -> Resu
 
 /// Undoes a registration made in error (wrong mint or wrong Mantle token), so it can be registered
 /// again correctly. Only while the mint has no supply: once tokens exist, Core must keep operating
-/// it (freeze, pause, clawback all require the registration).
+/// it (freeze, pause, clawback all require the registration). And only while its mint authority is
+/// not a program address: once the CCIP pool holds it, the pool could mint into the mint after it
+/// left Core, so a CCIP-connected mint stays registered.
 #[derive(Accounts)]
 pub struct UnregisterMint<'info> {
     #[account(mut)]
@@ -95,11 +97,14 @@ pub struct UnregisterMint<'info> {
 }
 
 pub fn unregister_mint(ctx: Context<UnregisterMint>) -> Result<()> {
-    let supply = {
+    let (supply, mint_authority) = {
         let data = ctx.accounts.mint.try_borrow_data()?;
-        StateWithExtensions::<Mint>::unpack(&data)?.base.supply
+        let base = StateWithExtensions::<Mint>::unpack(&data)?.base;
+        (base.supply, Option::<Pubkey>::from(base.mint_authority))
     };
     require!(supply == 0, CoreError::MintHasSupply);
+    // A program-derived address is off the curve; a key that can sign is on it.
+    require!(mint_authority.is_none_or(|authority| authority.is_on_curve()), CoreError::MintAuthorityIsProgram);
     emit!(MintUnregistered { mint: ctx.accounts.mint.key(), mantle_token: ctx.accounts.mint_state.mantle_token });
     Ok(())
 }
@@ -125,6 +130,9 @@ fn validate_mint(mint_info: &AccountInfo, authority: &Pubkey, hook_authority: &P
     let is_authority = |key: Option<Pubkey>| key == Some(*authority);
 
     require!(mint.base.decimals == REQUIRED_DECIMALS, CoreError::WrongDecimals);
+    // Every token must come from the CCIP pool against tokens locked on Mantle; supply minted before
+    // registration would be unbacked.
+    require!(mint.base.supply == 0, CoreError::MintHasSupply);
     for extension in mint.get_extension_types()? {
         require!(ALLOWED_EXTENSIONS.contains(&extension), CoreError::UnexpectedExtension);
     }

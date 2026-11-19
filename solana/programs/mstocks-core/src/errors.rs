@@ -60,4 +60,6 @@ pub enum CoreError {
     RoleRetired,
     #[msg("Only the compliance admin can do this")]
     NotComplianceAdmin,
+    #[msg("A mint whose authority is a program address (the CCIP pool) cannot be unregistered")]
+    MintAuthorityIsProgram,
 }

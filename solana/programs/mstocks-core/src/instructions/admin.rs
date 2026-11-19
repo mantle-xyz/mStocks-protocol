@@ -75,6 +75,8 @@ pub struct AcceptAdmin<'info> {
 
 pub fn accept_admin(ctx: Context<AcceptAdmin>) -> Result<()> {
     let config = &mut ctx.accounts.config;
+    // Checked again here: the compliance admin may have changed since the proposal.
+    require_keys_neq!(ctx.accounts.new_admin.key(), config.compliance_admin, CoreError::AdminsMustDiffer);
     let previous = config.admin;
     config.admin = ctx.accounts.new_admin.key();
     config.pending_admin = None;
@@ -111,6 +113,8 @@ pub struct AcceptComplianceAdmin<'info> {
 
 pub fn accept_compliance_admin(ctx: Context<AcceptComplianceAdmin>) -> Result<()> {
     let config = &mut ctx.accounts.config;
+    // Checked again here: the admin may have changed since the proposal.
+    require_keys_neq!(ctx.accounts.new_admin.key(), config.admin, CoreError::AdminsMustDiffer);
     let previous = config.compliance_admin;
     config.compliance_admin = ctx.accounts.new_admin.key();
     config.pending_compliance_admin = None;

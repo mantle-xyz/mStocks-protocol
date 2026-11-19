@@ -27,7 +27,7 @@ pub const DEFAULT_MAX_HORIZON: i64 = 365 * 24 * 60 * 60;
 /// Two admins, split like Mantle's: `admin` mirrors the token and factory admin (multisig 1) and
 /// governs the token roles and the mint registry; `compliance_admin` mirrors the compliance and
 /// pause registries' admin (multisig 4) and governs the pause, freeze and clawback roles. Neither
-/// ever operates. The compliance fields are appended last so the account keeps its prefix.
+/// ever operates. The account is never reallocated: a layout change needs a migration.
 #[account]
 #[derive(InitSpace)]
 pub struct Config {

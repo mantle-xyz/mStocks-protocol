@@ -135,6 +135,9 @@ pub fn clawback(ctx: Context<Clawback>, amount: u64) -> Result<()> {
     token2022::delegate_transfer(&token_program, &source, &mint, &destination, &authority, amount, decimals)?;
     token2022::set_frozen(&token_program, &source, &mint, &authority, true)?;
 
+    if !source_was_frozen {
+        emit!(Frozen { mint: *mint.key, account: *source.key });
+    }
     emit!(ClawedBack { mint: *mint.key, source: *source.key, destination: *destination.key, amount });
     Ok(())
 }
