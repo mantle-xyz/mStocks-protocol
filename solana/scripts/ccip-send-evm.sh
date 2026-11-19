@@ -8,6 +8,7 @@
 # ([mantle].router, [solana].chain_selector, [mantle].rpc); MANTLE_RPC_URL overrides the RPC.
 set -euo pipefail
 source "$(dirname "$0")/lib/config.sh"
+source "$(dirname "$0")/lib/evm-key.sh"
 require_network
 MANTLE_RPC_URL=${MANTLE_RPC_URL:-$(cfg_required mantle.rpc)}
 ROUTER=$(cfg_required mantle.router)
@@ -36,9 +37,10 @@ SIG="(bytes,bytes,(address,uint256)[],address,bytes)"
 FEE=$(cast call "$ROUTER" "getFee(uint64,$SIG)(uint256)" "$DEST_SELECTOR" "$MSG" --rpc-url "$MANTLE_RPC_URL" | awk '{print $1}')
 [ -n "$FEE" ] || { echo "getFee failed" >&2; exit 1; }
 echo "fee $(cast from-wei "$FEE") MNT"
-cast send "$TOKEN" "approve(address,uint256)" "$ROUTER" "$AMOUNT" --rpc-url "$MANTLE_RPC_URL" --private-key "$(cat "$KEY")" >/dev/null
+set_signer "$KEY"
+cast send "$TOKEN" "approve(address,uint256)" "$ROUTER" "$AMOUNT" --rpc-url "$MANTLE_RPC_URL" "${SIGNER[@]}" >/dev/null
 cast send "$ROUTER" "ccipSend(uint64,$SIG)" "$DEST_SELECTOR" "$MSG" --value "$FEE" \
-  --rpc-url "$MANTLE_RPC_URL" --private-key "$(cat "$KEY")" --json |
+  --rpc-url "$MANTLE_RPC_URL" "${SIGNER[@]}" --json |
   python3 -I -c '
 import sys, json
 r = json.load(sys.stdin)

@@ -10,13 +10,13 @@ import { createHash } from "node:crypto";
 import {
   AccountRole,
   address,
-  getAddressDecoder,
   getBase58Encoder,
   signature as toSignature,
   type AccountMeta,
   type Address,
   type Instruction,
 } from "@solana/kit";
+import { lookupTableAddresses } from "./lib/ccip.ts";
 import { concat } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, rpc, send, withRetry } from "./lib/env.ts";
 
@@ -82,14 +82,8 @@ const computeLimit: Instruction = {
 };
 
 // Same lookup tables as the failed transaction (the OffRamp's own and the token's pool table).
-const dec = getAddressDecoder();
 const tables: Record<Address, Address[]> = {};
-for (const { accountKey } of "addressTableLookups" in msg ? (msg.addressTableLookups ?? []) : []) {
-  const { value } = await withRetry(() => rpc.getAccountInfo(accountKey, { encoding: "base64" }).send());
-  if (!value) throw new Error(`lookup table ${accountKey} not found`);
-  const raw = new Uint8Array(Buffer.from(value.data[0], "base64"));
-  tables[accountKey] = [];
-  for (let at = 56; at + 32 <= raw.length; at += 32) tables[accountKey].push(dec.decode(raw.subarray(at, at + 32)));
-}
+for (const { accountKey } of "addressTableLookups" in msg ? (msg.addressTableLookups ?? []) : [])
+  tables[accountKey] = await lookupTableAddresses(accountKey);
 
 console.log(`manually_execute: ${await send(payer, [computeLimit, manuallyExecute], tables)}`);

@@ -12,6 +12,6 @@ if (command !== "unfinished") throw new Error("usage: tsx scripts/test-idl-state
 const deployer = await loadSigner(deployerKey(parseArgs(rest), "deployer"));
 const programData = await programDataPda();
 if ((await idlState(CORE_PROGRAM_ID)).kind !== "none") await send(deployer, [await closeIdlInstruction(CORE_PROGRAM_ID, programData, deployer)]);
-const json = readFileSync(new URL("../target/idl/mstocks_core.json", import.meta.url), "utf8");
+const json = readFileSync(new URL("../idl/mstocks_core.json", import.meta.url), "utf8");
 await send(deployer, await unfinishedIdlUpload(CORE_PROGRAM_ID, programData, deployer, json));
 console.log(`IDL account: ${(await idlState(CORE_PROGRAM_ID)).kind}`);

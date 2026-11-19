@@ -9,6 +9,7 @@ import {
   getAddressEncoder,
   getProgramDerivedAddress,
   getUtf8Encoder,
+  type AccountSignerMeta,
   type Address,
   type Instruction,
   type KeyPairSigner,
@@ -81,11 +82,43 @@ export async function accountData(addr: Address): Promise<Uint8Array | null> {
 }
 
 /** TokenAdminRegistry: 8 discriminator, version (1), administrator, pending administrator, lookup table, ... */
+/**
+ * The authority of an address lookup table: null once it is frozen (nobody can then extend,
+ * deactivate or close it), undefined when the table does not exist. LookupTableMeta: u32 state,
+ * deactivation slot, last extended slot, start index, then Option<Pubkey> at byte 21.
+ */
+export async function lookupTableAuthority(table: Address): Promise<Address | null | undefined> {
+  const d = await accountData(table);
+  if (!d) return undefined;
+  return d[21] === 1 ? dec.decode(d.subarray(22, 54)) : null;
+}
+/** FreezeLookupTable (instruction 1), signed by the table's authority. */
+export function freezeLookupTableIx(table: Address, authority: KeyPairSigner): Instruction {
+  const signer: AccountSignerMeta = { address: authority.address, role: AccountRole.READONLY_SIGNER, signer: authority };
+  return { programAddress: ALT_PROGRAM, accounts: [{ address: table, role: AccountRole.WRITABLE }, signer], data: Uint8Array.of(1, 0, 0, 0) };
+}
+
+/** The addresses an address lookup table holds (after its 56-byte LookupTableMeta). */
+export async function lookupTableAddresses(table: Address): Promise<Address[]> {
+  const d = await accountData(table);
+  if (!d) throw new Error(`lookup table ${table} not found`);
+  return Array.from({ length: (d.length - 56) / 32 }, (_, i) => dec.decode(d.subarray(56 + i * 32, 88 + i * 32)));
+}
+
+/**
+ * TokenAdminRegistry: administrator, pending administrator, the pool's lookup table, and
+ * writable_indexes ([u128; 2] little-endian, filled from the most significant bit: lookup table
+ * index i < 128 is bit 127 - i of the first word, otherwise bit 255 - i of the second).
+ */
 export async function registryState(a: CcipAccounts) {
   const d = await accountData(a.tokenAdminRegistry);
-  return d
-    ? { admin: dec.decode(d.subarray(9, 41)), pending: dec.decode(d.subarray(41, 73)), lookupTable: dec.decode(d.subarray(73, 105)) }
-    : null;
+  if (!d) return null;
+  const writable = d.subarray(105, 137);
+  const isWritable = (i: number) => {
+    const bit = i < 128 ? 127 - i : 255 - i;
+    return ((writable[(i < 128 ? 0 : 16) + (bit >> 3)] >> (bit & 7)) & 1) === 1;
+  };
+  return { admin: dec.decode(d.subarray(9, 41)), pending: dec.decode(d.subarray(41, 73)), lookupTable: dec.decode(d.subarray(73, 105)), isWritable };
 }
 
 /** Pool State: 8 discriminator, version (1), BaseConfig { token_program, mint, decimals, pool_signer, pool_token_account, owner, proposed_owner, ... } */

@@ -2,7 +2,8 @@
 //   - the mint: every authority with Core (freeze, scaled UI amount, pause, metadata pointer and
 //     update authority, permanent delegate), the mint authority with the CCIP pool, the dormant
 //     transfer hook held by the config's hook authority, not paused;
-//   - CCIP on Solana: token admin and pool owner = the config's CCIP admin, nothing pending, pool set;
+//   - CCIP on Solana: token admin and pool owner = the config's CCIP admin, nothing pending, pool set,
+//     its lookup table frozen;
 //   - Mantle: ccip-mantle-setup.sh verify (pool from the TokenAdminRegistry), check-multiplier.ts and
 //     check-supply.ts.
 //   NETWORK=mainnet tsx scripts/check-stock.ts --mint <mint>
@@ -11,7 +12,7 @@ import { fileURLToPath } from "node:url";
 import { address, fetchEncodedAccount } from "@solana/kit";
 import { getMintDecoder } from "@solana-program/token-2022";
 import { signerAddress } from "./lib/admin.ts";
-import { ccipAccounts, poolOwnership, registryState, SYSTEM_PROGRAM } from "./lib/ccip.ts";
+import { ccipAccounts, lookupTableAuthority, poolOwnership, registryState, SYSTEM_PROGRAM } from "./lib/ccip.ts";
 import { ccipAdmin, config, NETWORK, setting } from "./lib/config.ts";
 import { authorityPda, mantleTokenOf } from "./lib/core.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
@@ -71,6 +72,9 @@ else {
   expect("token admin", reg.admin, admin);
   expect("pending token admin", reg.pending, SYSTEM_PROGRAM);
   (reg.lookupTable !== SYSTEM_PROGRAM ? ok : fail)("pool set (lookup table)", reg.lookupTable);
+  // A table authority could close the table and stop every transfer: it must be frozen.
+  const tableAuthority = reg.lookupTable !== SYSTEM_PROGRAM ? await lookupTableAuthority(reg.lookupTable) : undefined;
+  expect("lookup table frozen", tableAuthority === null ? "frozen" : `authority ${tableAuthority}`, "frozen");
   expect("pool owner", pool.owner, admin);
   expect("proposed pool owner", pool.proposed, SYSTEM_PROGRAM);
 }

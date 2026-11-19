@@ -135,14 +135,19 @@ export async function readIdl(program: Address) {
   return s.kind === "idl" ? s : null;
 }
 
-/** Transactions writing `data` into the new keypair buffer `buffer`, then handing it to `finalAuthority`. */
+/**
+ * Transactions writing `data` into the new keypair buffer `buffer`: the payer (deployer) becomes its
+ * authority at once, so if a write fails it can still close the buffer and recover the rent (the
+ * buffer's own key lives only in memory); the last transaction hands it to `finalAuthority`.
+ */
 async function writeBufferTxs(payer: KeyPairSigner, buffer: KeyPairSigner, data: Uint8Array, finalAuthority: Address) {
   const txs: Instruction[][] = [[
     getCreateAccountInstruction({ payer, newAccount: buffer, lamports: await rent(data.length), space: BigInt(HEADER + data.length), programAddress: PROGRAM_METADATA }),
     allocate(buffer.address, buffer),
+    setAuthority(buffer.address, buffer, payer.address),
   ]];
-  for (let o = 0; o < data.length; o += CHUNK) txs.push([write(buffer.address, buffer, o, data.subarray(o, o + CHUNK))]);
-  txs.push([setAuthority(buffer.address, buffer, finalAuthority)]);
+  for (let o = 0; o < data.length; o += CHUNK) txs.push([write(buffer.address, payer, o, data.subarray(o, o + CHUNK))]);
+  if (finalAuthority !== payer.address) txs.push([setAuthority(buffer.address, payer, finalAuthority)]);
   return txs;
 }
 
@@ -151,7 +156,13 @@ async function writeBufferTxs(payer: KeyPairSigner, buffer: KeyPairSigner, data:
  * writes, rent); `authorityIxs` are the upgrade authority's, for its Squads transaction (empty when
  * the deployer is the upgrade authority: everything is then in deployerTxs).
  */
-export type IdlPlan = { summary: string; deployerTxs: Instruction[][]; authorityIxs: Instruction[] };
+export type IdlPlan = {
+  summary: string;
+  deployerTxs: Instruction[][];
+  authorityIxs: Instruction[];
+  /** If one of deployerTxs[from .. heldUntil) fails, `ixs` (deployer-signed) close the buffer it was writing. */
+  cleanup?: { buffer: Address; from: number; heldUntil: number; ixs: Instruction[] };
+};
 
 /**
  * Plans the IDL change without sending anything; null when the IDL on chain is already `json`.
@@ -175,17 +186,21 @@ export async function planIdl(program: Address, programData: Address, deployer: 
   if (state.kind === "idl") {
     // Replace: the deployer writes a buffer for the authority and tops up the account's rent; the
     // authority grows the account if needed, copies the buffer in, closes it and trims any excess.
+    const growth = data.length - state.dataLength;
+    if (!direct && growth > REALLOC_LIMIT) throw tooMuchGrowth(growth);
     const buffer = await generateKeyPairSigner();
     deployerTxs.push(...(await writeBufferTxs(deployer, buffer, data, authority)));
+    // Held by the deployer through the hand-over transaction; when the deployer is the authority, until the end.
+    const cleanup = bufferCleanup(buffer.address, direct ? Number.MAX_SAFE_INTEGER : deployerTxs.length, deployer);
     const topUp = (await rent(data.length)) - state.lamports;
     if (topUp > 0n) deployerTxs.push(fund(deployer, metadata, topUp));
-    const growth = data.length - state.dataLength;
-    return done(`replace the IDL (${state.dataLength} → ${data.length} bytes) from buffer ${buffer.address}`, [
+    const plan = done(`replace the IDL (${state.dataLength} → ${data.length} bytes) from buffer ${buffer.address}`, [
       ...(growth > REALLOC_LIMIT ? extendAll(metadata, signer, program, programData, growth) : []),
       setData(metadata, signer, buffer.address, program, programData),
       close(buffer.address, signer, deployer.address),
       ...(growth < 0 ? [trim(metadata, signer, program, programData, deployer.address)] : []),
     ]);
+    return { ...plan, cleanup };
   }
 
   let prefunded = state.lamports;
@@ -210,17 +225,30 @@ export async function planIdl(program: Address, programData: Address, deployer: 
   }
   // Create through the vault: the deployer writes a buffer for the vault and funds the account; the
   // vault allocates the canonical account, copies the buffer in, initializes it and closes the buffer.
+  if (HEADER + data.length > REALLOC_LIMIT) throw tooMuchGrowth(HEADER + data.length);
   const buffer = await generateKeyPairSigner();
+  const start = deployerTxs.length;
   deployerTxs.push(...(await writeBufferTxs(deployer, buffer, data, authority)));
+  const cleanup = bufferCleanup(buffer.address, deployerTxs.length, deployer, start);
   if (funding.length) deployerTxs.push(funding);
-  return done(`${summary}create the IDL (${data.length} bytes) from buffer ${buffer.address}`, [
+  const plan = done(`${summary}create the IDL (${data.length} bytes) from buffer ${buffer.address}`, [
     allocate(metadata, authority, program, programData, true),
     ...(data.length > REALLOC_LIMIT ? extendAll(metadata, authority, program, programData, data.length) : []),
     writeFrom(metadata, authority, buffer.address),
     initialize(metadata, authority, program, programData),
     close(buffer.address, authority, deployer.address),
   ]);
+  return { ...plan, cleanup };
 }
+
+/** A vault transaction runs as one instruction, and the runtime lets one instruction grow an account by at most 10,240 bytes. */
+const tooMuchGrowth = (bytes: number) =>
+  new Error(`the IDL account would grow by ${bytes} bytes in one multisig transaction, over the 10,240 one instruction allows; ` +
+    "these scripts do not split it (extend proposals of at most 10,240 bytes each would have to come first)");
+
+/** Closing a keypair buffer created by deployerTxs[createdAt], for a failure while the deployer still holds it. */
+const bufferCleanup = (buffer: Address, heldUntil: number, deployer: KeyPairSigner, createdAt = 0) =>
+  ({ buffer, from: createdAt + 1, heldUntil, ixs: [close(buffer, deployer, deployer.address)] });
 
 /** Test support: closes the IDL account (or an unfinished upload there), signed by the upgrade authority. */
 export const closeIdlInstruction = async (program: Address, programData: Address, authority: KeyPairSigner) =>

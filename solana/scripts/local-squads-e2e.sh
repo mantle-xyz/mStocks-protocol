@@ -20,6 +20,9 @@ TL=${TL:-15}
 PORT=${PORT:-18899}
 unset RPC_URL MANTLE_RPC_URL
 WORK=$(mktemp -d)
+VALIDATOR=""  # set below; the trap runs from here on, also if a setup step fails
+trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
+wait_for() { local i; for i in $(seq 1 90); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done; echo "FAIL: timed out waiting for: $*"; exit 1; }
 for k in deployer m1 m2 m3 outsider registrar scheduler ops pauser kms user custody f1 f2 f3 f4 f5 f6; do
   solana-keygen new --no-bip39-passphrase --silent -o "$WORK/$k.json" >/dev/null
 done
@@ -34,8 +37,7 @@ solana-test-validator --reset --quiet --ledger "$WORK/ledger" --rpc-port "$PORT"
   --account BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr tests/fixtures/squads_program_config.json \
   --bpf-program ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S tests/fixtures/program_metadata.so &
 VALIDATOR=$!
-trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
-until sol cluster-version >/dev/null 2>&1; do sleep 1; done
+wait_for sol cluster-version
 for k in deployer m1 m2 m3 outsider registrar scheduler ops pauser kms; do sol airdrop 100 "$(pk $k)" >/dev/null; done
 
 ts() { npx tsx "$@" 2>&1 | grep -v "npm warn"; }
@@ -124,7 +126,7 @@ def strip(o):
     if isinstance(o, dict): return {k: strip(v) for k, v in o.items() if k != "docs"}
     if isinstance(o, list): return [strip(v) for v in o]
     return o
-json.dump(strip(json.load(open(sys.argv[1]))), open(sys.argv[2], "w"))' target/idl/mstocks_core.json "$WORK/idl-small.json"
+json.dump(strip(json.load(open(sys.argv[1]))), open(sys.argv[2], "w"))' idl/mstocks_core.json "$WORK/idl-small.json"
 ts scripts/program.ts idl --idl "$WORK/idl-small.json" | grep -E "^IDL|matches|DIFFERS" || fail "idl (direct)"
 ts scripts/program.ts verify >"$WORK/verify" && fail "verify passed with a different IDL"
 grep -q "on-chain IDL DIFFERS" "$WORK/verify" || fail "verify should see the smaller IDL"
@@ -207,14 +209,17 @@ WRONG=$(ts scripts/create-mint.ts --payer "$WORK/registrar.json" --uri https://e
 ts scripts/unregister-mint.ts --mint "$WRONG" >"$WORK/p"; U=$(imp admin "unregister_mint" "$WORK/p"); approve admin "$U"; after_time_lock "$TL"; execute admin "$U"
 expect_fail "unregistered mint" "not registered" npx tsx scripts/unregister-mint.ts --mint "$WRONG"
 
-echo "== program.ts upgrade through the upgrade multisig"
+echo "== program.ts upgrade through the upgrade multisig (a build 20,000 bytes larger: the program account is extended first)"
 expect_fail "upgrade by the old deployer key" "does not match" \
   sol program deploy target/deploy/mstocks_core.so --program-id "$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)" --upgrade-authority "$D"
-ts scripts/program.ts upgrade >"$WORK/up"; grep -E "^IDL|^  [0-9]\. " "$WORK/up" | cut -c1-160
+python3 -I -c 'import sys; d = open(sys.argv[1], "rb").read(); open(sys.argv[2], "wb").write(d + bytes(20000))' target/deploy/mstocks_core.so "$WORK/larger.so"
+ts scripts/program.ts upgrade --so "$WORK/larger.so" >"$WORK/up"; grep -E "^IDL|^program account extended|^  [0-9]\. " "$WORK/up" | cut -c1-160
+grep -q "^program account extended" "$WORK/up" || { cat "$WORK/up"; fail "the program account was not extended"; }
 UP=$(imp upgrade_authority "upgrade" "$WORK/up")
 [ -n "$UP" ] || { cat "$WORK/up"; fail "upgrade proposal"; }
 approve upgrade_authority "$UP"; after_time_lock $((TL * 2)); execute upgrade_authority "$UP"
-ts scripts/program.ts verify | tee "$WORK/verify" | grep -E "matches|DIFFERS|MISSING"
+ts scripts/program.ts verify --so "$WORK/larger.so" | tee "$WORK/verify" | grep -E "matches|DIFFERS|MISSING"
+grep -q "on-chain program matches" "$WORK/verify" || fail "program not upgraded to the larger build"
 grep -q "on-chain IDL matches" "$WORK/verify" || fail "IDL not updated by the upgrade"
 ts scripts/check-config.ts | grep -q "^PASS" || fail "check-config after upgrade"
 ts scripts/freeze.ts --operator "$WORK/kms.json" --mint "$MINT" --owner "$(pk user)" --thaw | grep -E "^thaw" | head -1

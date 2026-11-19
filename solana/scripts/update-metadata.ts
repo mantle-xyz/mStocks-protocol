@@ -11,6 +11,9 @@ const operator = await loadKeypair(required(args, "operator"));
 const mint = address(required(args, "mint"));
 const field = required(args, "field");
 const value = required(args, "value");
+// Mantle's ScaledToken accepts only these symbols (_assertSymbol); keep both chains alike.
+if (field === "symbol" && !/^[A-Za-z0-9-]{1,32}$/.test(value))
+  throw new Error(`symbol "${value}" would be rejected on Mantle: 1-32 characters of A-Z, a-z, 0-9 and "-"`);
 
 // Worst case the field is new: key + value + two length prefixes, in UTF-8 bytes as Token-2022 stores them.
 const account = await fetchEncodedAccount(rpc, mint);

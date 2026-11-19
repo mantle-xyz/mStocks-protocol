@@ -5,6 +5,7 @@
 // same file through lib/config.sh. Without NETWORK the scripts are in local mode:
 // every address comes from the command line and the RPC defaults to a local validator.
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "smol-toml";
 
@@ -28,9 +29,11 @@ export type Config = {
 };
 
 export const NETWORK = process.env.NETWORK || undefined;
+// A config file given as a relative path is resolved here, and NETWORK made absolute for the
+// scripts this one starts (check-stock.ts runs its sub-checks from solana/).
 export const CONFIG_PATH = NETWORK
   ? NETWORK.endsWith(".toml")
-    ? NETWORK
+    ? (process.env.NETWORK = resolve(NETWORK))
     : fileURLToPath(new URL(`../../config.${NETWORK}.toml`, import.meta.url))
   : undefined;
 export const config: Config | null = CONFIG_PATH ? (parse(readFileSync(CONFIG_PATH, "utf8")) as unknown as Config) : null;

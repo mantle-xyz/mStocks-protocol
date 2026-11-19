@@ -1,0 +1,2644 @@
+{
+  "address": "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd",
+  "metadata": {
+    "name": "mstocks_core",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "mStocks Solana core program: roles, multiplier scheduling, pause, freeze and clawback for Token-2022 mints"
+  },
+  "instructions": [
+    {
+      "name": "accept_admin",
+      "discriminator": [
+        112,
+        42,
+        45,
+        90,
+        116,
+        181,
+        13,
+        170
+      ],
+      "accounts": [
+        {
+          "name": "new_admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "accept_compliance_admin",
+      "discriminator": [
+        86,
+        217,
+        104,
+        65,
+        121,
+        165,
+        92,
+        134
+      ],
+      "accounts": [
+        {
+          "name": "new_admin",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "clawback",
+      "discriminator": [
+        111,
+        92,
+        142,
+        79,
+        33,
+        234,
+        82,
+        27
+      ],
+      "accounts": [
+        {
+          "name": "compliance_admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "mint_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "source",
+          "writable": true
+        },
+        {
+          "name": "destination",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "freeze",
+      "docs": [
+        "Token accounts to freeze are passed as remaining accounts."
+      ],
+      "discriminator": [
+        255,
+        91,
+        207,
+        84,
+        251,
+        194,
+        254,
+        63
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  3
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "operator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "mint_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "grant_role",
+      "discriminator": [
+        218,
+        234,
+        128,
+        15,
+        82,
+        33,
+        236,
+        253
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "admin",
+          "docs": [
+            "The admin that governs `role` (`Config::role_admin`)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "role"
+              },
+              {
+                "kind": "arg",
+                "path": "member"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "Role"
+            }
+          }
+        },
+        {
+          "name": "member",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program",
+          "docs": [
+            "Initialization is restricted to the upgrade authority so nobody can front-run the",
+            "deployment and install their own admin."
+          ],
+          "address": "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd"
+        },
+        {
+          "name": "program_data"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "admin",
+          "type": "pubkey"
+        },
+        {
+          "name": "compliance_admin",
+          "type": "pubkey"
+        },
+        {
+          "name": "hook_authority",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "discriminator": [
+        211,
+        22,
+        221,
+        251,
+        74,
+        121,
+        193,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  1
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "operator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "mint_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "pause_all",
+      "discriminator": [
+        166,
+        26,
+        112,
+        43,
+        126,
+        10,
+        31,
+        83
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  1
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "operator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "propose_admin",
+      "discriminator": [
+        121,
+        214,
+        199,
+        212,
+        87,
+        39,
+        117,
+        234
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_admin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "propose_compliance_admin",
+      "discriminator": [
+        103,
+        172,
+        148,
+        189,
+        66,
+        226,
+        111,
+        254
+      ],
+      "accounts": [
+        {
+          "name": "compliance_admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "new_admin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "register_mint",
+      "discriminator": [
+        242,
+        43,
+        74,
+        162,
+        217,
+        214,
+        191,
+        171
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "registrar",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  7
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "registrar"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "mint_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mantle_index",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  110,
+                  116,
+                  108,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "mantle_token"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "mantle_token",
+          "type": {
+            "array": [
+              "u8",
+              20
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "renounce_role",
+      "discriminator": [
+        21,
+        253,
+        233,
+        162,
+        186,
+        216,
+        217,
+        26
+      ],
+      "accounts": [
+        {
+          "name": "member",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "role_entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "role"
+              },
+              {
+                "kind": "account",
+                "path": "member"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "Role"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "resume",
+      "discriminator": [
+        1,
+        166,
+        51,
+        170,
+        127,
+        32,
+        141,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  2
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "operator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "mint_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "revoke_role",
+      "discriminator": [
+        179,
+        232,
+        2,
+        180,
+        48,
+        227,
+        82,
+        7
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "docs": [
+            "The admin that governs `role` (`Config::role_admin`); receives the rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "role"
+              },
+              {
+                "kind": "arg",
+                "path": "member"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "role",
+          "type": {
+            "defined": {
+              "name": "Role"
+            }
+          }
+        },
+        {
+          "name": "member",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "schedule_multiplier",
+      "discriminator": [
+        156,
+        124,
+        96,
+        111,
+        2,
+        204,
+        164,
+        149
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  0
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "operator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "mint_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "multiplier_1e18",
+          "type": "u128"
+        },
+        {
+          "name": "effective_at",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "set_default_account_state",
+      "docs": [
+        "Admin-only policy switch: `frozen = true` makes new token accounts start frozen."
+      ],
+      "discriminator": [
+        166,
+        75,
+        152,
+        106,
+        149,
+        101,
+        212,
+        30
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "mint_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "frozen",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "thaw",
+      "docs": [
+        "Token accounts to thaw are passed as remaining accounts."
+      ],
+      "discriminator": [
+        226,
+        249,
+        34,
+        57,
+        189,
+        21,
+        177,
+        101
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  4
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "operator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "mint_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unregister_mint",
+      "docs": [
+        "Admin-only correction of a registration made in error; only while the mint has no supply."
+      ],
+      "discriminator": [
+        95,
+        82,
+        209,
+        110,
+        143,
+        65,
+        172,
+        99
+      ],
+      "accounts": [
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint"
+        },
+        {
+          "name": "mint_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mantle_index",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  110,
+                  116,
+                  108,
+                  101,
+                  95,
+                  116,
+                  111,
+                  107,
+                  101,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint_state.mantle_token",
+                "account": "MintState"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_metadata",
+      "discriminator": [
+        170,
+        182,
+        43,
+        239,
+        97,
+        78,
+        225,
+        186
+      ],
+      "accounts": [
+        {
+          "name": "operator",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "role_entry",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  111,
+                  108,
+                  101
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  6
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "operator"
+              }
+            ]
+          }
+        },
+        {
+          "name": "mint",
+          "writable": true
+        },
+        {
+          "name": "mint_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "field",
+          "type": {
+            "defined": {
+              "name": "MetadataField"
+            }
+          }
+        },
+        {
+          "name": "value",
+          "type": "string"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
+    {
+      "name": "MantleTokenIndex",
+      "discriminator": [
+        253,
+        227,
+        114,
+        146,
+        227,
+        137,
+        72,
+        142
+      ]
+    },
+    {
+      "name": "MintState",
+      "discriminator": [
+        81,
+        17,
+        143,
+        120,
+        23,
+        57,
+        22,
+        117
+      ]
+    },
+    {
+      "name": "RoleEntry",
+      "discriminator": [
+        161,
+        238,
+        39,
+        6,
+        64,
+        179,
+        124,
+        31
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AdminAccepted",
+      "discriminator": [
+        174,
+        12,
+        76,
+        139,
+        158,
+        99,
+        110,
+        254
+      ]
+    },
+    {
+      "name": "AdminProposed",
+      "discriminator": [
+        129,
+        249,
+        226,
+        227,
+        199,
+        82,
+        110,
+        243
+      ]
+    },
+    {
+      "name": "ClawedBack",
+      "discriminator": [
+        128,
+        17,
+        202,
+        207,
+        94,
+        191,
+        64,
+        83
+      ]
+    },
+    {
+      "name": "ComplianceAdminAccepted",
+      "discriminator": [
+        133,
+        22,
+        1,
+        36,
+        77,
+        143,
+        76,
+        94
+      ]
+    },
+    {
+      "name": "ComplianceAdminProposed",
+      "discriminator": [
+        6,
+        188,
+        38,
+        196,
+        81,
+        142,
+        145,
+        149
+      ]
+    },
+    {
+      "name": "DefaultAccountStateSet",
+      "discriminator": [
+        130,
+        244,
+        240,
+        112,
+        250,
+        205,
+        202,
+        98
+      ]
+    },
+    {
+      "name": "Frozen",
+      "discriminator": [
+        115,
+        77,
+        189,
+        83,
+        81,
+        71,
+        245,
+        232
+      ]
+    },
+    {
+      "name": "MetadataUpdated",
+      "discriminator": [
+        132,
+        36,
+        215,
+        246,
+        166,
+        90,
+        189,
+        44
+      ]
+    },
+    {
+      "name": "MintRegistered",
+      "discriminator": [
+        91,
+        135,
+        88,
+        182,
+        239,
+        182,
+        5,
+        85
+      ]
+    },
+    {
+      "name": "MintUnregistered",
+      "discriminator": [
+        53,
+        247,
+        93,
+        96,
+        56,
+        224,
+        154,
+        117
+      ]
+    },
+    {
+      "name": "MultiplierScheduled",
+      "discriminator": [
+        186,
+        70,
+        227,
+        15,
+        161,
+        155,
+        177,
+        178
+      ]
+    },
+    {
+      "name": "Paused",
+      "discriminator": [
+        172,
+        248,
+        5,
+        253,
+        49,
+        255,
+        255,
+        232
+      ]
+    },
+    {
+      "name": "Resumed",
+      "discriminator": [
+        81,
+        131,
+        117,
+        230,
+        240,
+        120,
+        120,
+        14
+      ]
+    },
+    {
+      "name": "RoleGranted",
+      "discriminator": [
+        220,
+        183,
+        89,
+        228,
+        143,
+        63,
+        246,
+        58
+      ]
+    },
+    {
+      "name": "RoleRevoked",
+      "discriminator": [
+        167,
+        183,
+        52,
+        229,
+        126,
+        206,
+        62,
+        61
+      ]
+    },
+    {
+      "name": "Thawed",
+      "discriminator": [
+        6,
+        245,
+        171,
+        253,
+        189,
+        179,
+        233,
+        133
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "NotUpgradeAuthority",
+      "msg": "Only the program upgrade authority can initialize"
+    },
+    {
+      "code": 6001,
+      "name": "SelfGrantNotAllowed",
+      "msg": "Admin cannot grant a role to itself"
+    },
+    {
+      "code": 6002,
+      "name": "AdminCannotOperate",
+      "msg": "Admin cannot perform operational actions"
+    },
+    {
+      "code": 6003,
+      "name": "NotPendingAdmin",
+      "msg": "No pending admin, or signer is not the pending admin"
+    },
+    {
+      "code": 6004,
+      "name": "MultiplierOutOfRange",
+      "msg": "Multiplier outside [1e9, 1e27] (1e18 fixed point)"
+    },
+    {
+      "code": 6005,
+      "name": "NoticeTooShort",
+      "msg": "Effective time is earlier than the minimum notice period"
+    },
+    {
+      "code": 6006,
+      "name": "EffectiveTooFar",
+      "msg": "Effective time is beyond the scheduling horizon"
+    },
+    {
+      "code": 6007,
+      "name": "NotToken2022",
+      "msg": "Mint is not owned by the Token-2022 program"
+    },
+    {
+      "code": 6008,
+      "name": "WrongDecimals",
+      "msg": "Mint must have 9 decimals"
+    },
+    {
+      "code": 6009,
+      "name": "MintAuthorityIsCore",
+      "msg": "Mint authority must belong to the CCIP pool, not this program"
+    },
+    {
+      "code": 6010,
+      "name": "WrongFreezeAuthority",
+      "msg": "Freeze authority must be the program authority PDA"
+    },
+    {
+      "code": 6011,
+      "name": "WrongScaledUiConfig",
+      "msg": "Scaled UI Amount extension missing or authority is not the program authority PDA"
+    },
+    {
+      "code": 6012,
+      "name": "WrongPausableConfig",
+      "msg": "Pausable extension missing or authority is not the program authority PDA"
+    },
+    {
+      "code": 6013,
+      "name": "WrongMetadataPointer",
+      "msg": "Metadata pointer must point at the mint itself and be controlled by the program authority PDA"
+    },
+    {
+      "code": 6014,
+      "name": "WrongTokenMetadata",
+      "msg": "Token metadata missing or update authority is not the program authority PDA"
+    },
+    {
+      "code": 6015,
+      "name": "WrongTransferHook",
+      "msg": "Transfer Hook must exist, be dormant, and be controlled by the configured hook authority"
+    },
+    {
+      "code": 6016,
+      "name": "WrongDefaultAccountState",
+      "msg": "Default Account State must exist and be Initialized"
+    },
+    {
+      "code": 6017,
+      "name": "WrongPermanentDelegate",
+      "msg": "Permanent delegate must be the program authority PDA"
+    },
+    {
+      "code": 6018,
+      "name": "MintMismatch",
+      "msg": "Account does not belong to the given registered mint"
+    },
+    {
+      "code": 6019,
+      "name": "BadRemainingAccounts",
+      "msg": "Remaining accounts are missing or malformed"
+    },
+    {
+      "code": 6020,
+      "name": "SameAccount",
+      "msg": "Source and destination must differ"
+    },
+    {
+      "code": 6021,
+      "name": "UnexpectedExtension",
+      "msg": "Mint carries an extension mStocks does not allow"
+    },
+    {
+      "code": 6022,
+      "name": "MultiplierTooPrecise",
+      "msg": "Multiplier has more than 15 significant digits"
+    },
+    {
+      "code": 6023,
+      "name": "ZeroMantleToken",
+      "msg": "Mantle token address must not be zero"
+    },
+    {
+      "code": 6024,
+      "name": "MintHasSupply",
+      "msg": "Only a mint with zero supply can be unregistered"
+    },
+    {
+      "code": 6025,
+      "name": "NotRoleAdmin",
+      "msg": "Signer is not the admin that governs this role"
+    },
+    {
+      "code": 6026,
+      "name": "AdminsMustDiffer",
+      "msg": "The admin and the compliance admin must be different"
+    },
+    {
+      "code": 6027,
+      "name": "RoleRetired",
+      "msg": "This role is retired and cannot be granted"
+    },
+    {
+      "code": 6028,
+      "name": "NotComplianceAdmin",
+      "msg": "Only the compliance admin can do this"
+    }
+  ],
+  "types": [
+    {
+      "name": "AdminAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previous",
+            "type": "pubkey"
+          },
+          {
+            "name": "admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current",
+            "type": "pubkey"
+          },
+          {
+            "name": "proposed",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ClawedBack",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "source",
+            "type": "pubkey"
+          },
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ComplianceAdminAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "previous",
+            "type": "pubkey"
+          },
+          {
+            "name": "compliance_admin",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ComplianceAdminProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current",
+            "type": "pubkey"
+          },
+          {
+            "name": "proposed",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Config",
+      "docs": [
+        "Two admins, split like Mantle's: `admin` mirrors the token and factory admin (multisig 1) and",
+        "governs the token roles and the mint registry; `compliance_admin` mirrors the compliance and",
+        "pause registries' admin (multisig 4) and governs the pause, freeze and clawback roles. Neither",
+        "ever operates. The compliance fields are appended last so the account keeps its prefix."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "docs": [
+              "Squads multisig (Mantle multisig 1). Grants/revokes the token roles, governs the mint registry."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "docs": [
+              "Two-step admin handover target."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "hook_authority",
+            "docs": [
+              "Squads multisig that must hold every mint's (dormant) Transfer Hook authority."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "min_notice",
+            "type": "i64"
+          },
+          {
+            "name": "max_horizon",
+            "type": "i64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "authority_bump",
+            "type": "u8"
+          },
+          {
+            "name": "compliance_admin",
+            "docs": [
+              "Squads multisig (Mantle multisig 4). Grants/revokes the compliance roles."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_compliance_admin",
+            "docs": [
+              "Two-step compliance admin handover target."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "DefaultAccountStateSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "frozen",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Frozen",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "account",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MantleTokenIndex",
+      "docs": [
+        "`[\"mantle_token\", mantle_token]`: the mint registered for a Mantle token. Its existence is what",
+        "stops a second mint from being registered for the same token."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MetadataField",
+      "docs": [
+        "Token metadata field to update. `Key` covers additional metadata such as the ISIN."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Name"
+          },
+          {
+            "name": "Symbol"
+          },
+          {
+            "name": "Uri"
+          },
+          {
+            "name": "Key",
+            "fields": [
+              "string"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "name": "MetadataUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "field",
+            "type": "string"
+          },
+          {
+            "name": "value",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "mantle_token",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintState",
+      "docs": [
+        "A mint the program has validated and is allowed to operate on."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "mantle_token",
+            "docs": [
+              "The Mantle `ScaledToken` this mint mirrors."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintUnregistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "mantle_token",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "MultiplierScheduled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "multiplier_1e18",
+            "type": "u128"
+          },
+          {
+            "name": "effective_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Paused",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Resumed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Role",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "MultiplierScheduler"
+          },
+          {
+            "name": "Pauser"
+          },
+          {
+            "name": "Unpauser"
+          },
+          {
+            "name": "Freezer"
+          },
+          {
+            "name": "Unfreezer"
+          },
+          {
+            "name": "Clawback"
+          },
+          {
+            "name": "MetadataOps"
+          },
+          {
+            "name": "MintRegistrar"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleEntry",
+      "docs": [
+        "Existence of `[\"role\", role, member]` means `member` holds `role` (like Mantle's AccessControl)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "Role"
+              }
+            }
+          },
+          {
+            "name": "member",
+            "type": "pubkey"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleGranted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "Role"
+              }
+            }
+          },
+          {
+            "name": "member",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RoleRevoked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "role",
+            "type": {
+              "defined": {
+                "name": "Role"
+              }
+            }
+          },
+          {
+            "name": "member",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Thawed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "account",
+            "type": "pubkey"
+          }
+        ]
+      }
+    }
+  ]
+}

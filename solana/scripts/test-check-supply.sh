@@ -11,6 +11,9 @@ cd "$(dirname "$0")/.."
 unset NETWORK MANTLE_RPC_URL
 REPO=$(cd .. && pwd)
 WORK=$(mktemp -d)
+ANVIL="" VALIDATOR=""  # set below; the trap runs from here on, also if a setup step fails
+trap 'kill $ANVIL $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
+wait_for() { local i; for i in $(seq 1 90); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done; echo "FAIL: timed out waiting for: $*"; exit 1; }
 free_port() { python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 ANVIL_PORT=${ANVIL_PORT:-$(free_port)}
 EVM=http://127.0.0.1:$ANVIL_PORT
@@ -27,10 +30,9 @@ solana-test-validator --reset --quiet --ledger "$WORK/ledger" \
   --bpf-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb tests/fixtures/token2022.so \
   --upgradeable-program "$CORE_ID" target/deploy/mstocks_core.so "$WORK/deployer.json" &
 VALIDATOR=$!
-trap 'kill $ANVIL $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
 
 # --- EVM: token with 2.0 in the pool; registry stub: PUSH20 pool, MSTORE at 0, RETURN 32 bytes ---
-until cast block-number --rpc-url $EVM >/dev/null 2>&1; do sleep 1; done
+wait_for cast block-number --rpc-url $EVM
 TOKEN=$(cd "$REPO" && forge create --rpc-url $EVM --private-key $ADMIN_PK --broadcast --json \
   lib/openzeppelin-contracts/contracts/mocks/token/ERC20Mock.sol:ERC20Mock \
   | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read())['deployedTo'])")
@@ -39,7 +41,7 @@ cast rpc anvil_setCode $REGISTRY "0x73${POOL#0x}60005260206000f3" --rpc-url $EVM
 echo "mantle (anvil) token: $TOKEN, pool $POOL holds 2.0"
 
 # --- Solana: Core + registered mint mirroring that token; the deployer keeps the mint authority ---
-until solana -u l cluster-version >/dev/null 2>&1; do sleep 1; done
+wait_for solana -u l cluster-version
 for k in deployer admin; do solana -u l airdrop 100 "$(pk $k)" >/dev/null; done
 npx tsx scripts/init-core.ts --upgrade-authority "$WORK/deployer.json" --admin "$(pk admin)" --compliance-admin "$(pk compliance)" --hook-authority "$(pk hook)" >/dev/null
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MintRegistrar --member "$(pk deployer)" >/dev/null
@@ -53,7 +55,8 @@ check() { MANTLE_RPC_URL=$EVM npx tsx scripts/check-supply.ts --registry $REGIST
 # --- 1. backed: 1.5 on Solana, 2.0 locked ---
 mint_to 1500000000
 echo "== solana supply 1.5, locked 2.0"
-check && echo "exit 0 (expected)"
+check || { echo "UNEXPECTED exit 1 for a backed supply"; exit 1; }
+echo "exit 0 (expected)"
 
 # --- 2. unbacked: 2.5 on Solana ---
 mint_to 1000000000

@@ -9,6 +9,9 @@ cd "$(dirname "$0")/.."
 unset NETWORK RPC_URL DEPLOYER
 
 WORK=$(mktemp -d)
+VALIDATOR=""  # set below; the trap runs from here on, also if a setup step fails
+trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
+wait_for() { local i; for i in $(seq 1 90); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done; echo "FAIL: timed out waiting for: $*"; exit 1; }
 LEDGER="$WORK/ledger"
 CORE_ID=$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)
 for k in deployer admin compliance hook scheduler ops user custody; do solana-keygen new --no-bip39-passphrase --silent -o "$WORK/$k.json" >/dev/null; done
@@ -18,8 +21,7 @@ solana-test-validator --reset --quiet --ledger "$LEDGER" \
   --bpf-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb tests/fixtures/token2022.so \
   --upgradeable-program "$CORE_ID" target/deploy/mstocks_core.so "$WORK/deployer.json" &
 VALIDATOR=$!
-trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
-until solana -u l cluster-version >/dev/null 2>&1; do sleep 1; done
+wait_for solana -u l cluster-version
 for k in deployer admin compliance scheduler ops; do solana -u l airdrop 100 "$(pk $k)" >/dev/null; done
 
 echo "== init-core"
@@ -50,6 +52,14 @@ WRONG=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar
   --name Wrong --symbol WRONG --uri https://example.com --mantle-token 0x00000000000000000000000000000000000000bb \
   --initial-multiplier-1e18 1000000000000000000 | awk '/^mint: /{print $2}')
 npx tsx scripts/unregister-mint.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$WRONG"
+# A mint whose authority went to the CCIP pool is never unregistered (the pool could mint into it later).
+POOLED=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
+  --name Pooled --symbol POOLED --uri https://example.com --mantle-token 0x00000000000000000000000000000000000000cc \
+  --initial-multiplier-1e18 1000000000000000000 | awk '/^mint: /{print $2}')
+npx tsx scripts/handoff-mint-authority.ts --mint-authority "$WORK/deployer.json" --mint "$POOLED" --yes | grep -E "^handoff"
+if npx tsx scripts/unregister-mint.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$POOLED" >"$WORK/out" 2>&1; then
+  echo "UNEXPECTED: a mint held by the CCIP pool was unregistered"; exit 1; fi
+grep -q "holds the mint authority" "$WORK/out" && echo "   unregistering a pool-held mint refused"
 
 echo "== schedule-multiplier (2x in 10 minutes)"
 NOW=$(date +%s)
@@ -96,10 +106,21 @@ npx tsx scripts/pause-all.ts --operator "$WORK/ops.json" --dry-run
 npx tsx scripts/pause-all.ts --operator "$WORK/ops.json"
 npx tsx scripts/show-mint.ts --mint "$MINT" | grep PausableConfig
 npx tsx scripts/pause.ts --operator "$WORK/ops.json" --mint "$MINT" --resume
+npx tsx scripts/pause.ts --operator "$WORK/ops.json" --mint "$POOLED" --resume
+echo "== pause-all with a kept list that includes an unregistered mint: skipped, the others paused"
+npx tsx scripts/pause-all.ts --operator "$WORK/ops.json" --mints "$WRONG,$MINT" | tee "$WORK/out"
+grep -q "skipped $WRONG" "$WORK/out" && grep -q "^pause 1:" "$WORK/out" || { echo "FAIL: pause-all list"; exit 1; }
+npx tsx scripts/pause.ts --operator "$WORK/ops.json" --mint "$MINT" --resume
 
 echo "== update metadata (new key grows the mint; script tops up rent)"
 npx tsx scripts/update-metadata.ts --operator "$WORK/ops.json" --mint "$MINT" --field name --value "Apple Inc. mStock"
 npx tsx scripts/update-metadata.ts --operator "$WORK/ops.json" --mint "$MINT" --field cusip --value 037833100
+if npx tsx scripts/update-metadata.ts --operator "$WORK/ops.json" --mint "$MINT" --field symbol --value "AAPL m!" >/dev/null 2>&1; then
+  echo "UNEXPECTED: a symbol Mantle rejects was accepted"; exit 1; fi
+echo "   a symbol Mantle would reject is refused"
+if npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/compliance.json" --role Clawback --member "$(pk ops)" >/dev/null 2>&1; then
+  echo "UNEXPECTED: the retired Clawback role was granted"; exit 1; fi
+echo "   granting the retired Clawback role is refused"
 npx tsx scripts/show-mint.ts --mint "$MINT" | grep TokenMetadata
 
 echo "== policy switch: new accounts start frozen, then back to usable"

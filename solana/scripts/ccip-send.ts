@@ -17,11 +17,12 @@ import {
   type Instruction,
 } from "@solana/kit";
 import { findAssociatedTokenPda, getApproveCheckedInstruction } from "@solana-program/token-2022";
+import { accountData, ccipAccounts, lookupTableAddresses, registryState, SYSTEM_PROGRAM } from "./lib/ccip.ts";
 import { TOKEN_2022_PROGRAM_ID, concat, encodeEvmAddress, encodeU64 } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, rpc, send, withRetry } from "./lib/env.ts";
 import { setting } from "./lib/config.ts";
+import { DECIMALS } from "./lib/mint.ts";
 
-const SYSTEM_PROGRAM = address("11111111111111111111111111111111");
 const TOKEN_PROGRAM = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const NATIVE_MINT = address("So11111111111111111111111111111111111111112");
 const ZERO = address("11111111111111111111111111111111");
@@ -32,7 +33,8 @@ const mint = address(required(args, "mint"));
 const amount = BigInt(required(args, "amount"));
 const destSelector = BigInt(setting(args["dest-selector"], "mantle.chain_selector", "dest-selector"));
 const receiver = encodeEvmAddress(required(args, "receiver"));
-const router = address(args.router ?? "Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C");
+const ccip = await ccipAccounts(mint, { router: args.router });
+const router = ccip.router;
 
 const enc = getAddressEncoder();
 const dec = getAddressDecoder();
@@ -41,9 +43,9 @@ const key = (a: Address) => new Uint8Array(enc.encode(a));
 const pda = async (program: Address, seeds: Parameters<typeof getProgramDerivedAddress>[0]["seeds"]) =>
   (await getProgramDerivedAddress({ programAddress: program, seeds }))[0];
 async function account(addr: Address): Promise<Uint8Array> {
-  const { value } = await withRetry(() => rpc.getAccountInfo(addr, { encoding: "base64" }).send());
-  if (!value) throw new Error(`account ${addr} not found`);
-  return new Uint8Array(Buffer.from(value.data[0], "base64"));
+  const d = await accountData(addr);
+  if (!d) throw new Error(`account ${addr} not found`);
+  return d;
 }
 const u32 = (v: number) => {
   const b = new Uint8Array(4);
@@ -70,19 +72,10 @@ const [senderAta] = await findAssociatedTokenPda({ owner: sender.address, mint, 
 
 // Per-token accounts: sender ATA, the fee quoter's per-chain token config, the pool's chain config,
 // then exactly the pool lookup table's entries (writable where the token admin registry says).
-const tokenAdminRegistry = await pda(router, [utf8.encode("token_admin_registry"), key(mint)]);
-const tar = await account(tokenAdminRegistry);
-const lut = dec.decode(tar.subarray(73, 105));
-const writableBits = tar.subarray(105, 137);
-// writable_indexes is [u128; 2] (little-endian) filled from the most significant bit: index i < 128
-// is bit 127 - i of the first word, otherwise bit 255 - i of the second.
-const isWritable = (i: number) => {
-  const bit = i < 128 ? 127 - i : 255 - i;
-  const byte = (i < 128 ? 0 : 16) + (bit >> 3);
-  return ((writableBits[byte] >> (bit & 7)) & 1) === 1;
-};
-const lutData = await account(lut);
-const lutEntries = Array.from({ length: (lutData.length - 56) / 32 }, (_, i) => dec.decode(lutData.subarray(56 + i * 32, 88 + i * 32)));
+const registry = await registryState(ccip);
+if (!registry) throw new Error(`mint ${mint} is not registered with CCIP`);
+const { lookupTable: lut, isWritable } = registry;
+const lutEntries = await lookupTableAddresses(lut);
 const poolProgram = lutEntries[2];
 const tokenAccounts = [
   { address: senderAta, role: AccountRole.WRITABLE },
@@ -140,7 +133,7 @@ const computeLimit: Instruction = {
 
 // The router moves the tokens to the pool as the fee billing signer, so it must be a delegate.
 console.log(`approve ${amount} to ${feeBillingSigner}: ${await send(sender, [
-  getApproveCheckedInstruction({ source: senderAta, mint, delegate: feeBillingSigner, owner: sender, amount, decimals: 9 }, { programAddress: TOKEN_2022_PROGRAM_ID }),
+  getApproveCheckedInstruction({ source: senderAta, mint, delegate: feeBillingSigner, owner: sender, amount, decimals: DECIMALS }, { programAddress: TOKEN_2022_PROGRAM_ID }),
 ])}`);
 
 const signature = await send(sender, [computeLimit, ccipSend], { [lut]: lutEntries });

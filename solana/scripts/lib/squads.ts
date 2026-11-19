@@ -4,8 +4,6 @@
 // into the Squads app to create the proposal; the members approve it there and execute it after the
 // time lock. squads.ts propose does the same import with a member's key file (tests and rehearsals),
 // decoding it exactly as Squads' open-source client does.
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import * as multisig from "@sqds/multisig";
 import {
   Connection,
@@ -20,13 +18,14 @@ import {
 } from "@solana/web3.js";
 import { AccountRole, address, getBase58Decoder, getBase58Encoder, type Address, type Instruction } from "@solana/kit";
 import { config } from "./config.ts";
-import { RPC_URL, withRetry } from "./env.ts";
+import { RPC_URL, secretKeyBytes, withRetry } from "./env.ts";
 
 export const SQUADS_PROGRAM_ID = multisig.PROGRAM_ID;
 export const connection = new Connection(RPC_URL, "confirmed");
 
-export function loadWeb3Keypair(path: string): Keypair {
-  return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(readFileSync(path.replace(/^~/, homedir()), "utf8"))));
+/** A web3.js keypair from a keypair file or an inline private key (see env.ts secretKeyBytes). */
+export async function loadWeb3Keypair(value: string): Promise<Keypair> {
+  return Keypair.fromSecretKey(await secretKeyBytes(value));
 }
 
 export const vaultOf = (multisigPda: PublicKey, index = 0) => multisig.getVaultPda({ multisigPda, index })[0];
@@ -84,7 +83,7 @@ export async function sendWeb3(instructions: TransactionInstruction[], signers: 
  * then approves in a second transaction, as in the app.
  */
 export async function propose(multisigPda: PublicKey, instructions: TransactionInstruction[], proposerPath: string, memo?: string) {
-  const proposer = loadWeb3Keypair(proposerPath);
+  const proposer = await loadWeb3Keypair(proposerPath);
   const ms = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
   const transactionIndex = BigInt(ms.transactionIndex.toString()) + 1n;
   const vault = vaultOf(multisigPda);

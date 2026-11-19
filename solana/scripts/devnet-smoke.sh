@@ -10,6 +10,8 @@ unset NETWORK MANTLE_RPC_URL
 : "${RPC_URL:?set RPC_URL to a devnet RPC endpoint}"
 KEYS=${KEYS:-$HOME/.config/solana/mstocks-devnet}
 DEPLOYER=${DEPLOYER:-$HOME/.config/solana/id.json}
+# The solana CLI calls below need a file (program.ts accepts an inline key; this script does not).
+[ -f "$DEPLOYER" ] || { echo "devnet-smoke.sh needs DEPLOYER as a keypair file path"; exit 1; }
 EXPLORER="https://explorer.solana.com/address/%s?cluster=devnet"
 mkdir -p "$KEYS"
 for k in admin compliance-admin hook scheduler ops user custody; do

@@ -10,6 +10,9 @@ cd "$(dirname "$0")/.."
 unset NETWORK MANTLE_RPC_URL
 REPO=$(cd .. && pwd)
 WORK=$(mktemp -d)
+ANVIL="" VALIDATOR=""  # set below; the trap runs from here on, also if a setup step fails
+trap 'kill $ANVIL $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
+wait_for() { local i; for i in $(seq 1 90); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done; echo "FAIL: timed out waiting for: $*"; exit 1; }
 # A free port, so the test never collides with a developer's own anvil instances.
 ANVIL_PORT=${ANVIL_PORT:-$(python3 -I -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')}
 EVM=http://127.0.0.1:$ANVIL_PORT
@@ -30,9 +33,8 @@ solana-test-validator --reset --quiet --ledger "$WORK/ledger" \
   --bpf-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb tests/fixtures/token2022.so \
   --upgradeable-program "$CORE_ID" target/deploy/mstocks_core.so "$WORK/deployer.json" &
 VALIDATOR=$!
-trap 'kill $ANVIL $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
 
-until cast block-number --rpc-url $EVM >/dev/null 2>&1; do sleep 1; done
+wait_for cast block-number --rpc-url $EVM
 # --constructor-args is variadic, so it (inside "$@") must come last.
 create() { (cd "$REPO" && forge create --rpc-url $EVM --private-key $ADMIN_PK --broadcast --json "$@") \
   | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read())['deployedTo'])"; }
@@ -45,7 +47,7 @@ TOKEN=$(create lib/openzeppelin-contracts/contracts/proxy/ERC1967/ERC1967Proxy.s
 echo "mantle (anvil) ScaledToken: $TOKEN"
 
 # --- Solana: Core + registered mint mirroring that token ---
-until solana -u l cluster-version >/dev/null 2>&1; do sleep 1; done
+wait_for solana -u l cluster-version
 for k in deployer admin scheduler; do solana -u l airdrop 100 "$(pk $k)" >/dev/null; done
 npx tsx scripts/init-core.ts --upgrade-authority "$WORK/deployer.json" --admin "$(pk admin)" --compliance-admin "$(pk compliance)" --hook-authority "$(pk hook)" >/dev/null
 npx tsx scripts/grant-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MultiplierScheduler --member "$(pk scheduler)" >/dev/null
@@ -60,9 +62,11 @@ AT=$(( $(date +%s) + 3600 ))
 cast send "$TOKEN" "setUIMultiplier(uint256,uint256)" 1500000000000000000 $AT --rpc-url $EVM --private-key $SCHED_PK >/dev/null
 npx tsx scripts/schedule-multiplier.ts --scheduler "$WORK/scheduler.json" --mint "$MINT" --multiplier-1e18 1500000000000000000 --effective-at $AT >/dev/null
 echo "== same schedule on both chains"
-MANTLE_RPC_URL=$EVM npx tsx scripts/check-multiplier.ts --mints "$MINT" && echo "exit 0 (expected)"
+MANTLE_RPC_URL=$EVM npx tsx scripts/check-multiplier.ts --mints "$MINT" || { echo "UNEXPECTED exit 1 for matching schedules"; exit 1; }
+echo "exit 0 (expected)"
 
 # --- 2. Solana drifts ---
 npx tsx scripts/schedule-multiplier.ts --scheduler "$WORK/scheduler.json" --mint "$MINT" --multiplier-1e18 2000000000000000000 --effective-at $AT >/dev/null
 echo "== solana rescheduled to 2.0"
 if MANTLE_RPC_URL=$EVM npx tsx scripts/check-multiplier.ts --mints "$MINT"; then echo "UNEXPECTED exit 0"; exit 1; else echo "exit 1 (expected)"; fi
+echo PASS

@@ -86,6 +86,8 @@ const BAD_KEY = "the key is not an existing keypair file, a JSON byte array or a
  */
 export async function secretKeyBytes(value: string): Promise<Uint8Array> {
   const path = value.replace(/^~/, homedir());
+  // A path that does not exist is named (a private key never contains "/" or ends in .json).
+  if ((value.includes("/") || value.endsWith(".json")) && !existsSync(path)) throw new Error(`no keypair file ${value}`);
   let bytes: Uint8Array;
   try {
     if (existsSync(path)) bytes = Uint8Array.from(JSON.parse(readFileSync(path, "utf8")));
@@ -122,10 +124,8 @@ export async function keypairFile(value: string): Promise<string> {
   return file;
 }
 
-export async function loadKeypair(path: string): Promise<KeyPairSigner> {
-  const resolved = path.replace(/^~/, homedir());
-  return createKeyPairSignerFromBytes(new Uint8Array(JSON.parse(readFileSync(resolved, "utf8"))));
-}
+/** A signer for a key argument: a keypair file, or an inline private key like DEPLOYER (see secretKeyBytes). */
+export const loadKeypair = (value: string): Promise<KeyPairSigner> => loadSigner(value);
 
 /** Largest serialized transaction Solana accepts (signatures included). */
 export const TRANSACTION_SIZE_LIMIT = 1232;

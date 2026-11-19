@@ -1,9 +1,10 @@
 // Core program lifecycle in one command per step:
-//   build                       anchor build + the tests; prints the .so's sha256
+//   build                       anchor build + the tests; prints the .so's sha256 and checks that the
+//                               built IDL is the committed idl/mstocks_core.json (the scripts read it)
 //   deploy  --deployer <kp>     first deployment with the deployer as upgrade authority, the IDL
 //                               uploaded, then verify
 //   verify                      on-chain bytes == target/deploy/mstocks_core.so and on-chain IDL ==
-//                               target/idl/mstocks_core.json (exit 1 otherwise)
+//                               idl/mstocks_core.json (exit 1 otherwise)
 //   handoff --deployer <kp>     upgrade authority → the config's upgrade_authority multisig vault
 //                               (refused before init-core: initialize needs the upgrade authority)
 //   upgrade --deployer <kp>     writes the program buffer (and an IDL buffer when the IDL changed),
@@ -14,8 +15,10 @@
 //                               finishes an interrupted upload): directly while the deployer is the
 //                               upgrade authority, else as a base58 message for the Squads app
 // upgrade and idl plan every transaction and check that the Squads message fits before the deployer
-// spends anything. The IDL is kept where Anchor 1.x keeps it (Program Metadata, see lib/idl.ts);
-// --idl <file> overrides target/idl/mstocks_core.json.
+// spends anything; when the new build is larger than the program account, upgrade first extends the
+// account (anyone may pay for that; the deployer does). The IDL is kept where Anchor 1.x keeps it
+// (Program Metadata, see lib/idl.ts). --so <file> and --idl <file> override
+// target/deploy/mstocks_core.so and idl/mstocks_core.json.
 //   NETWORK=mainnet DEPLOYER=<keypair> tsx scripts/program.ts <command> [--deployer <keypair>] [--to <squads multisig>]
 // --deployer defaults to the DEPLOYER environment variable: a keypair file or a private key (base58 or a
 // JSON byte array); an inline key goes to the Solana CLI through an owner-only temporary file.
@@ -33,11 +36,17 @@ import { planIdl, readIdl, sameIdl, type IdlPlan } from "./lib/idl.ts";
 import { multisigFromConfig, upgradeIx } from "./lib/squads.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const SO = `${ROOT}target/deploy/mstocks_core.so`;
-const PROGRAM_KEYPAIR = `${ROOT}target/deploy/mstocks_core-keypair.json`;
-const IDL_FILE = `${ROOT}target/idl/mstocks_core.json`;
 const [command, ...rest] = process.argv.slice(2);
 const args = parseArgs(rest);
+const SO = args.so ?? `${ROOT}target/deploy/mstocks_core.so`;
+const PROGRAM_KEYPAIR = `${ROOT}target/deploy/mstocks_core-keypair.json`;
+/** The committed IDL: what the scripts encode instructions with and what is published on chain. */
+const IDL_FILE = `${ROOT}idl/mstocks_core.json`;
+const BUILT_IDL = `${ROOT}target/idl/mstocks_core.json`;
+/** ProgramData header: u32 tag, u64 slot, Option<Pubkey> upgrade authority. */
+const PROGRAM_DATA_HEADER = 45;
+/** The loader extends a program account by at least this much (or to its maximum). */
+const MIN_EXTEND = 10240;
 
 /** Runs a command in the solana/ directory; output is shown, or returned with `capture`. */
 function run(cmd: string, cmdArgs: string[], capture = false): string {
@@ -53,10 +62,17 @@ async function upgradeAuthority(): Promise<string> {
   return pd.data[12] === 1 ? getAddressDecoder().decode(pd.data.subarray(13, 45)) : "none (immutable)";
 }
 
+/** Bytes of program the deployed program account can hold. */
+async function programCapacity(): Promise<number> {
+  const pd = await withRetry(async () => fetchEncodedAccount(rpc, await programDataPda()));
+  if (!pd.exists) throw new Error(`program ${CORE_PROGRAM_ID} is not deployed`);
+  return pd.data.length - PROGRAM_DATA_HEADER;
+}
+
 async function verify(): Promise<boolean> {
   const pd = await withRetry(async () => fetchEncodedAccount(rpc, await programDataPda()));
   if (!pd.exists) throw new Error(`program ${CORE_PROGRAM_ID} is not deployed`);
-  const onChain = pd.data.subarray(45); // ProgramData header: tag, slot, Option<authority>
+  const onChain = pd.data.subarray(PROGRAM_DATA_HEADER);
   const built = readFileSync(SO);
   const same = Buffer.from(onChain.subarray(0, built.length)).equals(built) && onChain.subarray(built.length).every((b) => b === 0);
   console.log(`on-chain program ${same ? "matches" : "DIFFERS FROM"} ${SO} (sha256 ${sha256(built)})`);
@@ -83,7 +99,20 @@ async function runIdlPlan(deployer: KeyPairSigner, plan: IdlPlan | null): Promis
     return [];
   }
   console.log(`IDL: ${plan.summary}`);
-  for (const ixs of plan.deployerTxs) await send(deployer, ixs);
+  for (const [i, ixs] of plan.deployerTxs.entries()) {
+    try {
+      await send(deployer, ixs);
+    } catch (e) {
+      // A buffer the deployer still holds is closed, so its rent is not stranded.
+      const c = plan.cleanup;
+      if (c && i >= c.from && i < c.heldUntil)
+        await send(deployer, c.ixs).then(
+          () => console.log(`IDL: closed the unfinished buffer ${c.buffer}`),
+          () => console.log(`IDL: could not close the unfinished buffer ${c.buffer}; the deployer can close it later`),
+        );
+      throw e;
+    }
+  }
   if (!plan.authorityIxs.length) console.log("IDL: done");
   return plan.authorityIxs;
 }
@@ -93,6 +122,8 @@ switch (command) {
     const id = run("solana-keygen", ["pubkey", PROGRAM_KEYPAIR], true).trim();
     if (id !== CORE_PROGRAM_ID) throw new Error(`program keypair is ${id}, the IDL says ${CORE_PROGRAM_ID}`);
     run("anchor", ["build"]);
+    if (!sameIdl(readFileSync(BUILT_IDL, "utf8"), readFileSync(IDL_FILE, "utf8")))
+      throw new Error(`the built IDL differs from ${IDL_FILE}: the program's interface changed, so copy ${BUILT_IDL} there and commit it`);
     run("cargo", ["test", "-p", "mstocks-core"]);
     console.log(`program ${id}\nsha256 ${sha256(readFileSync(SO))}  ${SO}`);
     break;
@@ -157,6 +188,14 @@ switch (command) {
     const placeholder = (await generateKeyPairSigner()).address;
     await assertImportFits(vault, [upgradeIx(CORE_PROGRAM_ID, placeholder, signer.address, vault), ...idlIxs]);
     console.log(`new build sha256 ${sha256(readFileSync(SO))}`);
+    // The program account was sized for the first build; the BPF loader's Upgrade, run by the vault,
+    // does not grow it, so a larger build would fail only when the approved proposal executes.
+    const [size, capacity] = [readFileSync(SO).length, await programCapacity()];
+    if (size > capacity) {
+      const bytes = Math.max(size - capacity, MIN_EXTEND);
+      solana(deployer, "program", "extend", CORE_PROGRAM_ID, String(bytes), "--payer", deployer);
+      console.log(`program account extended by ${bytes} bytes (${capacity} → ${capacity + bytes}) for a ${size}-byte build`);
+    }
     const out = solana(deployer, "program", "write-buffer", SO, "--buffer-authority", deployer, "--use-rpc");
     const buffer = out.match(/Buffer:\s+(\w+)/)?.[1];
     if (!buffer) throw new Error(`no buffer address in: ${out}`);

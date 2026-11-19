@@ -1,5 +1,6 @@
 // Minimal client for the mstocks-core program, driven by the Anchor IDL: discriminators, account
-// order and writable/signer flags all come from target/idl/mstocks_core.json.
+// order and writable/signer flags all come from idl/mstocks_core.json, the committed IDL of the
+// program (program.ts build checks it matches the build), so the scripts run without a build.
 import { readFileSync } from "node:fs";
 import {
   AccountRole,
@@ -19,7 +20,7 @@ import { config } from "./config.ts";
 import { rpc, withRetry } from "./env.ts";
 
 export const idl = JSON.parse(
-  readFileSync(new URL("../../target/idl/mstocks_core.json", import.meta.url), "utf8"),
+  readFileSync(new URL("../../idl/mstocks_core.json", import.meta.url), "utf8"),
 );
 
 export const CORE_PROGRAM_ID: Address = address(idl.address);

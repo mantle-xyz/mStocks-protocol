@@ -34,6 +34,7 @@ CALLER=$PWD
 abspath() { case $1 in /*) printf '%s' "$1" ;; *) printf '%s/%s' "$CALLER" "$1" ;; esac; }
 cd "$(dirname "$0")/.."
 source scripts/lib/config.sh
+source scripts/lib/evm-key.sh
 require_network
 RPC=${MANTLE_RPC_URL:-$(cfg_required mantle.rpc)}
 CHAIN_ID=$(cfg_required mantle.chain_id)
@@ -71,8 +72,8 @@ if "status" in r:
 print("FAILED:", "; ".join(e.get("message", "")[:200] for e in r.get("errors", [])) or sys.argv[1][:200]); sys.exit(1)' "$1"
 }
 send() { # key-file to sig args... → prints the tx hash; exits on failure
-  local key=$1; shift
-  local out; out=$(cast send "$@" --rpc-url "$RPC" --private-key "$(cat "$key")" --json 2>&1) || true
+  set_signer "$1"; shift
+  local out; out=$(cast send "$@" --rpc-url "$RPC" "${SIGNER[@]}" --json 2>&1) || true
   tx_result "$out" || die "transaction failed"
 }
 is_timelock() { call "$1" "getMinDelay()(uint256)" >/dev/null 2>&1; }
@@ -147,7 +148,8 @@ cmd_deploy() {
   if [ -n "$nolimit" ]; then limit="(false,0,0)"
   elif [ -n "$cap" ] && [ -n "$rate" ]; then limit="(true,$cap,$rate)"
   else die "set --rate-capacity and --rate-per-second, or --no-rate-limit"; fi
-  local deployer; deployer=$(cast wallet address --private-key "$(cat "$key")")
+  set_signer "$key"
+  local deployer; deployer=$(cast wallet address "${SIGNER[@]}")
 
   echo "== checks ($NETWORK)"
   [ "$(call "$token" "decimals()(uint8)")" = 18 ] || die "token decimals are not 18"
@@ -164,7 +166,7 @@ cmd_deploy() {
 
   echo "== deploy LockReleaseTokenPool $CCIP_VERSION"
   local src; src=$(ccip_sources)
-  local pool; pool=$(forge create --root "$src" --rpc-url "$RPC" --private-key "$(cat "$key")" --broadcast --json \
+  local pool; pool=$(forge create --root "$src" --rpc-url "$RPC" "${SIGNER[@]}" --broadcast --json \
     node_modules/@chainlink/contracts-ccip/contracts/pools/LockReleaseTokenPool.sol:LockReleaseTokenPool \
     --constructor-args "$token" 18 "[]" $RMN $ROUTER | python3 -I -c 'import sys,json; print(json.loads(sys.stdin.read())["deployedTo"])')
   echo "  pool $pool ($(call "$pool" "typeAndVersion()(string)"))"
@@ -245,13 +247,14 @@ cmd_multisig() {
 
 cmd_execute() {
   [ "$NETWORK" = testnet ] || die "execute is for testnet only; on mainnet import the JSON into the Safe"
-  local key; key=$(abspath "$1"); shift
+  set_signer "$(abspath "$1")"; shift
   for f in "$@"; do
     f=$(abspath "$f")
     python3 -I -c 'import sys,json; [print(t["to"], t["data"]) for t in json.load(open(sys.argv[1]))["transactions"]]' "$f" |
       while read -r to data; do
-        local out; out=$(cast send "$to" "$data" --rpc-url "$RPC" --private-key "$(cat "$key")" --json 2>&1) || true
-        echo "  $f → $to: $(tx_result "$out")"
+        local out r; out=$(cast send "$to" "$data" --rpc-url "$RPC" "${SIGNER[@]}" --json 2>&1) || true
+        r=$(tx_result "$out") || die "$f → $to: $r (the remaining calls were not sent)"
+        echo "  $f → $to: $r"
       done
   done
 }

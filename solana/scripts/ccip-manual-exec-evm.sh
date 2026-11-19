@@ -11,6 +11,7 @@
 # OffRamp is the failed transaction's target, so nothing else is network-specific.
 set -euo pipefail
 source "$(dirname "$0")/lib/config.sh"
+source "$(dirname "$0")/lib/evm-key.sh"
 require_network
 MANTLE_RPC_URL=${MANTLE_RPC_URL:-$(cfg_required mantle.rpc)}
 TX=${1:?failed execution tx hash}
@@ -62,7 +63,8 @@ print("messages in the report: " + " ".join(msgs), file=sys.stderr)
 print("0x" + manual + (word(64) + word(64 + len(reports)) + reports + overrides).hex())
 EOF
 echo "OffRamp $TARGET"
-cast send "$TARGET" "$(cat "$WORK/calldata")" --rpc-url "$MANTLE_RPC_URL" --private-key "$(cat "$KEY")" --json |
+set_signer "$KEY"
+cast send "$TARGET" "$(cat "$WORK/calldata")" --rpc-url "$MANTLE_RPC_URL" "${SIGNER[@]}" --json |
   python3 -I -c '
 import sys, json
 r = json.load(sys.stdin)

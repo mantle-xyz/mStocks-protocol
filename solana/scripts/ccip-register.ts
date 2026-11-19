@@ -2,15 +2,19 @@
 // remote (EVM) chain, in two transactions signed by the current mint authority:
 //   1. token admin (propose + accept), the pool (self-served: the mint authority signs), the pool
 //      signer's token account, and the pool's address lookup table;
-//   2. the remote chain (token, pool, decimals), its rate limits and set_pool; with --handoff-to,
-//      the proposals handing the token admin and the pool ownership to the multisig; with
-//      --handoff-mint-authority, finally the mint authority to the pool signer.
+//   2. the remote chain (token, pool, decimals), its rate limits and set_pool, then the lookup
+//      table is frozen (its authority, this key, could otherwise close it and stop every transfer
+//      of the mint); with --handoff-to, the proposals handing the token admin and the pool
+//      ownership to the multisig; with --handoff-mint-authority, finally the mint authority to the
+//      pool signer.
 // With --handoff-to, the new holder's acceptance follows: one Squads proposal for a multisig
 // (printed as a base58 transaction message for the Squads app), signed directly for a keypair.
 // Steps already done on chain are left out, so it can be re-run after a failure.
 //   NETWORK=mainnet tsx scripts/ccip-register.ts --authority <mint authority keypair> --mint <mint>
 //     --remote-token <0x..> --remote-pool <0x..> [--remote-selector <u64>] [--remote-decimals 18]
-//     [--rate-capacity <units> --rate-per-second <units>]   (rate limits are off without these)
+//     [--rate-capacity <units> --rate-per-second <units> | --no-rate-limit]
+//        (one of them is required when the remote chain is first configured; a re-run without
+//        either leaves the rate limits as they are)
 //     [--handoff-to [<keypair.json|squads multisig>]] [--handoff-mint-authority]
 // --remote-selector defaults to the config's Mantle selector; --handoff-to without a value to the
 // config's CCIP admin.
@@ -39,8 +43,10 @@ import {
   anchorIx,
   ccipAccounts,
   chainConfigPda,
+  freezeLookupTableIx,
   handoffAccepts,
   handoffProposals,
+  lookupTableAuthority,
   poolOwnership,
   registryState,
   type Meta,
@@ -56,10 +62,13 @@ const remoteSelector = BigInt(setting(args["remote-selector"], "mantle.chain_sel
 const remoteToken = encodeEvmAddress(required(args, "remote-token"));
 const remotePool = encodeEvmAddress(required(args, "remote-pool"));
 const remoteDecimals = Number(args["remote-decimals"] ?? 18);
+// Rate limits are set only when given: a re-run without them must not switch them off.
 const rateLimit =
-  args["rate-capacity"] !== undefined
-    ? { enabled: true, capacity: BigInt(args["rate-capacity"]), rate: BigInt(required(args, "rate-per-second")) }
-    : { enabled: false, capacity: 0n, rate: 0n };
+  args["no-rate-limit"] === "true"
+    ? { enabled: false, capacity: 0n, rate: 0n }
+    : args["rate-capacity"] !== undefined
+      ? { enabled: true, capacity: BigInt(args["rate-capacity"]), rate: BigInt(required(args, "rate-per-second")) }
+      : undefined;
 // --handoff-to without a value: the config's CCIP admin (the admin's Squads).
 const handoffTo = args["handoff-to"]
   ? await resolveAdmin(args["handoff-to"] === "true" ? ccipAdmin() : args["handoff-to"])
@@ -68,6 +77,8 @@ const handoffMintAuthority = args["handoff-mint-authority"] === "true";
 
 const a = await ccipAccounts(mint, { router: args.router, poolProgram: args["pool-program"], feeQuoter: args["fee-quoter"] });
 const chainConfig = await chainConfigPda(a, remoteSelector);
+if (!rateLimit && (await accountData(chainConfig)) === null)
+  throw new Error("the remote chain is not configured yet: set --rate-capacity and --rate-per-second, or --no-rate-limit");
 const enc = getAddressEncoder();
 
 // --- encoding ---
@@ -79,7 +90,7 @@ const u32 = (v: number) => {
 const bytesVec = (b: Uint8Array) => concat(u32(b.length), b);
 /** RemoteAddress { address: Vec<u8> } */
 const remoteAddress = (b: Uint8Array) => bytesVec(b);
-const rateLimitConfig = (c: typeof rateLimit) => concat(Uint8Array.of(c.enabled ? 1 : 0), encodeU64(c.capacity), encodeU64(c.rate));
+const rateLimitConfig = (c: NonNullable<typeof rateLimit>) => concat(Uint8Array.of(c.enabled ? 1 : 0), encodeU64(c.capacity), encodeU64(c.rate));
 /** The remote EVM token is an ABI-style 32-byte left-padded address; remote EVM pools stay 20 bytes. */
 const leftPad32 = (b: Uint8Array) => concat(new Uint8Array(32 - b.length), b);
 
@@ -151,8 +162,8 @@ const steps: [string, Instruction[]][] = [
   ["remote pool address", chainExists ? [] : [
     anchorIx(a.poolProgram, "append_remote_pool_addresses", chainMetas, concat(chainArgs, u32(1), remoteAddress(remotePool))),
   ]],
-  // Re-set on every run while this key owns the pool, so a re-run can correct them.
-  [`rate limits (${rateLimit.enabled ? `${rateLimit.capacity} cap, ${rateLimit.rate}/s` : "off"})`, pool.owner === authority.address ? [
+  // Set when given, while this key owns the pool, so a re-run can correct them.
+  [`rate limits (${!rateLimit ? "unchanged" : rateLimit.enabled ? `${rateLimit.capacity} cap, ${rateLimit.rate}/s` : "off"})`, rateLimit && pool.owner === authority.address ? [
     anchorIx(a.poolProgram, "set_chain_rate_limit", chainMetas.slice(0, 3), concat(chainArgs, rateLimitConfig(rateLimit), rateLimitConfig(rateLimit))),
   ] : []],
   [`set_pool${lut ? ` (lookup table ${lut})` : ""}`, lut ? [
@@ -160,6 +171,13 @@ const steps: [string, Instruction[]][] = [
     anchorIx(a.router, "set_pool", [...tokenAdminMetas.slice(0, 3), [lut, "r"], [authority, "sw"]], bytesVec(Uint8Array.of(3, 4, 7))),
   ] : []],
 ];
+// Freeze the pool's lookup table: while this key is its authority it could deactivate and close it,
+// which stops every transfer of the mint until the admin multisig sets a new table.
+const table = lut ?? (reg.lookupTable !== SYSTEM_PROGRAM ? reg.lookupTable : undefined);
+const tableAuthority = table && !lut ? await lookupTableAuthority(table) : table ? authority.address : undefined;
+if (table && tableAuthority && tableAuthority !== authority.address)
+  console.log(`  warning: lookup table ${table} has authority ${tableAuthority}, not this key; that key must freeze it`);
+steps.push([`freeze lookup table${table ? ` ${table}` : ""}`, table && tableAuthority === authority.address ? [freezeLookupTableIx(table, authority)] : []]);
 if (handoffTo) steps.push([`propose ${adminAddress(handoffTo)} as token admin and pool owner`, handoffProposals(a, authority, adminAddress(handoffTo), reg, pool)]);
 if (handoffMintAuthority) {
   const mintAccount = await withRetry(() => fetchEncodedAccount(rpc, mint));

@@ -6,7 +6,8 @@ CONFIG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 require_network() {
   case ${NETWORK:-} in
     "") echo "set NETWORK=mainnet or NETWORK=testnet" >&2; exit 1 ;;
-    *.toml) CONFIG_FILE=$NETWORK ;;
+    /*.toml) CONFIG_FILE=$NETWORK ;;
+    *.toml) CONFIG_FILE=${CALLER:-$PWD}/$NETWORK ;;   # relative to the caller's directory (CALLER: before a cd)
     *) CONFIG_FILE=$CONFIG_DIR/config.$NETWORK.toml ;;
   esac
   [ -f "$CONFIG_FILE" ] || { echo "no $CONFIG_FILE for NETWORK=$NETWORK" >&2; exit 1; }

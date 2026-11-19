@@ -58,7 +58,7 @@ function describe(ms: multisig.accounts.Multisig, proposal: multisig.accounts.Pr
 async function main() {
   switch (command) {
     case "create": {
-      const creator = loadWeb3Keypair(required(args, "creator"));
+      const creator = await loadWeb3Keypair(required(args, "creator"));
       const members = required(args, "members").split(",").map((m) => new PublicKey(m.trim()));
       const threshold = Number(required(args, "threshold"));
       const timeLock = Number(args["time-lock"] ?? 0);
@@ -107,7 +107,7 @@ async function main() {
     case "reject": {
       const multisigPda = msArg();
       const transactionIndex = indexArg();
-      const signer = loadWeb3Keypair(member());
+      const signer = await loadWeb3Keypair(member());
       const build = command === "approve" ? multisig.instructions.proposalApprove : multisig.instructions.proposalReject;
       const sig = await sendWeb3([build({ multisigPda, transactionIndex, member: signer.publicKey })], [signer]);
       const { ms, proposal } = await proposalState(multisigPda, transactionIndex);
@@ -118,7 +118,7 @@ async function main() {
     case "execute": {
       const multisigPda = msArg();
       const transactionIndex = indexArg();
-      const signer = loadWeb3Keypair(member());
+      const signer = await loadWeb3Keypair(member());
       const { ms, proposal } = await proposalState(multisigPda, transactionIndex);
       console.log(`  ${describe(ms, proposal, transactionIndex)}`);
       const { instruction } = await multisig.instructions.vaultTransactionExecute({
