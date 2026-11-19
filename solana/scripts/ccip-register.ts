@@ -201,5 +201,11 @@ if (handoffTo) {
 }
 const [r, p] = [(await registryState(a))!, (await poolOwnership(a))!];
 console.log(`  now: token admin ${r.admin} (pending ${r.pending}); pool owner ${p.owner} (proposed ${p.proposed}); lookup table ${r.lookupTable}`);
-const next = [!handoffTo && "ccip-handoff.ts (multisig)", !handoffMintAuthority && "handoff-mint-authority.ts --yes"].filter(Boolean);
+// What is still left, read from the chain (a re-run after the handoff has nothing left).
+const mintNow = await withRetry(() => fetchEncodedAccount(rpc, mint));
+const minter = mintNow.exists ? getMintDecoder().decode(mintNow.data).mintAuthority : null;
+const next = [
+  (r.admin === authority.address || p.owner === authority.address) && r.pending === SYSTEM_PROGRAM && p.proposed === SYSTEM_PROGRAM && "ccip-handoff.ts (multisig)",
+  minter?.__option === "Some" && minter.value === authority.address && "handoff-mint-authority.ts --yes",
+].filter(Boolean);
 console.log(next.length ? `done; next: ${next.join(", then ")}` : "done");
