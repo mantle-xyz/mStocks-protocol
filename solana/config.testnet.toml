@@ -35,8 +35,8 @@ multiplier_scheduler = ["BduhSAGRfwePPv3j8zMtCrCa1FcSNkL793Hs66NgfmEL"]
 metadata_ops = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
 pauser = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
 unpauser = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
-freezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "E8SV8n8PQHiNNHZttcZ4PCYkFsC2rAHNYQNyZfXm6jQX"]
-unfreezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "E8SV8n8PQHiNNHZttcZ4PCYkFsC2rAHNYQNyZfXm6jQX"]
+freezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "E8SV8n8PQHiNNHZttcZ4PCYkFsC2rAHNYQNyZfXm6jQX", "313TxhxGx1G92mni17ehDnw6pfX7k9ecu7rLWbc4uJqE"]
+unfreezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "E8SV8n8PQHiNNHZttcZ4PCYkFsC2rAHNYQNyZfXm6jQX", "313TxhxGx1G92mni17ehDnw6pfX7k9ecu7rLWbc4uJqE"]
 
 [ccip]
 solana_ccip_admin = "36Ss7VbkAzHBDVYU9s3QsG7U2xSQYQ5XfShMcrCV16DE"   # rehearsal Squads (3/6, 60 s time lock)
