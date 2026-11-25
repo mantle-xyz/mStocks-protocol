@@ -175,8 +175,12 @@ cmd_deploy() {
   send "$key" "$pool" "applyChainUpdates(uint64[],(uint64,bytes[],bytes,$RL,$RL)[])" "[]" \
     "[($SOLANA_SELECTOR,[$remote_pool],$remote_token,$limit,$limit)]" | sed 's/^/  applyChainUpdates /'
   if [ -n "$rladmin" ]; then send "$key" "$pool" "setRateLimitAdmin(address)" "$rladmin" | sed 's/^/  setRateLimitAdmin /'; fi
-  echo "== propose the pool owner"
-  send "$key" "$pool" "transferOwnership(address)" "$owner" | sed 's/^/  transferOwnership /'
+  if [ "$(lower "$owner")" = "$(lower "$deployer")" ]; then
+    echo "== pool owner: the deployer already owns the pool"   # transferOwnership to itself reverts
+  else
+    echo "== propose the pool owner"
+    send "$key" "$pool" "transferOwnership(address)" "$owner" | sed 's/^/  transferOwnership /'
+  fi
   echo
   echo "POOL=$pool"
   echo "next: NETWORK=$NETWORK scripts/ccip-mantle-setup.sh multisig $token $pool $owner"
@@ -246,7 +250,7 @@ cmd_multisig() {
 }
 
 cmd_execute() {
-  [ "$NETWORK" = testnet ] || die "execute is for testnet only; on mainnet import the JSON into the Safe"
+  [ "$CHAIN_ID" = 5003 ] || die "execute is for testnet (Mantle Sepolia, chain 5003) only; on mainnet import the JSON into the Safe"
   set_signer "$(abspath "$1")"; shift
   for f in "$@"; do
     f=$(abspath "$f")
