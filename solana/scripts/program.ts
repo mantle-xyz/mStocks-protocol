@@ -6,7 +6,8 @@
 //   verify                      on-chain bytes == target/deploy/mstocks_core.so and on-chain IDL ==
 //                               idl/mstocks_core.json (exit 1 otherwise)
 //   handoff --deployer <kp>     upgrade authority → the config's upgrade_authority multisig vault
-//                               (refused before init-core: initialize needs the upgrade authority)
+//                               (refused before init-core: initialize needs the upgrade authority; on
+//                               mainnet the target must be a Squads multisig: the handoff is final)
 //   upgrade --deployer <kp>     writes the program buffer (and an IDL buffer when the IDL changed),
 //                               hands them to the vault and prints the upgrade, with the IDL update,
 //                               as one base58 transaction message for the Squads app; after the
@@ -28,7 +29,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { address, fetchEncodedAccount, generateKeyPairSigner, getAddressDecoder, type Address, type Instruction, type KeyPairSigner } from "@solana/kit";
-import { assertImportFits, printSquadsImport, signerAddress } from "./lib/admin.ts";
+import { assertImportFits, permanentAuthority, printSquadsImport, signerAddress } from "./lib/admin.ts";
 import { setting } from "./lib/config.ts";
 import { CORE_PROGRAM_ID, fetchConfig, programDataPda } from "./lib/core.ts";
 import { deployerKey, keypairFile, loadKeypair, parseArgs, rpc, RPC_URL, send, withRetry } from "./lib/env.ts";
@@ -167,7 +168,7 @@ switch (command) {
   case "handoff": {
     const deployer = await keypairFile(deployerKey(args, "deployer"));
     if (!(await fetchConfig())) throw new Error("Core is not initialized: run init-core.ts first (it needs the current upgrade authority)");
-    const vault = await signerAddress(setting(args.to, "admins.upgrade_authority", "to"));
+    const vault = await permanentAuthority(setting(args.to, "admins.upgrade_authority", "to"), "new upgrade authority");
     if (vault === (await loadKeypair(deployer)).address) throw new Error("the new upgrade authority is the deployer itself");
     solana(deployer, "program", "set-upgrade-authority", CORE_PROGRAM_ID, "--upgrade-authority", deployer,
       "--new-upgrade-authority", vault, "--skip-new-upgrade-authority-signer-check");

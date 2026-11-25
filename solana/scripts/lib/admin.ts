@@ -5,11 +5,11 @@
 //                         member imports it and the members approve it with their Ledgers;
 //   <any other address>   e.g. the vault itself: the same, printed for that address as signer.
 import { address, type Address, type Instruction, type KeyPairSigner } from "@solana/kit";
-import { asSquadsMultisig, squadsImport, vaultAddress } from "./squads.ts";
+import { asSquadsMultisig, multisigInfo, squadsImport, vaultAddress } from "./squads.ts";
 import { describeInstruction } from "./describe.ts";
 import { ROLE_NAMES, setting } from "./config.ts";
 import { COMPLIANCE_ROLES, concat, configPda, coreInstruction, encodePubkey, encodeU8, roleIndex, rolePda } from "./core.ts";
-import { loadKeypair, send, TRANSACTION_SIZE_LIMIT, transactionSize } from "./env.ts";
+import { isMainnet, loadKeypair, send, TRANSACTION_SIZE_LIMIT, transactionSize } from "./env.ts";
 import type { PublicKey } from "@solana/web3.js";
 
 export type Admin = KeyPairSigner | Address;
@@ -36,6 +36,28 @@ export async function signerAddress(value: string): Promise<Address> {
 }
 
 export const adminAddress = (admin: Admin): Address => (typeof admin === "string" ? admin : admin.address);
+
+/**
+ * The signing address for an authority that cannot be taken back once set: the program's upgrade
+ * authority (handed over without its signature) and Core's admins (set once by initialize). The
+ * value must be a Squads multisig on mainnet, whose threshold and time lock are printed for the
+ * operator to check: a mistyped address, or a vault given directly, cannot be told from a valid one
+ * there and would lose the authority for good. Elsewhere a plain key is accepted (test networks).
+ */
+export async function permanentAuthority(value: string, label: string): Promise<Address> {
+  const given = address(value);
+  const multisig = await asSquadsMultisig(given);
+  if (!multisig) {
+    if (await isMainnet())
+      throw new Error(`${label} ${value} is not a Squads multisig account; on mainnet it must be one (the multisig, not its vault)`);
+    console.log(`${label}: ${value}, not a Squads multisig (accepted off mainnet)`);
+    return given;
+  }
+  const vault = await signerAddress(value);
+  const { threshold, members, timeLock } = await multisigInfo(multisig);
+  console.log(`${label}: Squads multisig ${multisig.toBase58()} (vault ${vault}), ${threshold} of ${members}, time lock ${timeLock} s`);
+  return vault;
+}
 
 /** The admin that governs `role`: --admin, else the config's admin or compliance admin. */
 export function roleAdminSetting(role: string, value: string | undefined): string {

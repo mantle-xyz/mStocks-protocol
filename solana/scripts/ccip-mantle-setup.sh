@@ -5,10 +5,12 @@
 # withdraw the locked tokens).
 #
 #   deploy   <deployer-key-file> <token> <solana-mint> [<pool-owner>] (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit)
-#            [--rate-limit-admin <addr>]
+#            [--rate-limit-admin <addr>] [--pool <pool>]
 #            Sends from the deployer: deploys the pool, points it at the Solana pool and mint, sets the
 #            rate limits (same both ways, in the token's 18-decimal units), optionally a rate limit
 #            admin, and proposes <pool-owner> (the multisig) as owner. Prints the pool address.
+#            --pool continues with a pool deployed by an earlier run that stopped part way: only the
+#            steps not yet done on chain are sent (a rerun without it would deploy a second pool).
 #   multisig <token> <pool> [<pool-owner>] [--out <dir>]
 #            Writes Safe Transaction Builder JSON files for the multisigs:
 #              - the token admin (the token's DEFAULT_ADMIN_ROLE, a TimelockController on mainnet)
@@ -22,8 +24,9 @@
 #   execute  <key-file> <json>...      Testnet only: sends a JSON file's calls from <key-file>, standing
 #                                      in for a multisig that is a plain key in a test deployment.
 #   verify   <token> <pool> <solana-mint>
-#            Checks registry, pool owner, remote chain, rate limits, rebalancer, sanctions; exits 1 on a
-#            problem.
+#            Checks registry, pool owner (= mantle.pool_owner: until the multisig accepts, the deployer
+#            still controls the pool), remote chain, rebalancer, sanctions; prints the rate limits; exits
+#            1 on a problem.
 #
 # Env: NETWORK=mainnet|testnet (required) selects config.<network>.toml: the Mantle chain and its
 # CCIP contracts ([mantle]), the Solana selector ([solana]), the expected token admin and the default
@@ -135,14 +138,15 @@ PY
 }
 
 cmd_deploy() {
-  [ $# -ge 3 ] || die "usage: deploy <deployer-key-file> <token> <solana-mint> [<pool-owner>] (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit) [--rate-limit-admin <addr>]"
+  [ $# -ge 3 ] || die "usage: deploy <deployer-key-file> <token> <solana-mint> [<pool-owner>] (--rate-capacity <wei> --rate-per-second <wei> | --no-rate-limit) [--rate-limit-admin <addr>] [--pool <pool>]"
   local key token=$2 mint=$3 owner; key=$(abspath "$1"); shift 3
   if [ $# -gt 0 ] && [ "${1#--}" = "$1" ]; then owner=$1; shift; else owner=$(cfg mantle.pool_owner); fi
   [ -n "$owner" ] || die "no <pool-owner>: pass it or fill mantle.pool_owner in $CONFIG_FILE"
-  local cap="" rate="" nolimit="" rladmin=""
+  local cap="" rate="" nolimit="" rladmin="" pool=""
   while [ $# -gt 0 ]; do case $1 in
     --rate-capacity) cap=$2; shift 2 ;; --rate-per-second) rate=$2; shift 2 ;;
     --no-rate-limit) nolimit=1; shift ;; --rate-limit-admin) rladmin=$2; shift 2 ;;
+    --pool) pool=$2; shift 2 ;;
     *) die "unknown option $1" ;; esac; done
   local limit
   if [ -n "$nolimit" ]; then limit="(false,0,0)"
@@ -158,26 +162,41 @@ cmd_deploy() {
   echo "  token $token ($(call "$token" "symbol()(string)")), admin $admin$(is_timelock "$admin" && echo " (timelock, delay $(call "$admin" "getMinDelay()(uint256)" | awk '{print $1}') s)")"
   [ "$(call $ROUTER "isChainSupported(uint64)(bool)" $SOLANA_SELECTOR)" = true ] || die "router does not support the Solana lane"
   local pool_in_registry; pool_in_registry=$(call $TAR "getPool(address)(address)" "$token")
-  [ "$(lower "$pool_in_registry")" = "$(lower $ZERO)" ] || die "token already has CCIP pool $pool_in_registry"
+  [ "$(lower "$pool_in_registry")" = "$(lower $ZERO)" ] || [ "$(lower "$pool_in_registry")" = "$(lower "$pool")" ] ||
+    die "token already has CCIP pool $pool_in_registry"
   local remote; remote=$(solana_remote "$mint") || die "cannot derive the Solana pool address (run from a checkout with npm install)"
   local remote_pool=${remote% *} remote_token=${remote#* }
   echo "  solana mint $mint → remote pool $remote_pool, remote token $remote_token"
   echo "  deployer $deployer ($(cast balance "$deployer" --rpc-url "$RPC" --ether) MNT), pool owner → $owner"
 
-  echo "== deploy LockReleaseTokenPool $CCIP_VERSION"
-  local src; src=$(ccip_sources)
-  local pool; pool=$(forge create --root "$src" --rpc-url "$RPC" "${SIGNER[@]}" --broadcast --json \
-    node_modules/@chainlink/contracts-ccip/contracts/pools/LockReleaseTokenPool.sol:LockReleaseTokenPool \
-    --constructor-args "$token" 18 "[]" $RMN $ROUTER | python3 -I -c 'import sys,json; print(json.loads(sys.stdin.read())["deployedTo"])')
-  echo "  pool $pool ($(call "$pool" "typeAndVersion()(string)"))"
-
-  echo "== remote chain: Solana ($SOLANA_SELECTOR), rate limits $limit both ways"
-  send "$key" "$pool" "applyChainUpdates(uint64[],(uint64,bytes[],bytes,$RL,$RL)[])" "[]" \
-    "[($SOLANA_SELECTOR,[$remote_pool],$remote_token,$limit,$limit)]" | sed 's/^/  applyChainUpdates /'
-  if [ -n "$rladmin" ]; then send "$key" "$pool" "setRateLimitAdmin(address)" "$rladmin" | sed 's/^/  setRateLimitAdmin /'; fi
-  if [ "$(lower "$owner")" = "$(lower "$deployer")" ]; then
-    echo "== pool owner: the deployer already owns the pool"   # transferOwnership to itself reverts
+  if [ -n "$pool" ]; then
+    echo "== continue with pool $pool ($(call "$pool" "typeAndVersion()(string)"))"
+    [ "$(lower "$(call "$pool" "getToken()(address)")")" = "$(lower "$token")" ] || die "pool $pool is not $token's"
   else
+    echo "== deploy LockReleaseTokenPool $CCIP_VERSION"
+    local src; src=$(ccip_sources)
+    pool=$(forge create --root "$src" --rpc-url "$RPC" "${SIGNER[@]}" --broadcast --json \
+      node_modules/@chainlink/contracts-ccip/contracts/pools/LockReleaseTokenPool.sol:LockReleaseTokenPool \
+      --constructor-args "$token" 18 "[]" $RMN $ROUTER | python3 -I -c 'import sys,json; print(json.loads(sys.stdin.read())["deployedTo"])')
+    echo "  pool $pool ($(call "$pool" "typeAndVersion()(string)")); if a step below fails, rerun with --pool $pool"
+  fi
+  local current_owner; current_owner=$(call "$pool" "owner()(address)")
+
+  if [ "$(call "$pool" "isSupportedChain(uint64)(bool)" $SOLANA_SELECTOR)" = true ]; then
+    echo "== remote chain: Solana already configured (rate limits left as they are)"
+  else
+    echo "== remote chain: Solana ($SOLANA_SELECTOR), rate limits $limit both ways"
+    send "$key" "$pool" "applyChainUpdates(uint64[],(uint64,bytes[],bytes,$RL,$RL)[])" "[]" \
+      "[($SOLANA_SELECTOR,[$remote_pool],$remote_token,$limit,$limit)]" | sed 's/^/  applyChainUpdates /'
+  fi
+  if [ -n "$rladmin" ] && [ "$(lower "$(call "$pool" "getRateLimitAdmin()(address)")")" != "$(lower "$rladmin")" ]; then
+    [ "$(lower "$current_owner")" = "$(lower "$deployer")" ] || die "only the pool owner $current_owner can set the rate limit admin now"
+    send "$key" "$pool" "setRateLimitAdmin(address)" "$rladmin" | sed 's/^/  setRateLimitAdmin /'
+  fi
+  if [ "$(lower "$current_owner")" = "$(lower "$owner")" ]; then
+    echo "== pool owner: $owner already owns the pool"   # transferOwnership to the owner itself reverts
+  else
+    # The pending owner is not readable, so a rerun proposes it again (harmless: the same proposal).
     echo "== propose the pool owner"
     send "$key" "$pool" "transferOwnership(address)" "$owner" | sed 's/^/  transferOwnership /'
   fi
@@ -279,7 +298,10 @@ cmd_verify() {
   check "remote token" "$(call "$pool" "getRemoteToken(uint64)(bytes)" $SOLANA_SELECTOR)" "$remote_token"
   echo "  info outbound limit $(call "$pool" "getCurrentOutboundRateLimiterState(uint64)((uint128,uint32,bool,uint128,uint128))" $SOLANA_SELECTOR)"
   echo "  info inbound limit  $(call "$pool" "getCurrentInboundRateLimiterState(uint64)((uint128,uint32,bool,uint128,uint128))" $SOLANA_SELECTOR)"
-  echo "  info pool owner $(call "$pool" "owner()(address)"), rate limit admin $(call "$pool" "getRateLimitAdmin()(address)")"
+  local pool_owner; pool_owner=$(cfg mantle.pool_owner)
+  if [ -n "$pool_owner" ]; then check "pool owner (= mantle.pool_owner)" "$(call "$pool" "owner()(address)")" "$pool_owner"
+  else echo "  info pool owner $(call "$pool" "owner()(address)") (mantle.pool_owner is empty in $CONFIG_FILE)"; fi
+  echo "  info rate limit admin $(call "$pool" "getRateLimitAdmin()(address)")"
   local admin; admin=$(token_admin "$token")
   local cfg; cfg=$(call $TAR "getTokenConfig(address)((address,address,address))" "$token" | tr -d '() ')
   check "registry pool" "${cfg##*,}" "$pool"

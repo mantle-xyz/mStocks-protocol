@@ -87,8 +87,22 @@ export async function corePdas(coreProgram: Address, mint: Address, registrar: A
   };
 }
 
-/** The multiplier as Token-2022 stores it (f64); Core rejects one with more than 15 significant digits. */
+/** The multiplier as Token-2022 stores it (f64). */
 export const multiplierF64 = (multiplier1e18: bigint) => Number(multiplier1e18) / 1e18;
+
+/**
+ * Why an initial multiplier cannot be used, or null. Core's schedule_multiplier rules, which
+ * register_mint does not apply to the initial value: within [1e9, 1e27] (1e18 fixed point) and at
+ * most 15 significant digits, so the f64 Token-2022 stores carries exactly Mantle's value.
+ */
+export function multiplierProblem(multiplier1e18: bigint): string | null {
+  if (multiplier1e18 < 10n ** 9n || multiplier1e18 > 10n ** 27n) return `multiplier ${multiplier1e18} is outside [1e9, 1e27]`;
+  let digits = multiplier1e18;
+  while (digits % 10n === 0n) digits /= 10n;
+  if (digits >= 10n ** 15n)
+    return `multiplier ${multiplier1e18} has more than 15 significant digits: Token-2022's f64 would round it, and Core refuses to schedule such a value`;
+  return null;
+}
 
 /**
  * Account sizes: `space` at creation (the six fixed-size extensions) and `finalSize` once the
@@ -119,9 +133,12 @@ export async function mintSizes(p: NewMint) {
 /**
  * The instructions, in order, of the one transaction (fee payer `p.payer`; signers payer, registrar
  * and mint). `lamports` is the rent for mintSizes(p).finalSize (getMinimumBalanceForRentExemption).
- * Core's register_mint checks the whole configuration and rejects anything else.
+ * Core's register_mint checks the whole configuration and rejects anything else; the initial
+ * multiplier, which it does not check, is checked here (multiplierProblem).
  */
 export async function createMintInstructions(p: NewMint, lamports: bigint): Promise<Instruction[]> {
+  const problem = multiplierProblem(p.multiplier1e18);
+  if (problem) throw new Error(problem);
   const mint = p.mint.address;
   const token = evmAddressBytes(p.mantleToken);
   const { config, authority, roleEntry, mintState, mantleIndex } = await corePdas(p.coreProgram, mint, p.registrar.address, token);

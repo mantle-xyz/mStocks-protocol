@@ -10,6 +10,8 @@ set_signer() {
     SIGNER=(--keystore "$1")
   else
     SIGNER=(--private-key "$(tr -d '[:space:]' <"$1")")
-    [ "${NETWORK:-}" != mainnet ] || echo "warning: $1 is a raw private key, passed to cast/forge on the command line; a Foundry keystore avoids that" >&2
+    # Mantle mainnet (chain 5000), whatever the config file is called.
+    [ "${CHAIN_ID:-$(cfg mantle.chain_id)}" != 5000 ] ||
+      echo "warning: $1 is a raw private key, passed to cast/forge on the command line; a Foundry keystore avoids that" >&2
   fi
 }

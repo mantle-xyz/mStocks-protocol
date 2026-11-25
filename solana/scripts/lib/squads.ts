@@ -41,6 +41,12 @@ export async function asSquadsMultisig(value: Address): Promise<PublicKey | null
   return info.data.subarray(0, 8).equals(discriminator) ? key : null;
 }
 
+/** A multisig's threshold, member count and time lock (seconds). */
+export async function multisigInfo(multisigPda: PublicKey) {
+  const m = await multisig.accounts.Multisig.fromAccountAddress(connection, multisigPda);
+  return { threshold: m.threshold, members: m.members.length, timeLock: m.timeLock };
+}
+
 export const toWeb3 = (ix: Instruction) =>
   new TransactionInstruction({
     programId: new PublicKey(ix.programAddress),

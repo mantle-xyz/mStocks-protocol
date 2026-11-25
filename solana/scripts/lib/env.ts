@@ -31,6 +31,10 @@ export const RPC_URL = process.env.RPC_URL || config?.solana.rpc || "http://127.
 
 export const rpc = createSolanaRpc(RPC_URL);
 
+/** Genesis hash of Solana mainnet-beta: tells the chain the RPC serves, whatever the config is called. */
+const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+export const isMainnet = async () => (await withRetry(() => rpc.getGenesisHash().send())) === MAINNET_GENESIS;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
