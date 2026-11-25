@@ -172,6 +172,24 @@ impl Env {
         )
     }
 
+    /// `pause_all` over `(mint, mint_state)` pairs.
+    fn pause_all_ix(&self, pauser: &Keypair, pairs: &[(Pubkey, Pubkey)]) -> Instruction {
+        use anchor_lang::solana_program::instruction::AccountMeta;
+        let remaining =
+            pairs.iter().flat_map(|(m, s)| [AccountMeta::new(*m, false), AccountMeta::new_readonly(*s, false)]);
+        self.core_ix(
+            mstocks_core::accounts::PauseAll {
+                operator: pauser.pubkey(),
+                config: self.config,
+                role_entry: role_pda(Role::Pauser, &pauser.pubkey()),
+                authority: self.authority,
+                token_program: TOKEN_2022,
+            },
+            mstocks_core::instruction::PauseAll {},
+            remaining.collect(),
+        )
+    }
+
     fn role_admin(&self, role: Role) -> Keypair {
         if role.is_compliance() {
             self.compliance_admin.insecure_clone()
@@ -1049,29 +1067,8 @@ fn pause_all_pauses_every_given_mint() {
     let m1 = env.registered_mint();
     let m2 = env.registered_mint();
     let pauser = env.operator(Role::Pauser);
-    let remaining = [m1.mint, m2.mint]
-        .iter()
-        .flat_map(|m| {
-            [
-                anchor_lang::solana_program::instruction::AccountMeta::new(*m, false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    pda(&[MINT_SEED, m.as_ref()]),
-                    false,
-                ),
-            ]
-        })
-        .collect();
-    let ix = env.core_ix(
-        mstocks_core::accounts::PauseAll {
-            operator: pauser.pubkey(),
-            config: env.config,
-            role_entry: role_pda(Role::Pauser, &pauser.pubkey()),
-            authority: env.authority,
-            token_program: TOKEN_2022,
-        },
-        mstocks_core::instruction::PauseAll {},
-        remaining,
-    );
+    let pairs = [m1.mint, m2.mint].map(|m| (m, pda(&[MINT_SEED, m.as_ref()])));
+    let ix = env.pause_all_ix(&pauser, &pairs);
     env.send(&[ix], &[&pauser]).unwrap();
     for m in [&m1, &m2] {
         let a = env.token_account(&m.mint, &Pubkey::new_unique());
@@ -1228,6 +1225,32 @@ fn pause_all_rejects_unpaired_remaining_accounts() {
     assert_err(env.send(&[ix], &[&pauser]).map(|_| ()), "BadRemainingAccounts");
 }
 
+/// Anchor does not check remaining accounts, so `pause_all` checks each pair itself: a Token-2022
+/// mint and that mint's own MintState. One bad pair fails the whole batch, the good pairs included.
+#[test]
+fn pause_all_rejects_a_pair_that_is_not_a_registered_mint() {
+    let mut env = Env::new();
+    let (m1, m2) = (env.registered_mint(), env.registered_mint());
+    let unregistered = env.create_mint(MintOpts::valid());
+    let not_a_mint = Pubkey::new_unique();
+    let state = |m: &Pubkey| pda(&[MINT_SEED, m.as_ref()]);
+    let pauser = env.operator(Role::Pauser);
+    let cases = [
+        ((m1.mint, state(&m2.mint)), "BadRemainingAccounts", "another mint's MintState"),
+        ((unregistered.mint, state(&unregistered.mint)), "BadRemainingAccounts", "a mint with no MintState"),
+        ((not_a_mint, state(&not_a_mint)), "NotToken2022", "an account that is not a mint"),
+    ];
+    for (bad, expected, what) in cases {
+        let ix = env.pause_all_ix(&pauser, &[(m2.mint, state(&m2.mint)), bad]);
+        let result = env.send(&[ix], &[&pauser]).map(|_| ());
+        assert!(result.as_ref().is_err_and(|e| e.contains(expected)), "{what}: expected {expected}, got {result:?}");
+    }
+    for m in [&m1, &m2] {
+        let account = env.token_account(&m.mint, &Pubkey::new_unique());
+        env.mint_to(m, &account, 1).expect("a failed batch pauses nothing");
+    }
+}
+
 #[test]
 fn clawback_from_unfrozen_account_still_ends_frozen() {
     let mut env = Env::new();
@@ -1271,29 +1294,8 @@ fn batch_operations_fit_transaction_limits() {
 
     let mints: Vec<Pubkey> = (0..8).map(|_| env.registered_mint().mint).collect();
     let pauser = env.operator(Role::Pauser);
-    let remaining = mints
-        .iter()
-        .flat_map(|m| {
-            [
-                anchor_lang::solana_program::instruction::AccountMeta::new(*m, false),
-                anchor_lang::solana_program::instruction::AccountMeta::new_readonly(
-                    pda(&[MINT_SEED, m.as_ref()]),
-                    false,
-                ),
-            ]
-        })
-        .collect();
-    let ix = env.core_ix(
-        mstocks_core::accounts::PauseAll {
-            operator: pauser.pubkey(),
-            config: env.config,
-            role_entry: role_pda(Role::Pauser, &pauser.pubkey()),
-            authority: env.authority,
-            token_program: TOKEN_2022,
-        },
-        mstocks_core::instruction::PauseAll {},
-        remaining,
-    );
+    let pairs: Vec<(Pubkey, Pubkey)> = mints.iter().map(|m| (*m, pda(&[MINT_SEED, m.as_ref()]))).collect();
+    let ix = env.pause_all_ix(&pauser, &pairs);
     let size = tx_size(&env, std::slice::from_ref(&ix), &[&pauser]);
     let cu = env.send(&[ix], &[&pauser]).unwrap().compute_units_consumed;
     println!("pause_all 8 mints: {cu} CU, {size} bytes");
@@ -1459,5 +1461,39 @@ fn only_the_compliance_admin_claws_back() {
     let compliance = env.compliance_admin.insecure_clone();
     let ix = env.clawback_ix(&compliance, &m.mint, source, custody, 100);
     env.send(&[ix], &[&compliance]).unwrap();
+    assert_eq!(env.token(&source), (900, AccountState::Frozen));
+}
+
+/// Clawback moves tokens only between two different token accounts of the mint it names, and not
+/// while the mint is paused: the runbook's "freeze now, claw back after resuming" relies on it.
+#[test]
+fn clawback_rejects_wrong_accounts_and_a_paused_mint() {
+    let mut env = Env::new();
+    let (m, other) = (env.registered_mint(), env.registered_mint());
+    let source = env.token_account(&m.mint, &Pubkey::new_unique());
+    let custody = env.token_account(&m.mint, &Pubkey::new_unique());
+    let foreign = env.token_account(&other.mint, &Pubkey::new_unique());
+    env.mint_to(&m, &source, 1_000).unwrap();
+    env.mint_to(&other, &foreign, 1_000).unwrap();
+    let compliance = env.compliance_admin.insecure_clone();
+    let claw = |env: &mut Env, from: Pubkey, to: Pubkey| {
+        let ix = env.clawback_ix(&compliance, &m.mint, from, to, 100);
+        env.send(&[ix], &[&compliance]).map(|_| ())
+    };
+    assert_err(claw(&mut env, source, source), "SameAccount");
+    assert_err(claw(&mut env, source, foreign), "MintMismatch");
+    assert_err(claw(&mut env, foreign, custody), "MintMismatch");
+    assert_eq!(env.token(&foreign), (1_000, AccountState::Initialized));
+
+    let freezer = env.operator(Role::Freezer);
+    env.set_frozen(&freezer, &m.mint, &[source], true).unwrap();
+    let (pauser, unpauser) = (env.operator(Role::Pauser), env.operator(Role::Unpauser));
+    env.set_paused(&pauser, &m.mint, true).unwrap();
+    // Token-2022's TokenError::MintPaused (67): the permanent delegate is stopped like anyone else.
+    assert_err(claw(&mut env, source, custody), "Custom(67)");
+    assert_eq!(env.token(&source), (1_000, AccountState::Frozen), "the failed clawback changed nothing");
+    assert_eq!(env.token(&custody).0, 0);
+    env.set_paused(&unpauser, &m.mint, false).unwrap();
+    claw(&mut env, source, custody).unwrap();
     assert_eq!(env.token(&source), (900, AccountState::Frozen));
 }
