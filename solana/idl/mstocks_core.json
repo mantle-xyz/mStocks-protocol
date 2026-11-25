@@ -1610,6 +1610,14 @@
               }
             ]
           }
+        },
+        {
+          "name": "mint_authority",
+          "docs": [
+            "it is that key and what kind of account it is. It does not sign: a Squads vault proposes the",
+            "unregistration, and the authority may be a key the multisig cannot add as a signer."
+          ],
+          "optional": true
         }
       ],
       "args": []
@@ -2153,8 +2161,8 @@
     },
     {
       "code": 6029,
-      "name": "MintAuthorityIsProgram",
-      "msg": "A mint whose authority is a program address (the CCIP pool) cannot be unregistered"
+      "name": "MintAuthorityNotAKey",
+      "msg": "Only a mint whose authority is a plain key can be unregistered, not a program address or a token multisig (the CCIP pool's)"
     }
   ],
   "types": [

@@ -73,8 +73,9 @@ pub fn register_mint(ctx: Context<RegisterMint>, mantle_token: [u8; 20]) -> Resu
 /// Undoes a registration made in error (wrong mint or wrong Mantle token), so it can be registered
 /// again correctly. Only while the mint has no supply: once tokens exist, Core must keep operating
 /// it (freeze, pause, clawback all require the registration). And only while its mint authority is
-/// not a program address: once the CCIP pool holds it, the pool could mint into the mint after it
-/// left Core, so a CCIP-connected mint stays registered.
+/// a plain key: once the CCIP pool can mint (its signer holds the authority, directly or through a
+/// token multisig), the pool could mint into the mint after it left Core, so a CCIP-connected mint
+/// stays registered.
 #[derive(Accounts)]
 pub struct UnregisterMint<'info> {
     #[account(mut)]
@@ -94,6 +95,10 @@ pub struct UnregisterMint<'info> {
         constraint = mantle_index.mint == mint.key() @ CoreError::MintMismatch,
     )]
     pub mantle_index: Account<'info, MantleTokenIndex>,
+    /// CHECK: the mint's current mint authority, required when it has one; the handler checks that
+    /// it is that key and what kind of account it is. It does not sign: a Squads vault proposes the
+    /// unregistration, and the authority may be a key the multisig cannot add as a signer.
+    pub mint_authority: Option<UncheckedAccount<'info>>,
 }
 
 pub fn unregister_mint(ctx: Context<UnregisterMint>) -> Result<()> {
@@ -103,8 +108,15 @@ pub fn unregister_mint(ctx: Context<UnregisterMint>) -> Result<()> {
         (base.supply, Option::<Pubkey>::from(base.mint_authority))
     };
     require!(supply == 0, CoreError::MintHasSupply);
-    // A program-derived address is off the curve; a key that can sign is on it.
-    require!(mint_authority.is_none_or(|authority| authority.is_on_curve()), CoreError::MintAuthorityIsProgram);
+    if let Some(authority) = mint_authority {
+        let account = ctx.accounts.mint_authority.as_ref().ok_or(CoreError::MintAuthorityNotAKey)?;
+        require_keys_eq!(account.key(), authority, CoreError::MintAuthorityNotAKey);
+        // A program address (the CCIP pool's signer) is off the curve, and a token multisig (which
+        // can include the pool's signer, the CCIP setup mStocks uses) is an account of a token
+        // program; only a key that signs for itself may hold the authority of an unregistered mint.
+        let token_multisig = *account.owner == spl_token_2022::ID || *account.owner == anchor_spl::token::ID;
+        require!(authority.is_on_curve() && !token_multisig, CoreError::MintAuthorityNotAKey);
+    }
     emit!(MintUnregistered { mint: ctx.accounts.mint.key(), mantle_token: ctx.accounts.mint_state.mantle_token });
     Ok(())
 }

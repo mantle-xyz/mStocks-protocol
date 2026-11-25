@@ -317,6 +317,19 @@ impl Env {
     }
 
     fn unregister_as(&mut self, admin: &Keypair, mint: &Pubkey, mantle_token: [u8; 20]) -> Result<(), String> {
+        let data = self.svm.get_account(mint).unwrap().data;
+        let authority: Option<Pubkey> = StateWithExtensions::<Mint>::unpack(&data).unwrap().base.mint_authority.into();
+        self.unregister_with(admin, mint, mantle_token, authority)
+    }
+
+    /// Unregisters, passing `mint_authority` as the mint's authority account (None omits it).
+    fn unregister_with(
+        &mut self,
+        admin: &Keypair,
+        mint: &Pubkey,
+        mantle_token: [u8; 20],
+        mint_authority: Option<Pubkey>,
+    ) -> Result<(), String> {
         let ix = self.core_ix(
             mstocks_core::accounts::UnregisterMint {
                 admin: admin.pubkey(),
@@ -324,6 +337,7 @@ impl Env {
                 mint: *mint,
                 mint_state: pda(&[MINT_SEED, mint.as_ref()]),
                 mantle_index: pda(&[MANTLE_TOKEN_SEED, &mantle_token]),
+                mint_authority,
             },
             mstocks_core::instruction::UnregisterMint {},
             vec![],
@@ -711,7 +725,58 @@ fn a_mint_held_by_a_program_is_never_unregistered() {
     .unwrap();
     env.send(&[ix], &[&m.mint_authority]).unwrap();
     let admin = env.admin.insecure_clone();
-    assert_err(env.unregister_as(&admin, &m.mint, [30u8; 20]), "MintAuthorityIsProgram");
+    assert_err(env.unregister_as(&admin, &m.mint, [30u8; 20]), "MintAuthorityNotAKey");
+}
+
+#[test]
+fn a_mint_held_by_a_token_multisig_is_never_unregistered() {
+    // The CCIP setup mStocks uses: a 1-of-2 token multisig of the pool's signer and the admin's
+    // vault. Its address is on the curve, but the pool can still mint through it.
+    let mut env = Env::new();
+    let m = env.create_mint(MintOpts::valid());
+    let registrar = env.registrar.as_ref().unwrap().insecure_clone();
+    env.register_as(&registrar, &m.mint, [31u8; 20]).unwrap();
+    let pool_signer =
+        Pubkey::find_program_address(&[b"ccip_tokenpool_signer", m.mint.as_ref()], &Pubkey::new_unique()).0;
+    let multisig = Keypair::new();
+    // Multisig::LEN: m, n, is_initialized and 11 signer slots.
+    let space = 3 + 11 * 32;
+    let create = create_account(
+        &env.payer.pubkey(),
+        &multisig.pubkey(),
+        env.svm.minimum_balance_for_rent_exemption(space),
+        space as u64,
+        &TOKEN_2022,
+    );
+    let init =
+        token_ix::initialize_multisig2(&TOKEN_2022, &multisig.pubkey(), &[&pool_signer, &Pubkey::new_unique()], 1)
+            .unwrap();
+    let hand_over = token_ix::set_authority(
+        &TOKEN_2022,
+        &m.mint,
+        Some(&multisig.pubkey()),
+        token_ix::AuthorityType::MintTokens,
+        &m.mint_authority.pubkey(),
+        &[],
+    )
+    .unwrap();
+    env.send(&[create, init, hand_over], &[&multisig, &m.mint_authority]).unwrap();
+    assert!(multisig.pubkey().is_on_curve(), "a multisig's address is a plain key's");
+    let admin = env.admin.insecure_clone();
+    assert_err(env.unregister_as(&admin, &m.mint, [31u8; 20]), "MintAuthorityNotAKey");
+}
+
+#[test]
+fn unregistering_requires_the_mint_authority_account() {
+    let mut env = Env::new();
+    let m = env.create_mint(MintOpts::valid());
+    let registrar = env.registrar.as_ref().unwrap().insecure_clone();
+    env.register_as(&registrar, &m.mint, [32u8; 20]).unwrap();
+    let admin = env.admin.insecure_clone();
+    assert_err(env.unregister_with(&admin, &m.mint, [32u8; 20], None), "MintAuthorityNotAKey");
+    let other = Keypair::new().pubkey();
+    assert_err(env.unregister_with(&admin, &m.mint, [32u8; 20], Some(other)), "MintAuthorityNotAKey");
+    env.unregister_with(&admin, &m.mint, [32u8; 20], Some(m.mint_authority.pubkey())).unwrap();
 }
 
 #[test]
