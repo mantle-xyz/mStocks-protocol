@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# Runbook rehearsal with real Squads v4 multisigs on a local validator (mainnet Squads program and
+# Token-2022), driven by a network config like config.mainnet.toml: commands carry no addresses.
+# Time locks are scaled down (12h → TL, 24h → 2×TL).
+#   multisigs: admin (2/3, TL), compliance admin (2/3, TL), upgrade authority (2/3, 2×TL),
+#              unpauser (2/3, no time lock); EOAs: registrar, scheduler, ops (metadata), pauser, kms
+# Multisig actions go the mainnet way: each script prints a base58 transaction, which squads.ts
+# propose imports as the Squads app does (a member's key file stands in for a Ledger).
+# Covers: a practice memo proposal; program.ts deploy / idl / handoff / upgrade / verify (program bytes and IDL; the IDL
+# created, replaced, shrunk, recovered from an unfinished upload, created through the upgrade
+# multisig), init-core and sync-roles from the config (grants split over two compliance proposals,
+# a revoke), check-config, a mint, resume by the unpauser multisig, clawback by the compliance
+# multisig, unregister by the admin multisig, and the negative cases (below threshold, non-member,
+# inside the time lock, wrong admin, handoff before init, old upgrade key).
+# Prerequisites: `anchor build`, `scripts/fetch-fixtures.sh`, `npm install`.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+TL=${TL:-15}
+PORT=${PORT:-18899}
+unset RPC_URL MANTLE_RPC_URL
+WORK=$(mktemp -d)
+VALIDATOR=""  # set below; the trap runs from here on, also if a setup step fails
+trap 'kill $VALIDATOR 2>/dev/null; rm -rf "$WORK"' EXIT
+wait_for() { local i; for i in $(seq 1 90); do "$@" >/dev/null 2>&1 && return 0; sleep 1; done; echo "FAIL: timed out waiting for: $*"; exit 1; }
+for k in deployer m1 m2 m3 outsider registrar scheduler ops pauser kms user custody f1 f2 f3 f4 f5 f6; do
+  solana-keygen new --no-bip39-passphrase --silent -o "$WORK/$k.json" >/dev/null
+done
+pk() { solana-keygen pubkey "$WORK/$1.json"; }
+D=$WORK/deployer.json
+LOCAL=http://127.0.0.1:$PORT
+sol() { solana -u "$LOCAL" -k "$D" "$@"; }
+
+solana-test-validator --reset --quiet --ledger "$WORK/ledger" --rpc-port "$PORT" --faucet-port $((PORT + 1001)) \
+  --bpf-program TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb tests/fixtures/token2022.so \
+  --bpf-program SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf tests/fixtures/squads_v4.so \
+  --account BSTq9w3kZwNwpBXJEvTZz2G9ZTNyKBvoSeXMvwb4cNZr tests/fixtures/squads_program_config.json \
+  --bpf-program ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S tests/fixtures/program_metadata.so &
+VALIDATOR=$!
+wait_for sol cluster-version
+for k in deployer m1 m2 m3 outsider registrar scheduler ops pauser kms; do sol airdrop 100 "$(pk $k)" >/dev/null; done
+
+ts() { npx tsx "$@" 2>&1 | grep -v "npm warn"; }
+fail() { echo "FAIL: $*"; exit 1; }
+expect_fail() { # label, expected error pattern, command...
+  local label=$1 want=$2; shift 2
+  if "$@" >"$WORK/out" 2>&1; then fail "$label succeeded"; fi
+  grep -qE "$want" "$WORK/out" || { grep -v "npm warn" "$WORK/out" | tail -5; fail "$label: expected $want"; }
+  echo "   $label rejected: $(grep -oE "$want" "$WORK/out" | head -1)"
+}
+idx() { awk -v l="$1" 'index($0, l) && /Squads proposal #/ {sub(/.*#/, ""); print $1; exit}'; }
+# A script prints a multisig action as "<label …> base58: <transaction>"; squads.ts propose imports it
+# the way the Squads app does (member m1's key file stands in for a Ledger). Prints the proposal index.
+imp() { # multisig, label prefix, file with the script's output
+  local b58; b58=$(awk -v l="$2" 'index($0, l) == 1 && / base58: / {print $NF; exit}' "$3")
+  [ -n "$b58" ] || { cat "$3"; fail "$2: no base58"; }
+  ts scripts/squads.ts propose --multisig "$1" --base58 "$b58" --member "$WORK/m1.json" | idx "propose:"
+}
+imp_all() { # every "<label…> base58:" line of the file (a split action has several); one index per line
+  local b58 n=0
+  for b58 in $(awk -v l="$2" 'index($0, l) == 1 && / base58: / {print $NF}' "$3"); do
+    n=$((n + 1))
+    ts scripts/squads.ts propose --multisig "$1" --base58 "$b58" --member "$WORK/m1.json" >"$WORK/imp$n" || { cat "$WORK/imp$n" >&2; fail "$2 #$n: propose"; }
+    idx "propose:" <"$WORK/imp$n"
+  done
+  [ "$n" -gt 0 ] || { cat "$3"; fail "$2: no base58"; }
+}
+approve() { ts scripts/squads.ts approve --multisig "$1" --index "$2" --member "$WORK/m2.json" >/dev/null; }
+execute() { ts scripts/squads.ts execute --multisig "$1" --index "$2" --member "$WORK/m3.json" | grep -E "^execute" || fail "execute $1 #$2"; }
+after_time_lock() { sleep $(( $1 + 2 )); }
+
+echo "== Squads multisigs (members m1, m2, m3) and the network config"
+MEMBERS="$(pk m1),$(pk m2),$(pk m3)"
+create() { RPC_URL=$LOCAL ts scripts/squads.ts create --creator "$D" --members "$MEMBERS" --threshold 2 --time-lock "$1" | awk '/^multisig /{print $2}'; }
+ADMIN_MS=$(create "$TL"); COMPLIANCE_MS=$(create "$TL"); UPGRADE_MS=$(create $((TL * 2))); UNPAUSER_MS=$(create 0)
+cat >"$WORK/config.toml" <<EOF
+[solana]
+rpc = "$LOCAL"
+roles_rpc = "$LOCAL"
+chain_selector = ""
+[mantle]
+rpc = ""
+[program]
+id = "$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)"
+min_notice_seconds = 300
+max_horizon_seconds = 31536000
+[admins]
+upgrade_authority = "$UPGRADE_MS"
+admin = "$ADMIN_MS"
+compliance_admin = "$COMPLIANCE_MS"
+hook_authority = "$ADMIN_MS"
+[roles]
+mint_registrar = ["$(pk registrar)"]
+multiplier_scheduler = ["$(pk scheduler)"]
+metadata_ops = ["$(pk ops)"]
+pauser = ["$(pk pauser)"]
+unpauser = ["$UNPAUSER_MS"]
+freezer = ["$(pk kms)", "$(pk f1)", "$(pk f2)", "$(pk f3)"]
+unfreezer = ["$(pk kms)", "$(pk f4)", "$(pk f5)", "$(pk f6)"]
+[ccip]
+solana_ccip_admin = ""
+EOF
+# DEPLOYER as an inline base58 private key (a keypair file path works the same way).
+b58key() { python3 -I -c 'import sys, json
+a = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"; b = bytes(json.load(open(sys.argv[1])))
+n = int.from_bytes(b, "big"); s = ""
+while n: n, r = divmod(n, 58); s = a[r] + s
+print("1" * (len(b) - len(b.lstrip(b"\0"))) + s)' "$1"; }
+export NETWORK=$WORK/config.toml DEPLOYER=$(b58key "$D")
+for ms in admin compliance_admin upgrade_authority unpauser; do
+  v=$(ts scripts/squads.ts status --multisig $ms | awk '/^multisig /{print $NF}')
+  sol transfer --allow-unfunded-recipient "$v" 1 >/dev/null
+  echo "   $ms: vault $v"
+done
+
+echo "== squads.ts memo: a practice proposal (the vault signs a Memo) through the unpauser multisig"
+ts scripts/squads.ts memo --multisig unpauser --text "Ledger practice" >"$WORK/memo"; grep -E "^  1\. " "$WORK/memo" | cut -c1-120
+M=$(imp unpauser "memo" "$WORK/memo"); approve unpauser "$M"; execute unpauser "$M"
+
+echo "== Step: program.ts deploy (deploy, IDL upload, byte and IDL comparison)"
+ts scripts/program.ts deploy | grep -E "IDL|matches|DIFFERS|upgrade authority" || fail "deploy"
+# A smaller IDL (no docs) replaces it directly while the deployer is the upgrade authority; the
+# upgrade below then restores the full IDL through the upgrade multisig.
+python3 -I -c 'import json, sys
+def strip(o):
+    if isinstance(o, dict): return {k: strip(v) for k, v in o.items() if k != "docs"}
+    if isinstance(o, list): return [strip(v) for v in o]
+    return o
+json.dump(strip(json.load(open(sys.argv[1]))), open(sys.argv[2], "w"))' idl/mstocks_core.json "$WORK/idl-small.json"
+ts scripts/program.ts idl --idl "$WORK/idl-small.json" | grep -E "^IDL|matches|DIFFERS" || fail "idl (direct)"
+ts scripts/program.ts verify >"$WORK/verify" && fail "verify passed with a different IDL"
+grep -q "on-chain IDL DIFFERS" "$WORK/verify" || fail "verify should see the smaller IDL"
+echo "   verify detects the IDL difference"
+# An IDL upload interrupted before initialize: idl closes the leftover and uploads again.
+ts scripts/test-idl-state.ts unfinished | grep -q "IDL account: buffer" || fail "unfinished upload setup"
+ts scripts/program.ts idl --idl "$WORK/idl-small.json" | grep -E "^IDL|matches" | cut -c1-150
+ts scripts/program.ts verify --idl "$WORK/idl-small.json" | grep -q "on-chain IDL matches" || fail "IDL after the unfinished upload"
+expect_fail "handoff before init-core" "not initialized" npx tsx scripts/program.ts handoff
+
+echo "== Step: init-core (addresses from the config), handoff, sync-roles"
+ts scripts/init-core.ts | grep -E "^initialize" || fail "init-core"
+# Leave another unfinished upload for after the handoff (the vault cannot write the deployer's).
+ts scripts/test-idl-state.ts unfinished | grep -q "IDL account: buffer" || fail "unfinished upload setup"
+ts scripts/program.ts handoff | grep "upgrade authority"
+ts scripts/sync-roles.ts >"$WORK/sync" || { cat "$WORK/sync"; fail "sync-roles"; }
+grep -E "change|  [0-9]\. " "$WORK/sync" | cut -c1-150
+A=$(imp admin "admin roles" "$WORK/sync"); C=$(imp_all compliance_admin "compliance roles" "$WORK/sync")
+[ -n "$A" ] && [ "$(echo "$C" | wc -l)" -eq 2 ] || fail "sync-roles proposals (want 1 admin, 2 compliance: $A / $C)"
+echo "   compliance grants split over proposals $(echo $C)"
+expect_fail "execute with 1/2 approvals" "InvalidProposalStatus" \
+  npx tsx scripts/squads.ts execute --multisig admin --index "$A" --member "$WORK/m3.json"
+expect_fail "approve by a non-member" "NotAMember" \
+  npx tsx scripts/squads.ts approve --multisig admin --index "$A" --member "$WORK/outsider.json"
+approve admin "$A"; for c in $C; do approve compliance_admin "$c"; done
+expect_fail "execute inside the time lock" "TimeLockNotReleased" \
+  npx tsx scripts/squads.ts execute --multisig admin --index "$A" --member "$WORK/m3.json"
+after_time_lock "$TL"; execute admin "$A"; for c in $C; do execute compliance_admin "$c"; done
+ts scripts/check-config.ts | tee "$WORK/check" | grep -vE "^  ok"
+grep -q "^PASS" "$WORK/check" || fail "check-config"
+
+echo "== program.ts idl through the upgrade multisig (no IDL on chain: the vault creates it from a buffer)"
+ts scripts/program.ts idl --idl "$WORK/idl-small.json" >"$WORK/idl"; grep -E "^IDL|^  [0-9]\. " "$WORK/idl" | cut -c1-150
+I=$(imp upgrade_authority "idl" "$WORK/idl"); approve upgrade_authority "$I"; after_time_lock $((TL * 2)); execute upgrade_authority "$I"
+ts scripts/program.ts verify --idl "$WORK/idl-small.json" | grep -q "on-chain IDL matches" || fail "IDL created by the vault"
+echo "   IDL created by the upgrade multisig"
+ts scripts/sync-roles.ts | grep -q "roles match the config" || fail "sync-roles after execution"
+echo "   sync-roles again: roles match the config"
+expect_fail "grant-role with the wrong admin" "is governed by the admin" \
+  npx tsx scripts/grant-role.ts --admin "$COMPLIANCE_MS" --role MintRegistrar --member "$(pk user)"
+
+echo "== sync-roles revokes a holder dropped from the config"
+sed -i.bak '/^multiplier_scheduler/d' "$WORK/config.toml"
+ts scripts/sync-roles.ts >"$WORK/sync"; grep -E "revoke" "$WORK/sync"
+R=$(imp admin "admin roles" "$WORK/sync"); approve admin "$R"; after_time_lock "$TL"; execute admin "$R"
+ts scripts/check-config.ts | grep -q "^PASS" || fail "check-config after revoke"
+mv "$WORK/config.toml.bak" "$WORK/config.toml"
+ts scripts/sync-roles.ts >"$WORK/sync"; R=$(imp admin "admin roles" "$WORK/sync"); approve admin "$R"; after_time_lock "$TL"; execute admin "$R"
+ts scripts/check-config.ts | grep -q "^PASS" || fail "check-config after re-grant"
+echo "   revoked, re-granted, PASS"
+
+echo "== a mint (registrar is the payer; hook authority from the config)"
+OUT=$(ts scripts/create-mint.ts --payer "$WORK/registrar.json" --uri https://example.com/aaplm.json \
+  --name "Apple mStock" --symbol AAPLm --isin US0378331005 \
+  --mantle-token 0x00000000000000000000000000000000000000aa --initial-multiplier-1e18 1000000000000000000)
+MINT=$(echo "$OUT" | awk '/^mint: /{print $2}')
+[ -n "$MINT" ] || { echo "$OUT"; fail "create-mint"; }
+echo "   $(echo "$OUT" | grep '^create and register' | cut -c1-80)…"
+USER_ATA=$(ts scripts/dev-mint-to.ts --mint-authority "$WORK/registrar.json" --mint "$MINT" --owner "$(pk user)" --amount 5000000000 | awk '/^ata: /{print $2}')
+CUSTODY_ATA=$(ts scripts/dev-mint-to.ts --mint-authority "$WORK/registrar.json" --mint "$MINT" --owner "$(pk custody)" --amount 0 | awk '/^ata: /{print $2}')
+
+echo "== pause (pauser key) → resume through the unpauser multisig from the config"
+ts scripts/pause.ts --operator "$WORK/pauser.json" --mint "$MINT" | grep -E "^pause"
+ts scripts/pause.ts --mint "$MINT" --resume >"$WORK/p"; P=$(imp unpauser "resume" "$WORK/p"); approve unpauser "$P"; execute unpauser "$P"
+ts scripts/show-mint.ts --mint "$MINT" | grep "^PausableConfig" | grep -q '"paused":false' || fail "still paused"
+echo "   resumed"
+
+echo "== clawback through the compliance multisig (after a kms freeze)"
+ts scripts/freeze.ts --operator "$WORK/kms.json" --mint "$MINT" --owner "$(pk user)" | grep -E "^freeze" | head -1
+ts scripts/clawback.ts --mint "$MINT" --source "$USER_ATA" --destination "$CUSTODY_ATA" --amount 2000000000 >"$WORK/p"
+grep -E "^  1\. " "$WORK/p" | cut -c1-160
+CB=$(imp compliance_admin "clawback" "$WORK/p")
+approve compliance_admin "$CB"; after_time_lock "$TL"; execute compliance_admin "$CB"
+spl-token -u "$LOCAL" --program-2022 balance --address "$CUSTODY_ATA" | grep -qx 2 || fail "custody balance"
+echo "   custody holds 2"
+
+echo "== unregister a wrongly registered mint through the admin multisig"
+WRONG=$(ts scripts/create-mint.ts --payer "$WORK/registrar.json" --uri https://example.com --name Wrong --symbol WRONG --isin X \
+  --mantle-token 0x00000000000000000000000000000000000000bb --initial-multiplier-1e18 1000000000000000000 | awk '/^mint: /{print $2}')
+ts scripts/unregister-mint.ts --mint "$WRONG" >"$WORK/p"; U=$(imp admin "unregister_mint" "$WORK/p"); approve admin "$U"; after_time_lock "$TL"; execute admin "$U"
+expect_fail "unregistered mint" "not registered" npx tsx scripts/unregister-mint.ts --mint "$WRONG"
+
+echo "== escape hatch: the admin multisig's vault, a member of the mint authority multisig, moves the mint authority"
+# The 1-of-2 Token-2022 multisig of the pool signer and the admin's vault that ccip-register.ts
+# creates (it needs a CCIP lookup table, absent locally, so it is set up with spl-token).
+ADMIN_VAULT=$(ts scripts/squads.ts status --multisig admin | awk '/^multisig /{print $NF}')
+POOL_SIGNER=$(ts -e "import('./scripts/lib/ccip.ts').then(async (c) => console.log((await c.ccipAccounts('$MINT')).poolSigner))" | tail -1)
+solana-keygen new --no-bip39-passphrase --silent -o "$WORK/token-multisig.json" >/dev/null
+spl-token -u "$LOCAL" --program-2022 create-multisig 1 "$POOL_SIGNER" "$ADMIN_VAULT" --address-keypair "$WORK/token-multisig.json" --fee-payer "$D" >/dev/null
+spl-token -u "$LOCAL" --program-2022 authorize "$MINT" mint "$(pk token-multisig)" --authority "$WORK/registrar.json" --fee-payer "$D" >/dev/null
+ts scripts/move-mint-authority.ts --mint "$MINT" --to "$(pk registrar)" >"$WORK/p"
+grep -E "^  1\. " "$WORK/p" | cut -c1-160
+MV=$(imp admin "move the mint authority" "$WORK/p"); approve admin "$MV"; after_time_lock "$TL"; execute admin "$MV"
+spl-token -u "$LOCAL" --program-2022 display "$MINT" | grep -q "Mint authority: $(pk registrar)" || fail "the mint authority did not move"
+echo "   moved by the admin's Squads proposal alone"
+
+echo "== program.ts upgrade through the upgrade multisig (a build 20,000 bytes larger: the program account is extended first)"
+expect_fail "upgrade by the old deployer key" "does not match" \
+  sol program deploy target/deploy/mstocks_core.so --program-id "$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)" --upgrade-authority "$D"
+python3 -I -c 'import sys; d = open(sys.argv[1], "rb").read(); open(sys.argv[2], "wb").write(d + bytes(20000))' target/deploy/mstocks_core.so "$WORK/larger.so"
+ts scripts/program.ts upgrade --so "$WORK/larger.so" >"$WORK/up"; grep -E "^IDL|^program account extended|^  [0-9]\. " "$WORK/up" | cut -c1-160
+grep -q "^program account extended" "$WORK/up" || { cat "$WORK/up"; fail "the program account was not extended"; }
+UP=$(imp upgrade_authority "upgrade" "$WORK/up")
+[ -n "$UP" ] || { cat "$WORK/up"; fail "upgrade proposal"; }
+approve upgrade_authority "$UP"; after_time_lock $((TL * 2)); execute upgrade_authority "$UP"
+ts scripts/program.ts verify --so "$WORK/larger.so" | tee "$WORK/verify" | grep -E "matches|DIFFERS|MISSING"
+grep -q "on-chain program matches" "$WORK/verify" || fail "program not upgraded to the larger build"
+grep -q "on-chain IDL matches" "$WORK/verify" || fail "IDL not updated by the upgrade"
+ts scripts/check-config.ts | grep -q "^PASS" || fail "check-config after upgrade"
+ts scripts/freeze.ts --operator "$WORK/kms.json" --mint "$MINT" --owner "$(pk user)" --thaw | grep -E "^thaw" | head -1
+echo PASS

@@ -1,0 +1,42 @@
+# Solana devnet ↔ Mantle Sepolia configuration of mstocks-core, read by the scripts when
+# NETWORK=testnet (test keys; the upgrade authority stays the deployer).
+#   NETWORK=testnet tsx scripts/check-config.ts
+
+[solana]
+rpc = "https://api.devnet.solana.com"     # RPC_URL overrides it (a provider URL with a key)
+roles_rpc = "https://api.devnet.solana.com"
+chain_selector = "16423721717087811551"   # Solana devnet
+
+[mantle]
+chain_id = 5003
+rpc = "https://rpc.sepolia.mantle.xyz"
+chain_selector = "8236463271206331221"
+router = "0xFd33fd627017fEf041445FC19a2B6521C9778f86"
+rmn = "0xcCB84Ec3F6AFdD2052134f74aaAc95Ae41A7B333"
+token_admin_registry = "0x0F1eE88A582f31d92510E300fc1330AA5a525D51"
+registry_module = "0xf76cE612250eeEb8889F49FBCB11f1c2705305F6"
+token_admin = "0x65CBA1B35C5E81E90a754e6291f0DC321bB97001"   # rehearsal TimelockController (60 s), standing in for multisig 1's
+pool_owner = "0xaD306c7C6dC31a510489Fc449Bd7f502d397df9b"    # rehearsal key standing in for multisig 1's Safe
+
+[program]
+id = "3jBxe42f83ruvVZsoCQdgMtGc6nSEGGpkia2Egm6tbwd"
+min_notice_seconds = 300
+max_horizon_seconds = 31536000
+
+[admins]
+upgrade_authority = "6XS768SMgF7iEt7ZX8iJBgu7mXHewc95aqAz6XAj1hu3"
+admin = "62hmcAVuA6M8dQj7zqG15vQyEiQbKCHz4yE4JBkaZRu"
+compliance_admin = "CHYQeS74Sb5j54CkZx76xQyGqHJqNgUGHRHq3bpdXJ9n"
+hook_authority = "DxdVvuhRfRUpyvtkGbyJ5nGR12Zxibwvte6Dj5bbE5vz"
+
+[roles]
+mint_registrar = ["6XS768SMgF7iEt7ZX8iJBgu7mXHewc95aqAz6XAj1hu3"]
+multiplier_scheduler = ["BduhSAGRfwePPv3j8zMtCrCa1FcSNkL793Hs66NgfmEL"]
+metadata_ops = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
+pauser = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
+unpauser = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm"]
+freezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "313TxhxGx1G92mni17ehDnw6pfX7k9ecu7rLWbc4uJqE"]
+unfreezer = ["6UXYYhJpM7uhjzdKzJYmBPyAbN9ZU9yS3Fpf3tZKbMbm", "313TxhxGx1G92mni17ehDnw6pfX7k9ecu7rLWbc4uJqE"]
+
+[ccip]
+solana_ccip_admin = "36Ss7VbkAzHBDVYU9s3QsG7U2xSQYQ5XfShMcrCV16DE"   # rehearsal Squads (3/6, 60 s time lock)

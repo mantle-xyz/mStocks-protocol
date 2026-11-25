@@ -1,0 +1,509 @@
+# mStocks Solana Core Program Design
+
+> Status: reviewed (decisions in §10), first version implemented · 2026-11-05 · branch `feat/solana-core`
+> Background and option analysis are in the Solana research report; this document covers the implementation only.
+
+## 1. Scope
+
+**In scope:**
+- `mstocks-core`: the only in-house program on Solana (Anchor).
+- Issuance and setup scripts: create a mint with extensions, hook it up to Core, register the CCIP pool.
+- The Mantle side of CCIP for each token: deploy and configure the LockRelease pool, and produce the multisig transactions that register it (§6.2).
+- Tests: LiteSVM, running against the mainnet Token-2022 build.
+- Solana support in the compliance backend `mstocks-aml`: watch transfers, check the blacklist, call Core to freeze / thaw (§11).
+
+**Out of scope:** changes to the Mantle contracts (the CCIP pool is a standard Chainlink contract and ScaledToken needs no change), scheduling and alerting for multiplier reconciliation, frontend.
+
+**Settled assumptions:**
+- 9 decimals; Mantle is the only issuing chain; CCIP uses lock / mint: the LockRelease pool on Mantle locks / releases, the BurnMint pool on Solana mints / burns. Tokens on Solana are minted only by the CCIP BurnMint pool, so the Solana supply equals the amount locked in the Mantle pool (÷1e9). The pool mints through a 1-of-2 Token-2022 multisig whose other member is the admin's Squads, there to replace the pool without Chainlink; it could mint too, as Mantle's admin could grant itself `ISSUER_ROLE` (§6, §9).
+- Compliance is "screen after use": the blacklist lives in the backend, which calls Core to freeze accounts.
+- No Transfer Hook; the mint carries a dormant Hook extension whose authority is held directly by the Squads multisig.
+- Multiplier option B: each chain schedules its own; CCIP only moves tokens.
+- Permanent Delegate enabled (delegate = Authority PDA), for clawback.
+
+---
+
+## 2. Overall structure
+
+```
+          Squads multisig (Admin)     Backend / ops (one key per role)
+                 │                            │
+                 ▼                            ▼
+          ┌────────────────── mstocks-core ──────────────────┐
+          │ Config · roles · MintState                        │
+          │ Authority PDA (holds the token authorities, signs  │
+          │ the CPIs)                                         │
+          └───────────────────────┬──────────────────────────┘
+                                  ▼ CPI
+                          Token-2022 mint (one per stock)
+                                  ▲
+              CCIP BurnMint pool (mints through the mint authority multisig)
+```
+
+**Core principle:** every token authority (multiplier, pause, freeze, metadata, clawback) is given to Core's Authority PDA. No private key can act on the token directly, only through Core; Core checks roles and rules first, then CPIs into Token-2022.
+
+---
+
+## 3. Account model
+
+| Account | PDA seeds | Fields | Notes |
+| --- | --- | --- | --- |
+| `Config` | `["config"]` | `admin`, `pending_admin`, `compliance_admin`, `pending_compliance_admin`, `hook_authority` (Squads, checked by `register_mint`), `min_notice` (300 s), `max_horizon` (365 days), `bump` | Singleton. `hook_authority`, `min_notice` and `max_horizon` are set at `initialize` and have no setter (on Mantle the notice period is fixed per implementation too) |
+| `RoleEntry` | `["role", role_id, member]` | `role`, `member`, `bump` | The account existing means the member holds the role; mirrors Mantle's `AccessControl`, several members per role |
+| `MintState` | `["mint", mint]` | `mint`, `mantle_token` (20 bytes), `bump` | Only registered stocks can be operated by Core |
+| `MantleTokenIndex` | `["mantle_token", mantle_token]` | `mint`, `bump` | One per Mantle token: a token can be registered for one mint only |
+| Authority PDA | `["authority"]` | No data | Holds the Token-2022 authorities and signs the CPIs |
+
+**Why one global Authority PDA instead of one per mint:** every operation goes through the same role checks, so splitting by mint does not reduce risk, it only complicates setup. Isolation between mints comes from `MintState` registration and account checks.
+
+---
+
+## 4. Roles
+
+Same separation of duties, admins and time locks as on Mantle (decided 2026-11-16). The Mantle column is the production configuration in `config.toml`; Mantle's admin addresses are OpenZeppelin `TimelockController`s whose proposers are 3/6 multisigs. Each Solana multisig mirrors one Mantle multisig, with the same signer group, threshold and time lock (Squads v4 time lock).
+
+| Solana role | Can do | Solana holder | Mantle equivalent | Mantle holder |
+| --- | --- | --- | --- | --- |
+| Program upgrade authority | Upgrade Core; run `initialize` once | Squads mirroring multisig 2: 3/6 + 24 h time lock | Beacon / ProxyAdmin owner | Multisig 2, 3/6 + 24 h timelock |
+| Admin (`Config.admin`) | Grant / revoke `MINT_REGISTRAR`, `MULTIPLIER_SCHEDULER`, `METADATA_OPS`; unregister an empty mint registered in error; switch the default account state; **no operational actions** | Squads mirroring multisig 1: 3/6 + 12 h time lock | `DEFAULT_ADMIN_ROLE` of the factory and ScaledToken | Multisig 1, 3/6 + 12 h timelock |
+| Compliance admin (`Config.compliance_admin`) | Grant / revoke `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`; **clawback** (signed directly, no role); otherwise no operational actions | Squads mirroring multisig 4: 3/6 + 12 h time lock | `DEFAULT_ADMIN_ROLE` of the compliance and pause registries | Multisig 4, 3/6 + 12 h timelock |
+| `MINT_REGISTRAR` | Register new mints | RWA-Bycustody key (as EOA1) | Factory `OPS_ROLE` (`createToken`) | EOA1 (RWA-Bycustody) |
+| `MULTIPLIER_SCHEDULER` | Schedule the multiplier | RWA-Bycustody key (as EOA3) | `MULTIPLIER_SCHEDULER_ROLE` | EOA3 (RWA-Bycustody) |
+| `METADATA_OPS` | Update name, symbol, ISIN | RWA-Bycustody key (as EOA2) | ScaledToken `OPS_ROLE` | EOA2 (RWA-Bycustody) |
+| `PAUSER` | Pause | RWA-Bycustody key (as EOA6) | `PAUSE_ROLE` | EOA6 (RWA-Bycustody) |
+| `UNPAUSER` | Resume | Squads mirroring multisig 5, no time lock (resuming must be fast) | `UNPAUSE_ROLE` | Multisig 5, no timelock |
+| `FREEZER` | Freeze accounts (blacklist) | Mantle's compliance backend KMS (as EOA5) | `ComplianceRegistry` `OPS_ROLE` (`sanctionUsers`) | EOA5 (Mantle) |
+| `UNFREEZER` | Thaw accounts (automatically after removal from the blacklist) | Same key as `FREEZER` | `ComplianceRegistry` `OPS_ROLE` (`unsanctionUsers`) | EOA5 (Mantle) |
+| Transfer Hook authority (Token-2022, not Core) | Attach / remove a program that checks every transfer | The admin's Squads (multisig 1's group, 12 h) | ScaledToken admin's `updateCompliance` / `updatePauseManager` | Multisig 1, 3/6 + 12 h timelock |
+| CCIP token admin, per mint (router's token admin registry) | Point the mint at a different pool | The admin's Squads (`ccip-handoff.ts`) | CCIP token admin (`TokenAdminRegistry`) | The token's `DEFAULT_ADMIN_ROLE`: multisig 1 (§6.2) |
+| CCIP pool owner (BurnMint pool) | Remote chains and pools, rate limits | The admin's Squads (`ccip-handoff.ts`) | LockRelease pool owner | Multisig 1 (§6.2) |
+| Mint authority (Token-2022 multisig, 1 of 2) | Mint: the CCIP pool signer in every inbound transfer; the admin's vault only to move the authority to a replacement pool (`move-mint-authority.ts`) | The CCIP pool signer and the admin's Squads vault (§6) | `ISSUER_ROLE`, which multisig 1 can grant | TokenIssuer (multisig 3); the LockRelease pool never mints |
+| — | Rate limits only | Pool owner | Pool `rateLimitAdmin` (optional) | Operations multisig, or unset |
+| — | — | — | Pool `rebalancer` (can withdraw every locked token) | **Unset** |
+
+Mantle's multisig 3 (TokenIssuer admin) has no Solana counterpart: minting on Solana belongs to the CCIP pool, through the mint authority multisig. Clawback has no Mantle counterpart either; it moves a holder's tokens without their signature, so it is signed by the compliance admin itself (3/6 + 12 h) rather than delegated to an operations role. The `Clawback` role value is retired: it cannot be granted (`RoleRetired`) and stays in the enum only so later roles keep their seeds.
+
+**Guards carried over:**
+- Each admin grants and revokes only its own roles (`NotRoleAdmin`).
+- No self-grant: neither admin can be given any role.
+- Operational instructions reject either admin's signature, even if it still holds a role from before.
+- Admin changes take two steps, separately for each admin: `propose_admin` → `accept_admin`, `propose_compliance_admin` → `accept_compliance_admin`; the two admins must differ, checked at both steps.
+- Role members can renounce their own role; the admins cannot.
+
+---
+
+## 5. Instructions
+
+### 5.1 Administration
+
+| Instruction | Signer | Checks | Action |
+| --- | --- | --- | --- |
+| `initialize(admin, compliance_admin, hook_authority)` | Program upgrade authority | Once only; the signer must be the program's upgrade authority, so nobody can initialize first after deployment | Create `Config` |
+| `propose_admin(new)` / `accept_admin` | Current admin / new admin | Two-step confirmation; `new` ≠ compliance admin, at proposal and at acceptance | Change the admin |
+| `propose_compliance_admin(new)` / `accept_compliance_admin` | Current compliance admin / new one | Two-step confirmation; `new` ≠ admin, at proposal and at acceptance | Change the compliance admin |
+| `grant_role(role, member)` | The role's admin (compliance admin for `PAUSER`, `UNPAUSER`, `FREEZER`, `UNFREEZER`; admin for the others); the retired `Clawback` cannot be granted | `member` is neither admin | Create `RoleEntry` |
+| `revoke_role(role, member)` | The role's admin | — | Close `RoleEntry` |
+| `renounce_role(role)` | The member | — | Close their own `RoleEntry` |
+| `register_mint(mantle_token)` | `MINT_REGISTRAR` | See below; `mantle_token` non-zero and not yet registered for another mint | Create `MintState` and `MantleTokenIndex` |
+| `unregister_mint` | Admin | The mint's supply is 0, and its mint authority is a plain key: not a program address (the pool signer) nor a Token-2022 / SPL Token multisig (the pool's mint authority multisig). The mint authority account is passed (not signing) so Core can tell which it is (`MintAuthorityNotAKey`); a mint the CCIP pool can mint into stays registered | Close `MintState` and `MantleTokenIndex`, so a registration made in error (wrong mint or wrong Mantle token) can be redone. Once tokens exist Core must keep operating the mint, so it stays registered |
+| `set_default_account_state(frozen)` | Admin | Mint registered | Switch the compliance policy: new accounts start frozen (screen before use) or usable (screen after use, current). A policy change, so it is the Admin's (Squads) call, like the admin-only `updateCompliance` on Mantle |
+
+Mint checks in `register_mint` (so a token is under control from launch):
+- Owned by the Token-2022 program, 9 decimals;
+- **Only these extensions**: Scaled UI Amount, Pausable, Metadata Pointer, Token Metadata, Default Account State, Transfer Hook, Permanent Delegate. Any other extension (e.g. MintCloseAuthority, transfer fees, confidential transfers) brings an authority Core does not control and is rejected;
+- The authorities of Scaled UI Amount, Pausable, Metadata Pointer and Token Metadata are the Authority PDA (a Metadata Pointer held by someone else could be pointed at other metadata);
+- The freeze authority is the Authority PDA;
+- The Transfer Hook extension is present **with no program**, and its authority is the Squads address recorded in the config;
+- The Default Account State extension is present with state "initialized";
+- The Permanent Delegate extension is present and the delegate is the Authority PDA;
+- The mint authority is **not** the Authority PDA (minting belongs to the CCIP pool).
+
+### 5.2 Multiplier
+
+**`schedule_multiplier(multiplier_1e18: u128, effective_at: i64)`** (option B)
+
+| Item | Detail |
+| --- | --- |
+| Signer | `MULTIPLIER_SCHEDULER` (not the Admin) |
+| Checks | `1e9 ≤ multiplier_1e18 ≤ 1e27`; at most 15 significant decimal digits; `now + min_notice ≤ effective_at ≤ now + max_horizon` |
+| Conversion | `multiplier_f64 = multiplier_1e18 / 1e18`. Token-2022 stores an f64, which holds 15 significant digits exactly; a finer value would be rounded on Solana but kept on Mantle, so Core rejects it (`MultiplierTooPrecise`) and operations send both chains a value within that precision |
+| Action | CPI `UpdateMultiplier(multiplier_f64, effective_at)`, signed by the Authority PDA |
+| Event | `MultiplierScheduled { mint, multiplier_1e18, effective_at }` |
+
+The parameters use the same units as Mantle's `setUIMultiplier` (1e18 fixed point + Unix seconds), so both chains get the same values.
+
+Consistency comes from the operating process and reconciliation: ops send the same parameters on Mantle and Solana, and `check-multiplier.ts` compares the two chains (one-shot; scheduled runs and alerting belong to the backend and are out of scope). Option A (sync via CCIP messages) is not implemented.
+
+**Amount units:** balances, transfer instructions and CCIP transfers all use the raw amount; the displayed amount = raw amount × multiplier. With the same multiplier on both chains, the displayed amount is the same before and after a transfer. Wallets and ops tools must be clear about which one an input means (the `spl-token` CLI uses raw amounts).
+
+### 5.3 Pause
+
+| Instruction | Signer | Action |
+| --- | --- | --- |
+| `pause(mint)` | `PAUSER` | CPI Pausable `pause` |
+| `resume(mint)` | `UNPAUSER` | CPI Pausable `resume` |
+| `pause_all` | `PAUSER` | Pause every registered mint passed as remaining accounts; up to about 12 mints per transaction (64 bytes each), the script sends batches of 8 |
+
+**Effect of a pause on CCIP:** while paused, a user's `ccip_send` fails, and messages arriving from Mantle fail to execute too (the pool's MintTo is rejected and the whole execution rolls back, so no tokens are lost); the DON does not retry them. After resuming, ops must execute those messages manually with `ccip-manual-exec.ts`, one by one: anyone can do so 20 minutes after the commit, and a repeated execution of the same message is skipped by the OffRamp.
+
+### 5.4 Compliance
+
+| Instruction | Signer | Action |
+| --- | --- | --- |
+| `freeze(mint, token_accounts…)` | `FREEZER` | Batch CPI `FreezeAccount` on every given token account of the registered mint. Skipped without failing the batch: accounts already frozen (so the backend can resend), and accounts that are not, or no longer, token accounts of this mint (a wallet can close an empty account or re-create it for another mint between the backend's lookup and the freeze; that must not leave its funded accounts usable). Up to about 23 accounts per transaction; the script sends batches of 20 (measured 92k CU, 1132 bytes) |
+| `thaw(mint, token_accounts…)` | `UNFREEZER` | Batch CPI `ThawAccount`; same skipping rules as `freeze` |
+| `clawback(source, destination, amount)` | Compliance admin | In one instruction: thaw source → `transfer_checked` to destination as Permanent Delegate → freeze source again (emits `Frozen` too when the source was not frozen before) |
+
+`clawback` thaws first because a frozen account cannot send even when the Permanent Delegate initiates the transfer (tested: a direct transfer fails with `AccountFrozen`; "thaw → transfer → freeze" in one transaction succeeds). The destination should be a custody account. Three consequences of how Token-2022 works: `clawback` fails while the mint is paused (a pause rejects every transfer, including the permanent delegate's; freeze and thaw still work, so freeze first and claw back after resuming); it fails if the Transfer Hook is ever given a program (the CPI passes no hook accounts; Core would need an upgrade first); and with `amount = 0` it succeeds and leaves the source frozen.
+
+### 5.5 Metadata
+
+| Instruction | Signer | Action |
+| --- | --- | --- |
+| `update_metadata(field, value)` | `METADATA_OPS` | CPI Token Metadata `update_field` (name / symbol / ISIN, etc.); when a value gets longer, the client tops up the mint's rent in the same transaction first |
+
+### 5.6 Events
+
+Every operational instruction emits an event (`RoleGranted`, `MultiplierScheduled`, `Paused`, `Resumed`, `Frozen`, `Thawed`, `ClawedBack`, `MetadataUpdated`, etc.) for backend indexing and audit.
+
+---
+
+## 6. Issuance and setup (scripts)
+
+Run once per stock, in this order:
+
+```
+1. Create the mint account and initialize its extensions:
+     Scaled UI Amount (authority = Authority PDA, initial multiplier = Mantle's current value)
+     Pausable (authority = Authority PDA)
+     Metadata Pointer (points to itself)
+     Default Account State (initialized)
+     Transfer Hook (authority = Squads, program = none)
+     Permanent Delegate (= Authority PDA)
+2. InitializeMint2: 9 decimals; mint authority = deployer (temporary); freeze authority = Authority PDA
+3. Initialize Token Metadata (update authority = deployer at first) → write ISIN and other fields
+     → hand the update authority to the Authority PDA
+4. Core.register_mint(mantle_token), signed by the MINT_REGISTRAR (operations KMS)
+5. Mantle: deploy the LockRelease pool, point it at the Solana pool and mint, set rate limits,
+     propose the pool owner (multisig)                                                 (§6.2)
+6. Solana CCIP: create the mint authority multisig (1 of 2: the pool signer PDA and the admin's
+     vault) → self-register with the deployer (current mint authority) → initialize the BurnMint
+     pool → its lookup table, listing the multisig → configure the Mantle remote chain and rate limits
+7. Multisigs: on Mantle the token admin's timelock registers the token's CCIP admin and sets the
+     pool, and the pool owner accepts; on Solana the CCIP token admin and the pool owner move to Squads
+8. Hand the mint authority to the mint authority multisig
+9. Verify both sides
+```
+
+**Why step 6 must come before step 8:** CCIP self-registration needs the mint authority's signature, which neither a PDA nor a token multisig can give.
+
+**Why the mint authority is a 1-of-2 multisig, not the pool signer (decided 2026-11-25):** the BurnMint pool accepts as mint authority its signer PDA or a Token-2022 multisig in which the signer alone meets the threshold. With the signer alone, only the pool program's upgrade authority — Chainlink — can move the mint authority (`transfer_mint_authority_to_multisig`), so a pool set up wrong, or one Chainlink retires, would leave the mint without a minter for good. In the multisig the other member is the admin's Squads vault (3/6, 12 h), which can move the mint authority by itself (`move-mint-authority.ts`, a Squads proposal); CCIP mints exactly as before. Initializing a pool for the mint needs the mint authority's signature, so replacing the pool takes three steps: the vault moves the mint authority to itself, sets up the new pool from the vault (pool, its own mint authority multisig, lookup table, `set_pool` as token admin; not scripted yet), and moves the authority to the new multisig. The pool looks the multisig up among the token's lookup table accounts (the OffRamp passes the whole table and checks it against the registry), so `ccip-register.ts` lists it in the table before freezing it, and `handoff-mint-authority.ts` refuses a table without it. The multisig's address is derived with `createAccountWithSeed` from the registering key and the mint, so a re-run finds it; lamports sent to that address beforehand (anyone can) make the script allocate the account instead of creating it, so they cannot block the registration. The price is that the admin's vault can also mint by itself; §9.
+
+**Transactions:** with the Mantle token already in place, the operators send four Solana transactions and one Mantle command: steps 1–4 are one transaction (`create-mint.ts`, all or nothing, about 1,130 of Solana's 1,232 bytes), step 5 is the Mantle deployer's command, and steps 6, 8 and the Solana proposals of step 7 are three transactions (`ccip-register.ts --handoff-to --handoff-mint-authority`: the mint authority multisig, 434 bytes; then 1,099 and about 880 bytes), followed by the Squads proposal holding the multisig's acceptances. The multisigs then sign: on Mantle twice (schedule, which also accepts the pool, and execute after the delay), on Solana one proposal. Steps 6–8 cannot be a single transaction: together they are well over the limit even with a lookup table.
+
+**Creating a mint by contract call (backend integration):** on mainnet the mint is created by a backend, not by the runbook. It is one transaction, signed by the MintRegistrar key (fee payer and temporary mint authority) and the new mint's keypair, with these instructions in order. The reference implementation is `scripts/lib/mint.ts` (used by `create-mint.ts`): it stands alone (`@solana/kit` and the System / Token-2022 clients, no config, IDL file or RPC) and takes any kit `TransactionSigner`, so a KMS-backed key can sign; `create-mint.ts --dry-run` prints every instruction byte for byte for given inputs, as test vectors for an implementation in another language:
+
+| # | Program | Instruction | Arguments |
+| --- | --- | --- | --- |
+| 1 | System | `CreateAccount` | the new mint; space = a mint with the 6 fixed-size extensions of rows 2–7; lamports = rent for the final size, metadata included; owner = Token-2022 |
+| 2 | Token-2022 | `InitializeScaledUiAmountMint` | authority = Core authority PDA; multiplier = Mantle `uiMultiplier()` / 1e18 |
+| 3 | Token-2022 | `InitializePausableConfig` | authority = Core authority PDA |
+| 4 | Token-2022 | `InitializeMetadataPointer` | authority = Core authority PDA; metadata address = the mint |
+| 5 | Token-2022 | `InitializeDefaultAccountState` | `Initialized` |
+| 6 | Token-2022 | `InitializeTransferHook` | authority = `Config.hook_authority`; program = none |
+| 7 | Token-2022 | `InitializePermanentDelegate` | delegate = Core authority PDA |
+| 8 | Token-2022 | `InitializeMint2` | 9 decimals; mint authority = the fee payer; freeze authority = Core authority PDA |
+| 9 | Token-2022 (token metadata) | `Initialize` | name, symbol, uri (Mantle `name()`, `symbol()`); update authority = the fee payer |
+| 10 | Token-2022 (token metadata) | `UpdateField` | `isin` = Mantle `assetCode()` |
+| 11 | Token-2022 (token metadata) | `UpdateAuthority` | new update authority = Core authority PDA |
+| 12 | mstocks-core | `register_mint(mantle_token: [u8; 20])` | accounts: payer (writable, signer), registrar (signer, holds MintRegistrar), config `["config"]`, role_entry `["role", 7, registrar]`, mint, mint_state `["mint", mint]` (writable), mantle_index `["mantle_token", mantle_token]` (writable), authority `["authority"]`, system program |
+
+PDAs are of the Core program. `register_mint` checks the whole configuration (extension set, every authority, decimals, hook authority, metadata update authority, zero supply) and rejects anything else, so a mint built differently cannot be registered. `register_mint` does not check the initial multiplier; `lib/mint.ts` applies `schedule_multiplier`'s rules to it ([1e9, 1e27], at most 15 significant digits) and refuses the rest. If Mantle has a pending multiplier, the backend schedules the same one with `schedule_multiplier` (MultiplierScheduler) right after. The fee payer stays mint authority until the CCIP registration, which it signs (runbook Step 7, `ccip-register.ts --handoff-mint-authority`); the mint authority then belongs to the 1-of-2 multisig of the CCIP pool signer and the admin's vault.
+
+**Initial multiplier:** a new mint's initial value must equal Mantle's current `uiMultiplier()`. If Mantle has a pending value, schedule it on Solana right after launch.
+
+**Why the deployer writes the metadata first:** extra fields such as the ISIN can only be written with `update_field`, which needs the update authority's signature. Writing them with the deployer before handing the authority to Core avoids a separate `METADATA_OPS` step at launch.
+
+**Scripts (`solana/scripts/`):**
+
+| Step | Script |
+| --- | --- |
+| Deploy and initialize Core (once) | `program.ts deploy` (deployer as upgrade authority, IDL upload, byte and IDL comparison) → `init-core.ts` (signed by the upgrade authority) → `program.ts handoff` (upgrade authority → the upgrade multisig's vault, Squads, 24 h time lock); later upgrades: `program.ts upgrade` (Squads proposal) |
+| Grant roles | `sync-roles.ts`: the config's role holders, one proposal per admin (split in order when too large for one transaction); single changes with `grant-role.ts` / `revoke-role.ts` |
+| Steps 1–4 | `create-mint.ts` (one transaction; name, symbol, ISIN and initial multiplier read from the Mantle token) |
+| Schedule a pending multiplier | `schedule-multiplier.ts` |
+| Compare the multiplier on both chains (option B) | `check-multiplier.ts` |
+| Step 6, CCIP registration | `ccip-register.ts`, three transactions: (0) the mint authority multisig (1 of 2: the pool signer and `--mint-authority-admin`, by default the config's admin); (1) token admin registration (propose + accept), BurnMint pool initialization, pool token account, address lookup table listing the multisig; (2) remote chain config (token, pool, decimals), rate limits, `set_pool`, freezing the lookup table, and with `--handoff-to` / `--handoff-mint-authority` the proposals to the admin's Squads (step 7) and the mint authority handoff (step 8); then the Squads proposal with the acceptances. Steps already done are skipped |
+| Step 5, Mantle pool | `ccip-mantle-setup.sh deploy` (deployer key) |
+| Step 7, multisigs | Mantle: `ccip-mantle-setup.sh multisig` writes two Safe Transaction Builder files (timelock schedule plus the pool owner's acceptance when the Safe is a timelock proposer; execute after the delay). Solana: the admin's Squads approves and executes the proposal from step 6 (`ccip-handoff.ts` does the handoff on its own and confirms it) |
+| Step 8 | Part of step 6 (`--handoff-mint-authority`); on its own `handoff-mint-authority.ts --yes` (checks the multisig and that the frozen lookup table lists it) |
+| Step 9 | `ccip-mantle-setup.sh verify` (exits 1 on a problem), `show-mint.ts` |
+| Check the result | `check-stock.ts` (every check of the stock, PASS / FAIL; the mint authority must be the 1-of-2 multisig of the pool signer and the config's admin, listed in the lookup table) |
+| Replace the pool (set up wrong, or retired by Chainlink) | `move-mint-authority.ts`, a Squads proposal of the admin, the multisig's other member: first `--to` the admin's vault (the new pool's initialization needs the mint authority), and after the vault set up the new pool, `--to` its multisig. Prints whether the target is a token multisig and its members |
+
+**CCIP testnet (Solana devnet ↔ Mantle Sepolia, open since 2026-11):** on both chains the OnRamp / OffRamp addresses are shared by all lanes.
+
+| | Solana devnet | Mantle Sepolia |
+| --- | --- | --- |
+| Chain selector | `16423721717087811551` | `8236463271206331221` |
+| Router | `Ccip842gzYHhvdDkSyi2YVCoAWPbYJoApMFzSxQroE9C` | `0xFd33fd627017fEf041445FC19a2B6521C9778f86` |
+| OnRamp | The Router itself | `0xCAC5826F878b3BfEE32404619C762b33ae199c1b` |
+| OffRamp | `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm` | `0x4d8193f845Eb3540e0BdA9451296600362E22B15` |
+| Token pool | BurnMint program `41FGToCmdaWa1dgZLKFAjvmx6e6AjVTX7SVRibvsMGVB` (same as mainnet) | LockReleaseTokenPool per token, deployed by `ccip-mantle-setup.sh` |
+| Registration | Token admin registry inside the Router | Token Admin Registry `0x0F1eE88A582f31d92510E300fc1330AA5a525D51`, Registry Module `0xf76cE612250eeEb8889F49FBCB11f1c2705305F6` |
+| Other | Fee Quoter `FeeQPGkKDeRV1MgoYfMH6L8o3KeuYjwUZrgn4LRKfjHi`, RMN `RmnXLft1mSEwDgMKu2okYuHkiazxntFFcZFrrcXxYg7` | RMN `0xcCB84Ec3F6AFdD2052134f74aaAc95Ae41A7B333` |
+| Fee tokens | LINK, WSOL | LINK, WMNT |
+
+**Per-token gas on Solana → Mantle (resolved):** our mints have no per-token config on the Solana Fee Quoter, so they use the lane default `defaultTokenDestGasOverhead`: the gas the pool's `releaseOrMint` on Mantle may use. A ScaledToken transfer makes two external calls (pause and compliance checks); when the receiver holds the token for the first time, its balance is written from zero, which did not fit the former default of 90,000, so the execution failed and the DON did not retry it. Chainlink raised the default to 150,000 on mainnet and testnet; the Mantle → Solana default is 150,000 as well (compute units on Solana). Both were checked on chain on 2026-11-23. A devnet transfer to a receiver that had never held the token was then executed by the DON on the first attempt, using 137,977 gas. The per-token gas is fixed in the message when it is sent, so messages sent before the change still carry 90,000. The CCIP retry service (§12) still re-executes such failures automatically; `ccip-manual-exec-evm.sh` with `TOKEN_GAS` above 150000 (e.g. 225000) is the manual fallback.
+
+**Network configuration:** `config.mainnet.toml` and `config.testnet.toml` hold everything that is not a secret, with the same keys: `[solana]` and `[mantle]` (each chain's endpoints, CCIP chain selector and, for Mantle, chain id, Router, RMN, TokenAdminRegistry, RegistryModuleOwnerCustom, the expected token admin and the pool owner), `[program]`, `[admins]`, `[roles]` and `[ccip]`. `NETWORK=mainnet|testnet` selects one for the TypeScript scripts and the Mantle bash scripts alike, so no network-specific address is written in a script, and the operator's environment is `NETWORK`, an optional `RPC_URL` with the provider key, and, for the deployment steps (`program.ts`, `init-core.ts`), `DEPLOYER`, the deployer's key (a keypair file or the 64-byte private key, base58 or JSON). The config is reviewed like code; `check-config.ts` and `sync-roles.ts` compare it with the chain, and `ccip-mantle-setup.sh` checks each token's admin against `[mantle].token_admin`.
+
+**Admin actions and Squads:** the multisig members sign with Ledgers in the Squads app, so the scripts never sign for a multisig. Scripts that need a multisig's signature (`grant-role`, `revoke-role`, `sync-roles`, `unregister-mint`, `set-default-account-state`, `clawback`, `pause --resume` for the Unpauser, the CCIP acceptances in `ccip-register --handoff-to` / `ccip-handoff`, `program.ts upgrade`) take a keypair file, which signs and sends (devnet / local), or a Squads v4 multisig account address (mainnet). For a multisig the signer is its vault (index 0) and the script prints the action twice: as a readable list of instructions (Core instructions by name with their arguments and named accounts, so the members can check what they approve) and as a base58 transaction message — legacy, the vault as payer and only signer; the Squads app's "Import base58 encoded tx" takes a message, not a transaction (checked against Squads' open-source client, which decodes the input with `Message.from`) — which a member imports into the Squads app (TX Builder → Create transaction → Add instruction → Import base58 encoded tx) to create the proposal; the members approve it there and execute it after the time lock. In that transaction the vault is also the payer of any new account, because a vault transaction can only be signed by the vault, so each vault keeps some SOL for rent. Every address stored as a signer (`init-core` admins and hook authority, `create-mint --hook-authority`, a role `--member`, the `check-config` entries) is converted from a multisig account to its vault: the multisig account cannot sign, so storing it would brick that authority. Program upgrades: `program.ts upgrade` writes a buffer, hands it to the upgrade multisig's vault and prints the BPF loader `Upgrade` the same way; when the IDL changed, the same message also replaces the IDL (below). For test multisigs whose members are key files, `squads.ts propose --base58` imports the printed message as the app does (same decoding) and `approve` / `execute` follow; `local-squads-e2e.sh` runs every multisig action this way against the mainnet Squads v4 program on a local validator.
+
+**IDL on chain:** the Core IDL is published where Anchor 1.x keeps it — the program's canonical account in Solana's Program Metadata program (`ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S`, seed `idl`; JSON, UTF-8, zlib), which explorers, `anchor idl fetch` and the Squads app use to decode Core instructions. Only the program's upgrade authority can write it. `program.ts deploy` uploads it while the deployer is still the upgrade authority; afterwards the deployer writes a new IDL into a buffer handed to the upgrade multisig's vault and tops up the account's rent, and the vault's instructions (copy from the buffer, close it, trim when smaller) go into the same Squads transaction as the program upgrade, so program and IDL change together. Handing the buffer to the vault matters: Program Metadata does not check whose buffer it copies, so only a buffer the vault alone can write keeps the approved content fixed until execution. With no IDL on chain the vault creates it the same way (allocate the canonical account the deployer funded, copy the buffer, initialize), and an upload interrupted before initialize is closed and redone, so neither blocks an upgrade. `upgrade` and `idl` plan every transaction and check that the Squads message fits before the deployer spends anything. `program.ts verify` compares both with the build. `lib/idl.ts` builds the Program Metadata instructions itself (encodings from the program's client, `@solana-program/program-metadata` 0.5.1), so no package is fetched at deployment time.
+
+### 6.1 Operations scripts
+
+Day-to-day operations after launch; backend services can follow how they call Core:
+
+| Operation | Script | Notes |
+| --- | --- | --- |
+| Pause / resume | `pause.ts` (`--resume`) | `PAUSER` / `UNPAUSER` |
+| Global emergency pause | `pause-all.ts` (`--dry-run`) | Finds every registered mint on chain and calls `pause_all` in batches of 8; pass `--mints` explicitly when the RPC does not support `getProgramAccounts` |
+| Execute an inbound CCIP message manually | `ccip-manual-exec.ts` | Takes the failed execution transaction (linked from the message page in the CCIP Explorer), reuses its execution report and accounts, and calls the OffRamp's `manually_execute` instead; anyone can run it, the payer only pays the fee |
+| Execute an outbound CCIP message on Mantle manually | `ccip-manual-exec-evm.sh` | For a Solana → Mantle message that failed on Mantle (token paused, receiver sanctioned, rate limit, out of gas): reuses the failed transaction's execution report and calls the OffRamp's `manuallyExecute`; a failed message can be executed right away, and `TOKEN_GAS` raises the gas for each token |
+| Blacklist / unblacklist | `freeze.ts` (`--thaw`) | `--owner <wallet>` finds all of the wallet's token accounts for this mint over RPC (including non-ATAs) and sends batches of 20, the same flow the backend uses |
+| Clawback | `clawback.ts` | To a custody account; the source account stays frozen |
+| Update metadata | `update-metadata.ts` | Tops up the mint's rent when a field gets longer, then calls Core |
+| Supply reconciliation | `check-supply.ts` | For each mint: Solana supply (scaled to Mantle's 18 decimals) ≤ balance of its Mantle LockRelease pool (token from Core's registration, pool from the Mantle TokenAdminRegistry). It always holds, because Mantle locks before Solana mints and Solana burns before Mantle releases; the difference is tokens in flight to Solana plus tokens burned by holders on Solana. Exits with 1 if Solana holds more than is locked, so a scheduled job can alert |
+| Multiplier reconciliation | `check-multiplier.ts` | Option B reconciliation: reads the Mantle token address from Core's registration and compares the current and pending values (value + effective time) on both chains at the same moment; exits with 1 on a mismatch so a scheduled job can alert; a mismatch within 60 seconds of the effective time only warns, since the two chains' clocks can differ by a few seconds |
+| Inspect an account | `show-account.ts` | Balance and freeze state |
+| Test minting | `dev-mint-to.ts` | Local / devnet only, before the mint authority is handed off |
+
+### 6.2 CCIP on the Mantle side
+
+Mantle is the issuing chain, so each token gets a **LockReleaseTokenPool**: sending to Solana locks the token in the pool, receiving from Solana releases it. The pool only calls `transfer`, so ScaledToken needs no change and no new role; `ISSUER_ROLE` / `BURN_ROLE` are never granted to it. The pool is pinned to `@chainlink/contracts-ccip` 1.6.4 (the version mantle-cross uses for its pools) and compiled with the mStocks contracts' settings (solc 0.8.24, cancun, via-IR, 200 runs).
+
+**What the token's code implies:**
+- `ScaledToken._update` checks the pause state and the sanctions of `from`, `to` and, for a third-party `transferFrom`, the caller. Sending to Solana is a `transferFrom` by the CCIP Router into the pool, so **the Router and the pool must never be sanctioned**. A sanctioned receiver makes the release fail until it is unsanctioned; a paused token blocks both directions (tested on testnet).
+- ScaledToken has neither `owner()` nor `getCCIPAdmin()`. The only way to become its CCIP token admin is `RegistryModuleOwnerCustom.registerAccessControlDefaultAdmin(token)`, called by the holder of the token's `DEFAULT_ADMIN_ROLE` — on mainnet multisig 1's 12 h timelock. It then calls `acceptAdminRole` and `setPool`; the script puts the three calls in one timelock batch. The admin can later move the role with `transferAdminRole`.
+
+**Pool permissions:**
+
+| Permission | Can do | Holder |
+| --- | --- | --- |
+| Owner | Add / remove remote chains and pools (`applyChainUpdates`), rate limits, set the other admins. A wrong remote pool would let another chain release tokens locked on Mantle | Multisig; proposed by the deployer, accepted by the multisig (two-step ownership) |
+| `rateLimitAdmin` | Rate limits only | Optional, an operations multisig for fast reaction |
+| `rebalancer` | `withdrawLiquidity` can take every locked token | **Never set**; the issuing chain needs no external liquidity. `verify` fails if it is set |
+
+**Steps (`ccip-mantle-setup.sh`, `NETWORK=mainnet` by default):**
+1. `deploy` (deployer key): deploys the pool, `applyChainUpdates` for Solana (remote pool = the Solana pool config PDA `["ccip_tokenpool_config", mint]`, remote token = the mint, both as 32 bytes), rate limits both ways in 18-decimal units, optional `setRateLimitAdmin`, and `transferOwnership(<multisig>)`. A run that stops after the pool is deployed continues with `--pool <pool>`, which sends only the steps not yet done (without it a rerun would deploy a second pool).
+2. `multisig`: writes Safe Transaction Builder JSON. For a timelock it wraps the calls as `scheduleBatch` (file 1) and `executeBatch` (file 2, after the delay; the operation id is printed); for a Safe or EOA they are plain calls. Steps already done on chain are left out.
+3. Solana: `ccip-register.ts` with this pool, `ccip-handoff.ts --to <Squads vault>`, then `handoff-mint-authority.ts --yes`.
+4. `verify`: pool token, router, RMN, remote pool and token, rebalancer unset, allowlist off, pool owner = `[mantle].pool_owner` (until the multisig accepts, the deployer still controls the pool's remote chains), registry admin = token admin, registry pool = this pool, Router and pool not sanctioned.
+
+**Mantle mainnet CCIP addresses** (Chainlink CCIP directory, checked on chain): chain selector `1556008542357238666`; Router `0x670052635a9850bb45882Cb2eCcF66bCff0F41B7`; RMN proxy `0x91E2186E93F0ECeDDCdf9850078F104daB085E79`; TokenAdminRegistry `0x000A744940eB5D857c0d61d97015DFc83107404F`; RegistryModuleOwnerCustom `0xf49f81b3d2F2a79b706621FA2D5934136352140c`. The Mantle mainnet Router supports the Solana mainnet lane (selector `124615329519749607`).
+
+**Rehearsal (2026-11-16, Mantle Sepolia ↔ Solana devnet):** a new ScaledToken whose admin is a TimelockController (60 s delay standing in for 12 h), a separate pool owner standing in for a Safe, and a key standing in for the Squads vault. The deploy, the timelock batch (an early execute was rejected; it executed after the delay), the pool owner acceptance, the Solana handoff in both modes (printing the Squads instructions, then signing them), the mint authority handoff and `verify` all passed. Then 0.01 went Mantle → Solana (delivered in about 26 minutes) and 0.005 came back (released on Mantle within a minute), and `check-supply.ts` reconciled exactly (0.005 on Solana, 0.005 locked).
+
+**Squads handoff (2026-11-17, devnet):** the rehearsal mint's CCIP token admin and pool ownership then moved from the stand-in key to a real Squads v4 multisig (2/3, 60 s time lock): `ccip-handoff.ts --to <multisig> --squads-member <m1>` proposed the vault and created one Squads proposal with both acceptances; executing it with one approval (`InvalidProposalStatus`) and inside the time lock (`TimeLockNotReleased`) was rejected; after the second approval and the time lock it executed, and the vault now holds both roles.
+
+**Packed launch (2026-11-17, Mantle Sepolia ↔ Solana devnet, 3/6 Squads):** a second ScaledToken (MRB2) whose admin is the timelock; `create-mint.ts` created and registered the mint in one transaction (1,091 bytes); the Mantle deploy command; `ccip-register.ts --handoff-to <Squads> --handoff-mint-authority` in two transactions (1,067 and 879 bytes) and one Squads proposal; the Mantle multisig signed twice (schedule with the pool acceptance, execute after 60 s); the Squads proposal executed after 3/6 approvals and the time lock. `verify`, `check-multiplier`, `check-supply` and `check-config` passed; 1 MRB2 went Mantle → Solana in about 23.5 minutes and 0.5 came back within a minute, and the supply reconciled (0.5 on Solana, 0.5 locked).
+
+**Mint authority multisig (2026-11-25, Mantle Sepolia ↔ Solana devnet):** a third ScaledToken (MMSIG, its admin a key); `create-mint.ts`, the Mantle deploy and `ccip-register.ts --handoff-mint-authority` in three transactions (434, 1,099 and 827 bytes, without `--handoff-to`): the mint authority became the 1-of-2 multisig of the pool signer and the admin, the last entry of the frozen lookup table; the CCIP token admin and pool ownership then went to the 3/6 Squads in one proposal (`ccip-handoff.ts`). 5 MMSIG went Mantle → Solana in about 31 minutes, and the DON's execution minted through the multisig (the `MintTo` authority is the multisig, its only signer the pool signer; 165,460 CU); 2 came back within minutes. The admin alone then moved the mint authority out of the multisig with `move-mint-authority.ts`, the temporary holder moved it back, and `check-stock.ts` passed (3 on Solana, 3 locked).
+
+---
+
+## 7. Directory layout
+
+```
+solana/
+  Anchor.toml / Cargo.toml / rust-toolchain.toml   toolchain: Anchor 1.2.2, Agave 4.4.0, Rust 1.97.1
+  programs/mstocks-core/
+    src/
+      lib.rs              instruction entry points
+      state.rs            Config / RoleEntry / MintState, role definitions, constants
+      errors.rs
+      events.rs
+      token2022.rs        CPI wrappers (UpdateMultiplier / Pause / Freeze / Transfer / Metadata)
+      instructions/       admin / register_mint / multiplier / pause / compliance / metadata
+    tests/core.rs         LiteSVM integration tests (mainnet Token-2022 build)
+  scripts/                issuance, setup and ops scripts (TypeScript, @solana/kit; Core instructions built from the IDL)
+  tests/fixtures/         mainnet Token-2022 binary (fetched by a script, not committed)
+  README.md               build, test and script usage
+```
+
+It lives in this repo's `solana/` directory, separate from the EVM code, and builds on its own.
+
+---
+
+## 8. Testing
+
+Test runs and results are recorded in a separate [test report](https://skfc4x16la.larksuite.com/wiki/Sohpww2abiDlMUkSCoXu4lvfshg) and not repeated here. Entry points:
+
+- Program: `cargo test -p mstocks-core` (LiteSVM, mainnet Token-2022 build); CI in `.github/workflows/solana.yml`.
+- Scripts: `npm run local-e2e` (local validator), `scripts/local-squads-e2e.sh` (the runbook with real Squads v4 multisigs on a local validator, driven by a network config), `scripts/test-check-multiplier.sh` (reconciliation against a ScaledToken on anvil), `scripts/test-check-supply.sh` (supply reconciliation: backed and over-minted), `scripts/devnet-smoke.sh` (devnet).
+- Compliance backend: mstocks-aml's `scripts/solana-e2e.sh` (both chains locally) and `scripts/solana-devnet-check.sh` (devnet).
+
+---
+
+## 9. Security notes
+
+- Every account's owner and PDA seeds are checked: the Token-2022 program ID, that `MintState` belongs to the mint, that a token account's mint is registered.
+- The Authority PDA only signs inside Core; there is no generic CPI entry point.
+- Multiplier conversion: Core rejects multipliers with more than 15 significant digits, so the f64 Token-2022 stores carries the same value as Mantle.
+- Core's upgrade authority goes to the vault of the upgrade multisig (Squads v4, 24 h time lock). `initialize` requires the upgrade authority's signature, so the order is: deployer deploys → `init-core` → hand off the upgrade authority. Both set an authority for good (the handoff needs no signature from the new authority; `initialize` runs once), so on mainnet `program.ts handoff` and `init-core.ts` accept only Squads multisig accounts, and print each one's threshold and time lock: a mistyped address, or a vault given directly, is refused rather than taken.
+- `register_mint` uses an extension allowlist: any extension on the mint that Core does not control is rejected, so no back-door authority is left behind.
+- The backend KMS key holds both `FREEZER` and `UNFREEZER`, matching OPS on EVM, which can both sanction and unsanction: a leaked key can freeze / thaw any account but cannot move assets (clawback is signed by the compliance admin multisig). The compliance admin can revoke its roles at any time.
+- If `set_default_account_state` is later used to switch to "screen before use", every new account has to be thawed first. The backend already holds `UNFREEZER` and could thaw new accounts directly, but that role can thaw any account; to limit it to opening new accounts, a separate "account opening" role can be added then. It also stops CCIP deliveries to new wallets (tested on devnet): the executor creates the receiver's token account, which starts frozen, so the pool's MintTo fails (`Account is frozen`) and the message waits for a manual execution. Nothing thaws that account automatically, because the backend only learns about a wallet from a successful transfer. Before switching a CCIP-connected mint to screen before use, the backend needs a way to screen and thaw new accounts (for example by watching the mint's account creations), and failed deliveries need `ccip-manual-exec.ts` after the thaw.
+- Holders can burn their own tokens: Token-2022 allows it and it cannot be turned off (on Mantle burning needs `BURN_ROLE`). Tokens burned on Solana stay locked in Mantle's LockRelease pool for good. This only affects the holder and is not a security issue; supply reconciliation therefore checks Solana total supply ≤ the amount locked in the Mantle pool rather than strict equality (`check-supply.ts`).
+- Privileged roles are trusted with every token account of a mint, including the CCIP pool's own token account: freezing it (or clawing back from it, which leaves it frozen) stops Solana → Mantle transfers until it is thawed.
+- Registration is an operations task (`MINT_REGISTRAR`, like the `OPS_ROLE` that deploys tokens through Mantle's `ScaledTokenFactory`). A compromised registrar key cannot register a mint with a back door (`register_mint` rejects any authority outside Core), touch existing mints, change roles, or create Mantle-backed tokens (which Mantle pool is linked to which mint is CCIP configuration); at worst it registers junk mints or claims an unused Mantle token for a wrong mint. Each Mantle token maps to one mint, and the Admin can unregister a mint only while its supply is 0, so a mistake is fixed before launch and a live mint can never be detached from Core. `register_mint` checks the mint's configuration, not its initial multiplier or supply; the launch procedure sets the initial multiplier to Mantle's and hands the mint authority to the pool's multisig.
+- The mint authority multisig is 1 of 2, so the admin's vault can mint by itself, not only move the authority: the admin (3/6 + 12 h) is trusted not to mint unbacked tokens, as on Mantle, where multisig 1 can grant itself `ISSUER_ROLE` on ScaledToken. Such a mint shows up in `check-supply.ts` (Solana supply above the amount locked on Mantle). With the pool signer alone as mint authority nobody but Chainlink could mint or move it, and a broken pool would end minting for good (§6). `unregister_mint` refuses a mint held by any token multisig, so the admin cannot first detach a mint from Core and then mint into it.
+- A proposed admin cannot be withdrawn, only replaced by proposing another address. If the new admin already holds a role, its role account remains but every operational instruction rejects the admin (`AdminCannotOperate`).
+- An independent Solana audit before launch.
+
+---
+
+## 10. Review decisions
+
+| # | Topic | Decision |
+| --- | --- | --- |
+| 1 | Multiplier sync | Option B: each chain schedules its own; CCIP only moves tokens |
+| 2 | Permanent Delegate | Enabled, delegate = Authority PDA; `clawback` implemented, signed by the compliance admin (decided 2026-11-16) |
+| 3 | Transfer Hook | Dormant (no program), authority held directly by the Squads multisig |
+| 4 | Code location | This repo, `solana/` directory |
+| 5 | Toolchain | Upgrade to Agave + Anchor 1.x |
+| 6 | Role keys | As on Mantle: the operations roles' keys are held by RWA-Bycustody (registrar, scheduler, metadata, pauser); the freezer / unfreezer is Mantle's compliance backend KMS (Ed25519) |
+| 7 | Compliance backend | Add Solana to the existing `mstocks-aml`, changing the EVM logic as little as possible (§11) |
+| 8 | Thaw | Same as EVM: after removal from the blacklist the backend signer thaws automatically; `UNFREEZER` is held by the backend KMS |
+| 9 | Mint registration | An operations role (`MINT_REGISTRAR`, KMS), like Mantle's factory `OPS_ROLE`, instead of the Admin multisig; one mint per Mantle token; Admin can unregister a mint with zero supply |
+| 10 | Admins and time locks | Split and timed like Mantle: an admin for the token roles and the mint registry (multisig 1's group, 12 h), a compliance admin for the pause, freeze and clawback roles (multisig 4's group, 12 h), the upgrade authority with multisig 2's group (24 h), `UNPAUSER` with multisig 5's group (no time lock) |
+| 11 | Mint authority | A 1-of-2 Token-2022 multisig of the CCIP pool signer and the admin's Squads vault instead of the pool signer alone, so a misconfigured or retired pool can be replaced without Chainlink; `unregister_mint` refuses any token multisig (decided 2026-11-25) |
+
+---
+
+## 11. Companion service: compliance backend (mstocks-aml)
+
+The backend half of "screen after use". Repo `mstocks-aml` (Go, previously EVM only), branch `feat/solana-support`. One process runs EVM and Solana with one database: each chain has its own indexer, processor, syncer and recheck, and data is keyed by chain name; the database, AML client and HTTP API are shared, and one recheck request sweeps every chain. It deploys as the existing `mantle-mstocks-aml` service, not a new one.
+
+```
+Solana RPC ──► indexer ──► transfer_events ──► processor ──► aml-gateway (blacklist)
+                                                  │
+                                                  ▼
+                                    sanctioned_addresses (target state, pending sync)
+                                                  │
+                                                  ▼
+                       syncer ──► Core freeze / thaw (signed by FREEZER / UNFREEZER)
+```
+
+| | EVM (unchanged) | Solana |
+| --- | --- | --- |
+| Indexing | ERC20 `Transfer` logs | Transaction history per mint (`getSignaturesForAddress`); transfers rebuilt from pre / post token balances; one signature cursor per mint |
+| Blacklist | `ComplianceRegistry.sanctionUsers` | Core `freeze`: freeze all of the wallet's token accounts under every registered mint |
+| Unblacklist | `unsanctionUsers` | Core `thaw`: thaw all of the wallet's token accounts |
+| Signing | secp256k1 (local / AWS KMS) | Ed25519 (local keypair / AWS KMS `ECC_NIST_EDWARDS25519`) |
+
+**Key points:**
+- **Complete indexing**: for a mint with these extensions, Token-2022 rejects the legacy `Transfer` that omits the mint account (test `transfers_must_carry_the_mint_account`), so the mint's transaction history covers every transfer, CCIP mint / burn and clawback. Wallets (owners) are recorded, not token accounts. Reads are finalized by default, so no rollback handling is needed.
+- **New accounts**: a frozen wallet can still gain new token accounts (one under another mint, or an ATA created by a CCIP mint). A frozen account cannot receive, so new tokens always land in a new account. When the indexer sees funds move for a sanctioned wallet, it marks the wallet pending again and the syncer freezes the new account. A wallet marked again while its freeze is still in flight stays pending: each row carries a generation counter (`requeue_seq`), and a sync only settles the row if the counter has not moved. The syncer also reads the wallet's accounts again right before building the freeze. So an account opened during a sync is frozen in the next pass instead of being missed. On qa8 (2026-11-23), a new account of a blacklisted wallet was frozen 15 s after it received tokens.
+- **Account ownership transfer**: a non-ATA token account's owner can be changed to another wallet with `SetAuthority`. That transaction carries no mint account and changes no balance, so it does not appear in the mint's history (tested); someone could "give" an account with a balance to a blacklisted wallet without it being indexed. A frozen account cannot change owner, so a blacklisted wallet can only gain accounts this way, never move them out. Countermeasure: every `reconcile_interval` (default 10 minutes) the reconciler checks all blacklisted wallets and requeues any with unfrozen accounts; one `getTokenAccountsByOwner` per wallet per round.
+- **Freezes that run out of retries**: a freeze that keeps failing (for example while the signer has no SOL) is retried with backoff and, after `sync_max_retries`, parked for a year. The reconciler also re-checks parked blacklisted wallets and the indexer requeues them on a new transfer, so once the cause is fixed the freeze lands within one `reconcile_interval` (fault test: signer drained to 0 SOL; frozen 34 s after funding it, with a 60 s interval).
+- **Whether to send a transaction**: a wallet can be partly frozen, so the syncer checks against the target state: blacklisting requires no unfrozen accounts, unblacklisting requires no frozen ones; if already satisfied, nothing is sent. Core skips accounts already in the target state, so retries are safe.
+- **Freeze transactions**:
+  - **Packing**: up to 20 accounts per instruction; the instructions of several mints are packed into one transaction as long as it fits 1,232 bytes.
+  - **Compute budget**: each transaction sets a CU limit sized from the measured cost. A single-account freeze uses 13,996 CU and requests 17,760.
+  - **Priority fee**: the 75th percentile of `getRecentPrioritizationFees` over the accounts the transaction writes, at least `priority_fee_micro_lamports` (10,000 when unset) and at most `max_priority_fee_micro_lamports`.
+  - **Resends**: the transaction is rebroadcast every 2 s until it confirms or its blockhash expires. A resend after expiry doubles the price, up to the cap. A transaction that runs out of compute is resent with the CU limit doubled.
+  - **Time bound**: one call is bounded at 3 minutes, so a congested network cannot hold up the syncer; the remaining rows retry on the next tick.
+- **Addresses returned by the AML gateway**: the production gateway lowercases the addresses in its results. EVM addresses are unaffected, but Solana addresses are case-sensitive and become invalid, or even another wallet, when lowercased. The service only uses the result to map back to the address it requested, and always stores and queries the original address.
+- **Thaw**: same as EVM. When the AML gateway no longer flags an address (on a recheck or a new transaction), the database marks it pending removal and the syncer thaws all its accounts with Core `thaw`, signed by the backend signer. By default the same key as freezing (it must hold both `FREEZER` and `UNFREEZER`); a separate `unfreezer` can be configured.
+
+  The service only thaws addresses it sanctioned itself, on both chains:
+  - **New clean addresses**: an address seen for the first time that AML judges clean is stored as already synced and is never queued. A wallet that ops froze before the service ever saw it therefore stays frozen. Before 2026-11-23 the service thawed such a wallet the first time it saw it.
+  - **Cleared hits**: an address the service froze because of a hit is thawed once the AML gateway clears it, even if ops want it frozen for another reason.
+- **Signing and startup checks**: production uses AWS KMS Ed25519 (`ED25519_SHA_512`, raw message), verified locally after signing. At startup the service checks that the signer holds the roles and that the configured mints are registered in Core. The signer pays its own fees and needs a SOL balance.
+- **RPC load and errors**:
+  - **Retries**: every Solana RPC call retries on 429, 5xx and timeouts (honouring `Retry-After`), under a client-side rate limit (`rpc_rps`, default 20).
+  - **Separate freeze client**: the freeze submitter has its own client and limit (`submitter_rpc_url`, `submitter_rpc_rps`), so indexing can never starve a freeze.
+  - **Indexing**: mints are indexed concurrently (`mint_concurrency`), and a backlog is worked off in bounded steps (`max_chunks_per_mint`).
+  - **Idle backoff**: an idle mint's polling backs off to `max_poll_interval`, set to 30 s on qa8; it defaults to `poll_interval`. Polling at a fixed 5 s is what used up the monthly quota of the RPC key qa8 used before.
+- **One active instance**: the pipeline runs only in the process that holds a Postgres advisory lock per chain, taken on a dedicated connection with TCP keepalives. Other replicas serve HTTP and wait; so does the old pod during a rolling deploy. Migrations take their own lock.
+- **Screening failures**: screening and syncing run in separate loops. If an AML answer misses a requested address or has no result, that chunk fails, so its transfers are retried rather than marked processed with the address never screened.
+- **Changes to EVM code**: lowercasing addresses in the processor is now configurable (Solana addresses are case-sensitive, EVM still lowercases); the syncer gains an optional interface for target-state checks (the EVM client does not implement it, behavior unchanged); database migration 006 widens the address and transaction hash columns and adds a cursor table; pending transfers and recheck queries filter by chain (same results with a single chain); at startup a set of components runs for each enabled chain (`evm.enabled` defaults to on, existing configs need no change).
+
+**Chain name:** the `solana.chain_name` setting (shared by the database and the AML gateway) is `solana` on mainnet and `solana_devnet` on devnet.
+
+**qa8 deployment (live):** the `mantle-mstocks-aml` service on sepolia-qa8 runs the Solana devnet pipeline next to an EVM pipeline; see [mantle-config#17082](https://github.com/mantlenetworkio/mantle-config/pull/17082) and [#17092](https://github.com/mantlenetworkio/mantle-config/pull/17092). The Solana pipeline screens through the QA AML gateway `mantle-aml-gateway` sepolia-qa7, whose test blacklist drives the freeze tests.
+
+- **Deployment**: since 2026-11-23 qa8 runs image `9963d36` from [mstocks-aml#6](https://github.com/mantle-xyz/mStocks-aml/pull/6), deployed with [mantle-config#17397](https://github.com/mantlenetworkio/mantle-config/pull/17397).
+- **Signing keys**: since that deployment the service signs with KMS keys of its own; before, it shared the retry service's keys.
+  - Ed25519 `1d37f9ff…`, address `313TxhxGx1G92mni17ehDnw6pfX7k9ecu7rLWbc4uJqE`, holds `FREEZER` and `UNFREEZER` on devnet. Both roles were revoked from the retry service's `E8SV8n…`.
+  - secp256k1 `99a9a18a…`, address `0x6906AfAaB407df4441210e0a66140D0A902777a6`.
+- **Solana RPC**: a new Alchemy key, with idle backoff.
+- **EVM pipeline**: for a mainnet drill it currently watches the mStocks test deployment on Mantle mainnet (factory `0xa87d…`, ComplianceRegistry `0x7dBe…`, production AML gateway). [mantle-config#17409](https://github.com/mantlenetworkio/mantle-config/pull/17409) moves it back to Mantle Sepolia: test token `0x5a338AD5…`, registry `0x7F6C…`, QA gateway.
+- **Ops notes**: `mantle-manual-awsres` does not update the IAM role of an existing service, so ops must add a new KMS key to the role's `kmsAccess` by hand. qa8 deploys from the feature branch, and the deploy workflow's token needs read access to `mantle-xyz/mstocks-aml`.
+
+**Monitoring:** the service exports the signer's balance as `solana_signer_balance_lamports`. The alert `mstocksAmlSolanaSignerBalanceLow` (monitoring-v2 `ccip` rules, [mantle-config#17165](https://github.com/mantlenetworkio/mantle-config/pull/17165); qa8 threshold 0.05 SOL) fires before the signer runs out of fees, because once it does, freeze transactions stop and blacklisted wallets keep moving tokens. Rules under `infra-infra` take effect only after ops run `kubectl apply -k` on them.
+
+Newer metrics have no alerts yet:
+
+| Metric | What it shows |
+| --- | --- |
+| `sanction_unsynced_total`, `sanction_unsynced_oldest_age_seconds` | Wallets sanctioned but not yet frozen on chain, and how long the oldest has waited |
+| `sync_parked_total` | Rows parked after their retries ran out |
+| `solana_indexer_last_sweep_timestamp_seconds` | When each mint was last indexed |
+| `solana_rpc_errors_total` | RPC errors by client, method and code |
+| `leader_active` | Whether this instance runs the pipeline |
+
+**Before launch:**
+- a backend KMS Ed25519 key of its own (not shared with another service, since it holds `FREEZER` and `UNFREEZER`), granted both roles by the compliance admin (Squads);
+- a SOL balance for fees;
+- a mainnet threshold for the balance alert;
+- alerts on `sanction_unsynced_oldest_age_seconds`, `sync_parked_total` and `solana_indexer_last_sweep_timestamp_seconds`.
+
+---
+
+## 12. Companion service: CCIP retry service (mantle-cross)
+
+The DON does not retry a message whose execution failed on the destination chain, so the tokens stay locked in the source pool until someone executes it. The existing CCIP retry service (`mantle-cross`, `packages/auto-retry-service`) watches the OffRamps of the configured chains for failed messages of the watched tokens, classifies each failure and re-executes the retryable ones.
+
+| Change | What it does | Where |
+| --- | --- | --- |
+| Per-token gas retry | A failure where the destination pool runs out of per-token gas (`TokenHandlingError` with an empty reason, `FailedCall`, `NotEnoughGasForCall` or `SafeERC20: low-level call failed`) is classified `TOKEN_OOG` and re-executed with `tokenGasOverrides` = the message's `destGasAmount` × the gas ladder (first retry 1.5×, i.e. 225,000 for the 150,000 lane default). A simulation that still runs out of gas moves up the ladder; any other simulation failure relabels it `TOKEN_ERROR`. Previously every token failure was `TOKEN_ERROR` and parked | [mantle-cross#48](https://github.com/mantle-xyz/mantle-cross/pull/48) |
+| Signer balance monitor | Exports `ccip_retry_signer_balance{chain,chain_selector,address}` and the per-chain threshold `ccip_retry_signer_balance_min`; the alert `retrySignerBalanceLow` fires when a signer drops below its chain's `min_signer_balance` | [mantle-cross#49](https://github.com/mantle-xyz/mantle-cross/pull/49), [mantle-config#17148](https://github.com/mantlenetworkio/mantle-config/pull/17148) |
+| qa8 configuration | Adds Mantle Sepolia and the test token `0x5a338AD5…`; thresholds Sepolia 0.02 ETH, HyperEVM 0.02 HYPE, Solana 0.5 SOL, Mantle Sepolia 5 MNT | [mantle-config#17144](https://github.com/mantlenetworkio/mantle-config/pull/17144), [#17148](https://github.com/mantlenetworkio/mantle-config/pull/17148) |
+| Mainnet hardening | **Settlement**: each broadcast is recorded before it is sent and settled from receipts (Solana: finalized status or blockhash expiry; EVM: receipt, or a drop proven by the nonce). A transaction the node never received is rebroadcast unchanged; one the node still knows is never settled.<br>**Workers**: one drain worker per destination chain, with bounded calls; graceful shutdown.<br>**Solana fees**: Solana manual executions pay a priority fee and size the CU limit from the simulation.<br>**Listeners**: no longer lose or stall on events (source-lane filter, bounded wait for unindexed messages, backward paging on Solana).<br>**CCIP API**: retries on 429 and 5xx under a rate limit.<br>**State and metrics**: conditional state writes; new metrics `ccip_retry_rows`, monitor lag and `ccip_api_requests_total`. Existing metrics unchanged | [mantle-cross#50](https://github.com/mantle-xyz/mantle-cross/pull/50) (open) |
+
+On Mantle, failures that need a fix first (token paused, receiver sanctioned, inbound rate limit exceeded) stay `TOKEN_ERROR` and are not retried automatically: once the cause is removed, operations run `ccip-manual-exec-evm.sh`. Messages that failed on Solana (mint paused, receiver account frozen, rate limit exceeded) are executed with `ccip-manual-exec.ts`. The service's rate-limit monitor only exports pool bucket metrics (`ccip_ratelimit_*`); it does not re-execute anything.
+
+**Before launch (runbook Step 4):**
+- **Version**: mainnet on `ccip-retry-service/v1.3.0`, the release with #48, #49 and #50, to be tagged once #50 merges. Mainnet runs v1.1.0 until [mantle-config#17323](https://github.com/mantlenetworkio/mantle-config/pull/17323) is moved to that tag and devops review and deploy it. The PR already enables the signer balance monitor (0.05 ETH, 0.1 HYPE, 0.2 SOL).
+- **Chains in `app-mainnet-v133.yaml`**:
+  - a `mantle` chain, selector `1556008542357238666`, with its OffRamp for Solana messages: `0x010771998A1F4736BD844939d0bf01ac5cA0f8fa`, as returned by the Mantle Router's `getOffRamps()`;
+  - an OffRamp entry for Mantle messages on the `solana` chain: `offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm`;
+  - `min_signer_balance` on both chains.
+- **Signer**: the EVM signer funded in MNT. **Per stock (runbook Step 10):** the Mantle token and the Solana mint on `watched_tokens`, and both pools on `ratelimit_monitor.pools`.
+
+---
+
+## 13. Companion service: CCIP binding (to be built)
+
+Once the Mantle ScaledToken exists and the backend has created and registered the Solana mint (§6), the binding connects the two over CCIP. Today it is runbook Steps 6–10, done by hand; it is meant to become a service. What the service has to do, with the scripts as executable references. Each script checks the chain and skips what is already done, so after any failure the service resumes by running the same step again (step 1 with `--pool <pool>` once the pool exists).
+
+| # | Step | Signer | Reference | Done when |
+| --- | --- | --- | --- | --- |
+| 1 | Mantle pool: deploy the LockReleaseTokenPool, point it at the Solana pool and mint, set the rate limits (both directions), propose the pool owner (`[mantle].pool_owner`) | Mantle deployer key (MNT for gas) | `ccip-mantle-setup.sh deploy` (after a failure past the pool's deployment, `--pool <pool>`) | pool deployed; its pending owner is the pool owner |
+| 2 | Solana registration, three transactions: the mint authority multisig (the pool signer and the admin's vault); token admin, BurnMint pool, pool token account, lookup table listing the multisig; then the remote chain (Mantle token and pool, 18 decimals), rate limits, `set_pool`, freezing the lookup table, the proposals handing the token admin and the pool to the CCIP admin's Squads, and the mint authority to the multisig | the mint's temporary mint authority, the key that created the mint (MintRegistrar) | `ccip-register.ts --handoff-to --handoff-mint-authority` | pending token admin and pool owner are the CCIP admin's vault; mint authority is the multisig; lookup table frozen |
+| 3 | Multisig files for the signers: Mantle Safe Transaction Builder JSON for the token admin's timelock (schedule, which also accepts the pool when the Safe is a timelock proposer; execute after 12 h); Solana one base58 message for the Squads app with both acceptances | none: the service only produces files | `ccip-mantle-setup.sh multisig`; the `accept … base58` line of step 2 | handed to the signers |
+| 4 | Wait for the multisigs: Mantle TokenAdminRegistry `getTokenConfig(token)` (administrator = the token admin, nothing pending, pool set) and the pool's `owner()`; Solana registry administrator and pool owner = the CCIP admin's vault, nothing pending | — | `ccip-mantle-setup.sh verify`; `registryState` / `poolOwnership` in `lib/ccip.ts` | all set |
+| 5 | Verify the stock | — | `check-stock.ts --mint` | `PASS` |
+| 6 | Companion configuration: mstocks-aml `solana.mints`; retry service `watched_tokens` (token and mint) and `ratelimit_monitor.pools` (both pools); the reconciliation jobs | — (a mantle-config PR, applied by devops) | runbook Step 10 | merged and applied |
+
+**Inputs:** the Mantle token, the Solana mint, rate limits per direction (capacity and refill per second, in each chain's units: 18 decimals on Mantle, 9 on Solana; or explicitly none) and the network config, which holds every address.
+
+**Keys:** the service holds only the Mantle deployer key and the mint's temporary mint authority (it must sign the CCIP self-registration, which is why registration comes before the mint authority goes to the pool's multisig). Both keep control of their side's pool configuration only until the multisigs accept (step 4, after the 12 h time locks); then neither has any power over the stock (the Solana key also created the pool's lookup table, which step 2 freezes so that key cannot close it), and `check-stock.ts` verifies the whole configuration, the frozen lookup table included. The scripts load keypair files; a service with KMS keys sends the same transactions with a remote signer: the Solana instructions are built in `ccip-register.ts` with `@solana/kit`, whose signers can be any `TransactionSigner`, and the Mantle side is plain contract calls (`ccip-mantle-setup.sh`, via `cast`).
+
+**State per stock:** the step reached, the pool address, transaction signatures, and which multisig files were handed to whom and when, so a restart resumes and operators can see where each stock stands.
+
+**Failures:** a failed or dropped transaction is retried by re-running its step; multisig files not executed in time (for example a day after the time lock) are re-sent and escalated; a failed check stops that stock and alerts. Parameters are never changed automatically on retry.
