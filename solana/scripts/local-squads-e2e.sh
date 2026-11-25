@@ -209,6 +209,20 @@ WRONG=$(ts scripts/create-mint.ts --payer "$WORK/registrar.json" --uri https://e
 ts scripts/unregister-mint.ts --mint "$WRONG" >"$WORK/p"; U=$(imp admin "unregister_mint" "$WORK/p"); approve admin "$U"; after_time_lock "$TL"; execute admin "$U"
 expect_fail "unregistered mint" "not registered" npx tsx scripts/unregister-mint.ts --mint "$WRONG"
 
+echo "== escape hatch: the admin multisig's vault, a member of the mint authority multisig, moves the mint authority"
+# The 1-of-2 Token-2022 multisig of the pool signer and the admin's vault that ccip-register.ts
+# creates (it needs a CCIP lookup table, absent locally, so it is set up with spl-token).
+ADMIN_VAULT=$(ts scripts/squads.ts status --multisig admin | awk '/^multisig /{print $NF}')
+POOL_SIGNER=$(ts -e "import('./scripts/lib/ccip.ts').then(async (c) => console.log((await c.ccipAccounts('$MINT')).poolSigner))" | tail -1)
+solana-keygen new --no-bip39-passphrase --silent -o "$WORK/token-multisig.json" >/dev/null
+spl-token -u "$LOCAL" --program-2022 create-multisig 1 "$POOL_SIGNER" "$ADMIN_VAULT" --address-keypair "$WORK/token-multisig.json" --fee-payer "$D" >/dev/null
+spl-token -u "$LOCAL" --program-2022 authorize "$MINT" mint "$(pk token-multisig)" --authority "$WORK/registrar.json" --fee-payer "$D" >/dev/null
+ts scripts/move-mint-authority.ts --mint "$MINT" --to "$(pk registrar)" >"$WORK/p"
+grep -E "^  1\. " "$WORK/p" | cut -c1-160
+MV=$(imp admin "move the mint authority" "$WORK/p"); approve admin "$MV"; after_time_lock "$TL"; execute admin "$MV"
+spl-token -u "$LOCAL" --program-2022 display "$MINT" | grep -q "Mint authority: $(pk registrar)" || fail "the mint authority did not move"
+echo "   moved by the admin's Squads proposal alone"
+
 echo "== program.ts upgrade through the upgrade multisig (a build 20,000 bytes larger: the program account is extended first)"
 expect_fail "upgrade by the old deployer key" "does not match" \
   sol program deploy target/deploy/mstocks_core.so --program-id "$(solana-keygen pubkey target/deploy/mstocks_core-keypair.json)" --upgrade-authority "$D"

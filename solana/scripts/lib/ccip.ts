@@ -5,6 +5,8 @@ import { createHash } from "node:crypto";
 import {
   AccountRole,
   address,
+  createAddressWithSeed,
+  fetchEncodedAccount,
   getAddressDecoder,
   getAddressEncoder,
   getProgramDerivedAddress,
@@ -14,7 +16,8 @@ import {
   type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
-import { findAssociatedTokenPda } from "@solana-program/token-2022";
+import { getAllocateWithSeedInstruction, getCreateAccountWithSeedInstruction, getTransferSolInstruction } from "@solana-program/system";
+import { findAssociatedTokenPda, getInitializeMultisig2Instruction, getMultisigDecoder, getMultisigSize } from "@solana-program/token-2022";
 import { BPF_LOADER_UPGRADEABLE, TOKEN_2022_PROGRAM_ID, concat, encodeU64 } from "./core.ts";
 import { rpc, withRetry } from "./env.ts";
 
@@ -103,6 +106,70 @@ export async function lookupTableAddresses(table: Address): Promise<Address[]> {
   const d = await accountData(table);
   if (!d) throw new Error(`lookup table ${table} not found`);
   return Array.from({ length: (d.length - 56) / 32 }, (_, i) => dec.decode(d.subarray(56 + i * 32, 88 + i * 32)));
+}
+
+// --- Mint authority: a 1-of-2 token multisig of the pool signer and the admin's vault ---
+//
+// The BurnMint pool mints through a Token-2022 multisig in which its signer alone meets the
+// threshold, so CCIP works as with the signer itself. The admin's vault, the other member, can
+// move the mint authority to another pool (a misconfigured one, or one Chainlink retires) without
+// Chainlink; with the signer alone, only the pool program's upgrade authority can. The pool finds
+// the multisig among the accounts of the token's lookup table, so it must be in the table before
+// the table is frozen.
+
+/** Seed of the multisig's address (createAccountWithSeed allows 32 bytes; a mint's base58 has 32+). */
+const multisigSeed = (mint: Address) => mint.slice(0, 32);
+
+/** The multisig's address: derived from the key that creates it (the mint's temporary authority). */
+export const mintAuthorityMultisig = (base: Address, mint: Address): Promise<Address> =>
+  createAddressWithSeed({ baseAddress: base, programAddress: TOKEN_2022_PROGRAM_ID, seed: multisigSeed(mint) });
+
+/**
+ * Instructions creating and initializing the 1-of-2 multisig of `poolSigner` and `adminVault`; none
+ * when it exists (mintAuthorityMultisigProblem checks it). Anyone can send lamports to the address
+ * beforehand, and CreateAccount refuses an address that holds lamports, so such an account is topped
+ * up to rent and allocated instead (AllocateWithSeed also assigns it); only the base can do either.
+ */
+export async function createMintAuthorityMultisigIxs(base: KeyPairSigner, mint: Address, poolSigner: Address, adminVault: Address): Promise<Instruction[]> {
+  const multisig = await mintAuthorityMultisig(base.address, mint);
+  const existing = await withRetry(() => fetchEncodedAccount(rpc, multisig));
+  if (existing.exists && existing.programAddress === TOKEN_2022_PROGRAM_ID) return [];
+  const space = BigInt(getMultisigSize());
+  const seed = multisigSeed(mint);
+  const rent = await withRetry(() => rpc.getMinimumBalanceForRentExemption(space).send());
+  const init = getInitializeMultisig2Instruction({ multisig, signers: [poolSigner, adminVault], m: 1 });
+  if (!existing.exists)
+    return [
+      getCreateAccountWithSeedInstruction({
+        payer: base, newAccount: multisig, baseAccount: base, base: base.address, seed,
+        amount: rent, space, programAddress: TOKEN_2022_PROGRAM_ID,
+      }),
+      init,
+    ];
+  if (existing.programAddress !== SYSTEM_PROGRAM || existing.data.length > 0)
+    throw new Error(`${multisig} is in use (owner ${existing.programAddress}, ${existing.data.length} bytes)`);
+  return [
+    ...(existing.lamports < rent ? [getTransferSolInstruction({ source: base, destination: multisig, amount: rent - existing.lamports })] : []),
+    getAllocateWithSeedInstruction({ newAccount: multisig, baseAccount: base, base: base.address, seed, space, programAddress: TOKEN_2022_PROGRAM_ID }),
+    init,
+  ];
+}
+
+/**
+ * Why `holder`, a mint's current mint authority, is not the expected multisig of `poolSigner` and
+ * `adminVault` (null when it is): an initialized Token-2022 multisig, threshold 1, exactly those
+ * two members.
+ */
+export async function mintAuthorityMultisigProblem(holder: Address, poolSigner: Address, adminVault: Address): Promise<string | null> {
+  const acc = await withRetry(() => fetchEncodedAccount(rpc, holder));
+  if (!acc.exists) return `${holder} does not exist`;
+  if (acc.programAddress !== TOKEN_2022_PROGRAM_ID || acc.data.length !== getMultisigSize()) return `${holder} is not a Token-2022 multisig`;
+  const m = getMultisigDecoder().decode(acc.data);
+  const members = m.signers.slice(0, m.n);
+  if (!m.isInitialized) return `multisig ${holder} is not initialized`;
+  if (m.m !== 1 || m.n !== 2 || !members.includes(poolSigner) || !members.includes(adminVault))
+    return `multisig ${holder} is ${m.m}-of-${m.n} of ${members.join(", ")}, not 1-of-2 of the pool signer ${poolSigner} and the admin ${adminVault}`;
+  return null;
 }
 
 /**

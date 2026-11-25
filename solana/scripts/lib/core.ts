@@ -141,13 +141,14 @@ type AccountInput = Address | KeyPairSigner;
 
 /**
  * Builds a Core instruction. `accounts` is keyed by IDL account name; accounts with a fixed
- * address in the IDL (system / token programs) may be omitted.
+ * address in the IDL (system / token programs) may be omitted, and so may optional accounts (Anchor
+ * reads the program id in their place as "none").
  */
 export function coreInstruction(name: string, accounts: Record<string, AccountInput>, args: Uint8Array): Instruction {
   const ix = idl.instructions.find((i: { name: string }) => i.name === name);
   if (!ix) throw new Error(`no instruction ${name} in IDL`);
-  const metas = ix.accounts.map((a: { name: string; writable?: boolean; signer?: boolean; address?: string }) => {
-    const input = accounts[a.name] ?? (a.address ? address(a.address) : undefined);
+  const metas = ix.accounts.map((a: { name: string; writable?: boolean; signer?: boolean; address?: string; optional?: boolean }) => {
+    const input = accounts[a.name] ?? (a.address ? address(a.address) : a.optional ? CORE_PROGRAM_ID : undefined);
     if (!input) throw new Error(`${name}: missing account ${a.name}`);
     const role =
       a.signer && a.writable ? AccountRole.WRITABLE_SIGNER

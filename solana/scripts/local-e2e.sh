@@ -52,14 +52,29 @@ WRONG=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar
   --name Wrong --symbol WRONG --uri https://example.com --mantle-token 0x00000000000000000000000000000000000000bb \
   --initial-multiplier-1e18 1000000000000000000 | awk '/^mint: /{print $2}')
 npx tsx scripts/unregister-mint.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$WRONG"
-# A mint whose authority went to the CCIP pool is never unregistered (the pool could mint into it later).
+# A mint the CCIP pool can mint into is never unregistered: here its mint authority is the 1-of-2
+# Token-2022 multisig of the pool signer and the admin that mStocks uses (handoff-mint-authority.ts
+# needs a CCIP lookup table, absent locally, so the multisig is set up with spl-token).
 POOLED=$(npx tsx scripts/create-mint.ts --payer "$WORK/deployer.json" --registrar "$WORK/deployer.json" --hook-authority "$(pk hook)" \
   --name Pooled --symbol POOLED --uri https://example.com --mantle-token 0x00000000000000000000000000000000000000cc \
   --initial-multiplier-1e18 1000000000000000000 | awk '/^mint: /{print $2}')
-npx tsx scripts/handoff-mint-authority.ts --mint-authority "$WORK/deployer.json" --mint "$POOLED" --yes | grep -E "^handoff"
+POOL_SIGNER=$(npx tsx -e "import('./scripts/lib/ccip.ts').then(async (c) => console.log((await c.ccipAccounts('$POOLED')).poolSigner))")
+solana-keygen new --no-bip39-passphrase --silent -o "$WORK/multisig.json" >/dev/null; MULTISIG=$(pk multisig)
+spl-token -u l --program-2022 create-multisig 1 "$POOL_SIGNER" "$(pk admin)" --address-keypair "$WORK/multisig.json" --fee-payer "$WORK/deployer.json" >/dev/null
+spl-token -u l --program-2022 authorize "$POOLED" mint "$MULTISIG" --authority "$WORK/deployer.json" --fee-payer "$WORK/deployer.json" >/dev/null
 if npx tsx scripts/unregister-mint.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$POOLED" >"$WORK/out" 2>&1; then
-  echo "UNEXPECTED: a mint held by the CCIP pool was unregistered"; exit 1; fi
-grep -q "holds the mint authority" "$WORK/out" && echo "   unregistering a pool-held mint refused"
+  echo "UNEXPECTED: a mint the CCIP pool can mint into was unregistered (pool signer $POOL_SIGNER, multisig $MULTISIG)"
+  spl-token -u l --program-2022 display "$POOLED" | grep -i "mint authority"; cat "$WORK/out"; exit 1; fi
+grep -q "the CCIP pool can mint" "$WORK/out" || { echo "UNEXPECTED refusal:"; cat "$WORK/out"; exit 1; }
+echo "   unregistering a mint held by the pool's multisig refused"
+echo "== escape hatch: the admin, the multisig's other member, moves the mint authority without the pool"
+if npx tsx scripts/move-mint-authority.ts --payer "$WORK/deployer.json" --admin "$WORK/compliance.json" --mint "$POOLED" --to "$(pk deployer)" >"$WORK/out" 2>&1; then
+  echo "UNEXPECTED: a key outside the multisig moved the mint authority"; exit 1; fi
+grep -q "cannot move the authority alone" "$WORK/out" || { echo "UNEXPECTED refusal:"; cat "$WORK/out"; exit 1; }
+npx tsx scripts/move-mint-authority.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --mint "$POOLED" --to "$(pk deployer)" >/dev/null
+spl-token -u l --program-2022 display "$POOLED" | grep -q "Mint authority: $(pk deployer)" || { echo "FAIL: the mint authority did not move"; exit 1; }
+spl-token -u l --program-2022 authorize "$POOLED" mint "$MULTISIG" --authority "$WORK/deployer.json" --fee-payer "$WORK/deployer.json" >/dev/null
+echo "   a key outside the multisig is refused; the admin alone moved the authority, and it went back"
 
 echo "== schedule-multiplier (2x in 10 minutes)"
 NOW=$(date +%s)
@@ -132,5 +147,26 @@ npx tsx scripts/show-mint.ts --mint "$MINT" | grep DefaultAccountState
 echo "== revoke MetadataOps from ops"
 npx tsx scripts/revoke-role.ts --payer "$WORK/deployer.json" --admin "$WORK/admin.json" --role MetadataOps --member "$(pk ops)"
 
-echo "== handoff dry run"
-npx tsx scripts/handoff-mint-authority.ts --mint-authority "$WORK/deployer.json" --mint "$MINT"
+echo "== the mint authority multisig is created even after someone funded its address (CreateAccount would refuse it)"
+# ccip-register.ts creates it with createMintAuthorityMultisigIxs; its address is predictable from the
+# registering key and the mint, so a third party can send it lamports first.
+msig() { npx tsx -e "import('./scripts/lib/ccip.ts').then(async (c) => {
+  const { loadKeypair, send } = await import('./scripts/lib/env.ts');
+  const base = await loadKeypair('$WORK/deployer.json'); const pool = (await c.ccipAccounts('$MINT')).poolSigner;
+  const ms = await c.mintAuthorityMultisig(base.address, '$MINT');
+  if ('$1' === 'address') return console.log(ms);
+  const ixs = await c.createMintAuthorityMultisigIxs(base, '$MINT', pool, '$(pk admin)');
+  if (ixs.length) await send(base, ixs);
+  console.log((await c.mintAuthorityMultisigProblem(ms, pool, '$(pk admin)')) ?? 'multisig ok', ixs.length);
+})"; }
+solana -u l transfer --allow-unfunded-recipient "$(msig address)" 0.001 --keypair "$WORK/deployer.json" >/dev/null
+msig create >"$WORK/out" 2>&1 || { cat "$WORK/out"; echo "FAIL: creating the funded multisig"; exit 1; }
+grep -q "^multisig ok 3$" "$WORK/out" || { cat "$WORK/out"; echo "FAIL: funded multisig (expected top-up, allocate, initialize)"; exit 1; }
+msig create | grep -q "^multisig ok 0$" || { echo "FAIL: a second run should find the multisig"; exit 1; }
+echo "   topped up, allocated and initialized; a re-run leaves it as it is"
+
+echo "== handoff without CCIP registration is refused (the multisig must be in the pool's lookup table)"
+if npx tsx scripts/handoff-mint-authority.ts --mint-authority "$WORK/deployer.json" --mint "$MINT" --mint-authority-admin "$(pk admin)" >"$WORK/out" 2>&1; then
+  echo "UNEXPECTED: handoff accepted without a CCIP lookup table"; exit 1; fi
+grep -q "no CCIP lookup table yet" "$WORK/out" || { echo "UNEXPECTED refusal:"; cat "$WORK/out"; exit 1; }
+echo "   refused: run ccip-register.ts first"

@@ -6,7 +6,11 @@
 //      table is frozen (its authority, this key, could otherwise close it and stop every transfer
 //      of the mint); with --handoff-to, the proposals handing the token admin and the pool
 //      ownership to the multisig; with --handoff-mint-authority, finally the mint authority to the
-//      pool signer.
+//      mint authority multisig.
+// Before transaction 1, a 1-of-2 Token-2022 multisig of the pool signer and the admin's vault is
+// created; it is the mint authority from the handoff on and sits in the lookup table, where the
+// pool finds it. The pool signer alone meets its threshold, so CCIP mints as before; the admin's
+// vault can move the authority to another pool without Chainlink (lib/ccip.ts).
 // With --handoff-to, the new holder's acceptance follows: one Squads proposal for a multisig
 // (printed as a base58 transaction message for the Squads app), signed directly for a keypair.
 // Steps already done on chain are left out, so it can be re-run after a failure.
@@ -16,6 +20,7 @@
 //        (one of them is required when the remote chain is first configured; a re-run without
 //        either leaves the rate limits as they are)
 //     [--handoff-to [<keypair.json|squads multisig>]] [--handoff-mint-authority]
+//     [--mint-authority-admin <keypair.json|squads multisig>]   (default: the config's admin)
 // --remote-selector defaults to the config's Mantle selector; --handoff-to without a value to the
 // config's CCIP admin.
 //     [--router <id>] [--pool-program <id>] [--fee-quoter <id>]
@@ -43,10 +48,14 @@ import {
   anchorIx,
   ccipAccounts,
   chainConfigPda,
+  createMintAuthorityMultisigIxs,
   freezeLookupTableIx,
   handoffAccepts,
   handoffProposals,
+  lookupTableAddresses,
   lookupTableAuthority,
+  mintAuthorityMultisig,
+  mintAuthorityMultisigProblem,
   poolOwnership,
   registryState,
   type Meta,
@@ -74,6 +83,9 @@ const handoffTo = args["handoff-to"]
   ? await resolveAdmin(args["handoff-to"] === "true" ? ccipAdmin() : args["handoff-to"])
   : undefined;
 const handoffMintAuthority = args["handoff-mint-authority"] === "true";
+// The multisig's other member: the admin's vault (the admin governs the token roles and the mint
+// registry, like the Mantle token admin).
+const mintAuthorityAdmin = adminAddress(await resolveAdmin(setting(args["mint-authority-admin"], "admins.admin", "mint-authority-admin")));
 
 const a = await ccipAccounts(mint, { router: args.router, poolProgram: args["pool-program"], feeQuoter: args["fee-quoter"] });
 const chainConfig = await chainConfigPda(a, remoteSelector);
@@ -104,19 +116,29 @@ async function sendSteps(label: string, steps: [string, Instruction[]][]) {
 
 console.log(`mint ${mint}\npool state ${a.poolState}\npool signer ${a.poolSigner}\npool token account ${a.poolAta}`);
 
+// Transaction 0: the mint authority multisig, before the lookup table that lists it.
+const multisig = await mintAuthorityMultisig(authority.address, mint);
+console.log(`mint authority multisig ${multisig} (1 of: pool signer, admin ${mintAuthorityAdmin})`);
+await sendSteps("transaction 0", [
+  ["mint authority multisig", await createMintAuthorityMultisigIxs(authority, mint, a.poolSigner, mintAuthorityAdmin)],
+]);
+const multisigProblem = await mintAuthorityMultisigProblem(multisig, a.poolSigner, mintAuthorityAdmin);
+if (multisigProblem) throw new Error(multisigProblem);
+
 // Transaction 1: everything that needs the mint authority, and the lookup table.
 const reg1 = await registryState(a);
 let lut: Address | undefined;
 const lutIxs: Instruction[] = [];
 if (!reg1 || reg1.lookupTable === SYSTEM_PROGRAM) {
-  // Lookup table with exactly the accounts the router expects, in its order.
+  // Lookup table with exactly the accounts the router expects, in its order, then the mint
+  // authority multisig, which the pool looks up among the remaining accounts when it mints.
   const slot = await withRetry(() => rpc.getSlot({ commitment: "finalized" }).send());
   const [table, bump] = await getProgramDerivedAddress({
     programAddress: ALT_PROGRAM,
     seeds: [new Uint8Array(enc.encode(authority.address)), encodeU64(slot)],
   });
   lut = table;
-  const entries = [lut, a.tokenAdminRegistry, a.poolProgram, a.poolState, a.poolAta, a.poolSigner, TOKEN_2022_PROGRAM_ID, mint, a.feeBillingTokenConfig, a.externalPoolsSigner];
+  const entries = [lut, a.tokenAdminRegistry, a.poolProgram, a.poolState, a.poolAta, a.poolSigner, TOKEN_2022_PROGRAM_ID, mint, a.feeBillingTokenConfig, a.externalPoolsSigner, multisig];
   const altMetas = [
     { address: lut, role: AccountRole.WRITABLE },
     { address: authority.address, role: AccountRole.READONLY_SIGNER, signer: authority },
@@ -184,10 +206,13 @@ if (handoffMintAuthority) {
   if (!mintAccount.exists) throw new Error(`mint ${mint} not found`);
   const current = getMintDecoder().decode(mintAccount.data).mintAuthority;
   const holder = current.__option === "Some" ? current.value : null;
-  if (holder !== a.poolSigner && holder !== authority.address)
-    throw new Error(`mint authority is ${holder}, not ${authority.address}; cannot hand it to the pool`);
-  steps.push([`mint authority → pool signer ${a.poolSigner}`, holder === authority.address ? [
-    getSetAuthorityInstruction({ owned: mint, owner: authority, authorityType: AuthorityType.MintTokens, newAuthority: a.poolSigner }),
+  if (holder !== multisig && holder !== authority.address)
+    throw new Error(`mint authority is ${holder}, not ${authority.address}; cannot hand it to the multisig`);
+  // Without the multisig in the (soon frozen) table the pool could never mint.
+  if (table && !(await lookupTableAddresses(table)).includes(multisig))
+    throw new Error(`lookup table ${table} does not list the multisig ${multisig}; the pool could not mint through it`);
+  steps.push([`mint authority → multisig ${multisig}`, holder === authority.address ? [
+    getSetAuthorityInstruction({ owned: mint, owner: authority, authorityType: AuthorityType.MintTokens, newAuthority: multisig }),
   ] : []]);
 }
 await sendSteps("transaction 2", steps);

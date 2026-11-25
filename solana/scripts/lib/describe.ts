@@ -1,9 +1,10 @@
 // Readable descriptions of the instructions in a multisig action, printed next to its base58 so the
 // members can check what they approve on their Ledgers: Core instructions by name with their
-// arguments and named accounts (from the IDL), the CCIP handoff instructions, program upgrades.
+// arguments and named accounts (from the IDL), the CCIP handoff instructions, program upgrades, and
+// moving a mint authority (Token-2022 SetAuthority).
 import { createHash } from "node:crypto";
 import { getAddressDecoder, type Instruction } from "@solana/kit";
-import { CORE_PROGRAM_ID, idl } from "./core.ts";
+import { CORE_PROGRAM_ID, TOKEN_2022_PROGRAM_ID, idl } from "./core.ts";
 
 const dec = getAddressDecoder();
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
@@ -65,6 +66,13 @@ export function describeInstruction(ix: Instruction): string {
     // A write without data copies a whole buffer (the third account) into the account.
     const source = data[0] === 3 ? `, buffer ${accounts[2]}` : data[0] === 0 && data.length === 5 ? `, copy of buffer ${accounts[2]}` : "";
     return `IDL (Program Metadata) ${ops[data[0]] ?? `op ${data[0]}`}: account ${accounts[0]}${source}`;
+  }
+  if (ix.programAddress === TOKEN_2022_PROGRAM_ID && data[0] === 6) {
+    // SetAuthority: type, Option<new authority>; accounts: owned, owner, then a multisig's signing members.
+    const type = ({ 0: "mint", 1: "freeze" } as Record<number, string>)[data[1]] ?? `type ${data[1]}`;
+    const next = data[2] === 1 ? dec.decode(data.subarray(3, 35)) : "none";
+    const members = accounts.length > 2 ? `, signed by its member ${accounts.slice(2).join(", ")}` : "";
+    return `Token-2022 SetAuthority: ${accounts[0]} ${type} authority → ${next} (current authority ${accounts[1]}${members})`;
   }
   const ccip = ccipByDisc.get(hex(data.subarray(0, 8)));
   if (ccip) return `CCIP ${ccip} on ${ix.programAddress} [${accounts.join(", ")}]`;

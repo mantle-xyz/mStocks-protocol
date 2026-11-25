@@ -1,9 +1,10 @@
 // All checks of one launched stock, PASS or FAIL in one command (exit 1 on a problem):
 //   - the mint: every authority with Core (freeze, scaled UI amount, pause, metadata pointer and
-//     update authority, permanent delegate), the mint authority with the CCIP pool, the dormant
-//     transfer hook held by the config's hook authority, not paused;
+//     update authority, permanent delegate), the mint authority a 1-of-2 Token-2022 multisig of the
+//     CCIP pool signer and the config's admin, the dormant transfer hook held by the config's hook
+//     authority, not paused;
 //   - CCIP on Solana: token admin and pool owner = the config's CCIP admin, nothing pending, pool set,
-//     its lookup table frozen;
+//     its lookup table frozen and listing the mint authority multisig;
 //   - Mantle: ccip-mantle-setup.sh verify (pool from the TokenAdminRegistry), check-multiplier.ts and
 //     check-supply.ts.
 //   NETWORK=mainnet tsx scripts/check-stock.ts --mint <mint>
@@ -12,7 +13,15 @@ import { fileURLToPath } from "node:url";
 import { address, fetchEncodedAccount } from "@solana/kit";
 import { getMintDecoder } from "@solana-program/token-2022";
 import { signerAddress } from "./lib/admin.ts";
-import { ccipAccounts, lookupTableAuthority, poolOwnership, registryState, SYSTEM_PROGRAM } from "./lib/ccip.ts";
+import {
+  ccipAccounts,
+  lookupTableAddresses,
+  lookupTableAuthority,
+  mintAuthorityMultisigProblem,
+  poolOwnership,
+  registryState,
+  SYSTEM_PROGRAM,
+} from "./lib/ccip.ts";
 import { ccipAdmin, config, NETWORK, setting } from "./lib/config.ts";
 import { authorityPda, mantleTokenOf } from "./lib/core.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
@@ -47,7 +56,14 @@ const acc = await withRetry(() => fetchEncodedAccount(rpc, mint));
 if (!acc.exists) throw new Error(`mint ${mint} not found`);
 const m = getMintDecoder().decode(acc.data);
 const opt = (o: { __option: string; value?: unknown }) => (o.__option === "Some" ? String(o.value) : "none");
-expect("mint authority (CCIP pool signer)", opt(m.mintAuthority), ccip.poolSigner);
+// The mint authority: a 1-of-2 multisig of the pool signer and the admin's vault, so the pool mints
+// and the admin can move the authority to another pool (lib/ccip.ts).
+const mintAdmin = await signerAddress(setting(undefined, "admins.admin", "admin"));
+const minter = opt(m.mintAuthority);
+const multisigProblem = minter === "none" ? "no mint authority" : await mintAuthorityMultisigProblem(minter as never, ccip.poolSigner, mintAdmin);
+if (multisigProblem)
+  fail("mint authority (multisig of the pool signer and the admin)", minter === ccip.poolSigner ? `${minter} is the pool signer itself: only Chainlink could move it` : multisigProblem);
+else ok("mint authority (1-of-2 multisig: pool signer, admin)", minter);
 expect("freeze authority", opt(m.freezeAuthority), authority);
 const hook = await signerAddress(setting(undefined, "admins.hook_authority", "hook-authority"));
 const ext = Object.fromEntries((m.extensions.__option === "Some" ? m.extensions.value : []).map((e) => [e.__kind, e as Record<string, unknown>]));
@@ -75,6 +91,9 @@ else {
   // A table authority could close the table and stop every transfer: it must be frozen.
   const tableAuthority = reg.lookupTable !== SYSTEM_PROGRAM ? await lookupTableAuthority(reg.lookupTable) : undefined;
   expect("lookup table frozen", tableAuthority === null ? "frozen" : `authority ${tableAuthority}`, "frozen");
+  // The pool finds the mint authority multisig among the table's accounts when it mints.
+  if (reg.lookupTable !== SYSTEM_PROGRAM && minter !== "none")
+    ((await lookupTableAddresses(reg.lookupTable)).includes(minter as never) ? ok : fail)("lookup table lists the mint authority", minter);
   expect("pool owner", pool.owner, admin);
   expect("proposed pool owner", pool.proposed, SYSTEM_PROGRAM);
 }
