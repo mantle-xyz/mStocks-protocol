@@ -9,7 +9,7 @@ import { config } from "./lib/config.ts";
 import { coreInstruction, mintOpAccounts } from "./lib/core.ts";
 import { parseArgs, required } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["operator", "mint", "resume"]);
 const resume = args.resume === "true";
 const unpausers = config?.roles.unpauser ?? [];
 const operator = await resolveAdmin(

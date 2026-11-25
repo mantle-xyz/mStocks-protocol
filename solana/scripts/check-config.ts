@@ -14,7 +14,7 @@ import { CONFIG_PATH, config, ROLE_NAMES, type Config } from "./lib/config.ts";
 import { fetchConfig, programDataPda, ROLE_NAMES_IN_ORDER, roleHolders } from "./lib/core.ts";
 import { parseArgs, rpc, RPC_URL, withRetry } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["roles-rpc"]);
 if (!config) throw new Error("set NETWORK=mainnet|testnet (or NETWORK=<file>.toml)");
 const path = CONFIG_PATH;
 const cfg: Config = structuredClone(config);

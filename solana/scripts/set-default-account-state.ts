@@ -7,7 +7,7 @@ import { setting } from "./lib/config.ts";
 import { authorityPda, configPda, coreInstruction, encodeU8, mintStatePda } from "./lib/core.ts";
 import { parseArgs, required } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["admin", "payer", "mint", "frozen"]);
 const admin = await resolveAdmin(setting(args.admin, "admins.admin", "admin"));
 const payer = await optionalPayer(args.payer, admin);
 const mint = address(required(args, "mint"));

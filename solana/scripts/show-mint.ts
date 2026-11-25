@@ -4,7 +4,7 @@ import { address, fetchEncodedAccount } from "@solana/kit";
 import { getMintDecoder } from "@solana-program/token-2022";
 import { parseArgs, required, rpc } from "./lib/env.ts";
 
-const mint = address(required(parseArgs(), "mint"));
+const mint = address(required(parseArgs(["mint"]), "mint"));
 const account = await fetchEncodedAccount(rpc, mint);
 if (!account.exists) throw new Error(`mint ${mint} not found`);
 const decoded = getMintDecoder().decode(account.data);

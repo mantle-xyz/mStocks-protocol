@@ -16,7 +16,7 @@ import { ccipAccounts, handoffAccepts, handoffProposals, poolOwnership, registry
 import { ccipAdmin } from "./lib/config.ts";
 import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["authority", "mint", "to", "router", "pool-program"]);
 const authority = await loadKeypair(required(args, "authority"));
 const mint = address(required(args, "mint"));
 const target = await resolveAdmin(args.to && args.to !== "true" ? args.to : ccipAdmin());

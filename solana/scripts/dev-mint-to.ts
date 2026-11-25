@@ -10,7 +10,7 @@ import {
 import { TOKEN_2022_PROGRAM_ID } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["mint-authority", "mint", "owner", "amount"]);
 const mintAuthority = await loadKeypair(required(args, "mint-authority"));
 const mint = address(required(args, "mint"));
 const owner = address(required(args, "owner"));

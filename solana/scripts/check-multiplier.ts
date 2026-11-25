@@ -16,7 +16,7 @@ import { ethCall as mantleCall, SELECTORS } from "./lib/mantle.ts";
 
 const SKEW_SECONDS = 60n;
 
-const args = parseArgs();
+const args = parseArgs(["mints", "mantle-rpc"]);
 const mantleRpc = process.env.MANTLE_RPC_URL || config?.mantle.rpc || required(args, "mantle-rpc");
 const mints: Address[] = required(args, "mints").split(",").map((m) => address(m.trim()));
 

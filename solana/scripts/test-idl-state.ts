@@ -9,7 +9,7 @@ import { closeIdlInstruction, idlState, unfinishedIdlUpload } from "./lib/idl.ts
 
 const [command, ...rest] = process.argv.slice(2);
 if (command !== "unfinished") throw new Error("usage: tsx scripts/test-idl-state.ts unfinished [--deployer <key>]");
-const deployer = await loadSigner(deployerKey(parseArgs(rest), "deployer"));
+const deployer = await loadSigner(deployerKey(parseArgs(["deployer"], rest), "deployer"));
 const programData = await programDataPda();
 if ((await idlState(CORE_PROGRAM_ID)).kind !== "none") await send(deployer, [await closeIdlInstruction(CORE_PROGRAM_ID, programData, deployer)]);
 const json = readFileSync(new URL("../idl/mstocks_core.json", import.meta.url), "utf8");

@@ -33,13 +33,21 @@ export const rpc = createSolanaRpc(RPC_URL);
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const rateLimited = (e: unknown) => String((e as Error)?.message ?? e).includes("429");
-
 /**
- * Retries a request on HTTP 429 (provider rate limits), or on whatever `retryable` accepts, with
- * exponential backoff.
+ * Errors worth another try: rate limits and gateway errors in either client's wording (kit "HTTP
+ * error (503): …", web3.js "503 Service Unavailable: …") and failed connections (dropped, refused, timed out),
+ * found anywhere in the cause chain (fetch reports "fetch failed" with the system error as cause).
+ * A program error is final, and resending a signed transaction is safe: it has one signature.
  */
-export async function withRetry<T>(call: () => Promise<T>, attempts = 6, retryable = rateLimited): Promise<T> {
+const transient = (e: unknown) => {
+  const parts: string[] = [];
+  for (let x = e as { message?: unknown; code?: unknown; cause?: unknown } | undefined, depth = 0; x && depth < 5; x = x.cause as typeof x, depth++)
+    parts.push(String(x.message ?? x), String(x.code ?? ""));
+  return /HTTP error \((?:429|50[234])\)|\b(?:429|50[234]) [A-Z]|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_SOCKET|socket hang up/.test(parts.join(" "));
+};
+
+/** Retries a request on a transient error (see `transient`) or whatever `retryable` accepts, with exponential backoff. */
+export async function withRetry<T>(call: () => Promise<T>, attempts = 6, retryable = transient): Promise<T> {
   for (let i = 0; ; i++) {
     try {
       return await call();
@@ -50,15 +58,23 @@ export async function withRetry<T>(call: () => Promise<T>, attempts = 6, retryab
   }
 }
 
-/** Parses `--name value` pairs; a flag without a value is `"true"`. */
-export function parseArgs(argv = process.argv.slice(2)): Record<string, string> {
+/**
+ * Parses `--name value` pairs; a flag without a value is `"true"`. Only the options in `known` are
+ * accepted, each once: a mistyped flag would otherwise be ignored, and for flags that choose what a
+ * script does (`--dry-run`, `--thaw`, `--resume`, `--frozen`) the script would do the opposite.
+ */
+export function parseArgs(known: readonly string[], argv = process.argv.slice(2)): Record<string, string> {
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (!key.startsWith("--")) throw new Error(`unexpected argument ${key}`);
+    const name = key.slice(2);
+    if (!known.includes(name))
+      throw new Error(`unknown option ${key}; this script takes ${known.length ? known.map((k) => `--${k}`).join(", ") : "no options"}`);
+    if (name in out) throw new Error(`${key} is given twice`);
     const next = argv[i + 1];
-    if (next === undefined || next.startsWith("--")) out[key.slice(2)] = "true";
-    else out[key.slice(2)] = argv[++i];
+    if (next === undefined || next.startsWith("--")) out[name] = "true";
+    else out[name] = argv[++i];
   }
   return out;
 }

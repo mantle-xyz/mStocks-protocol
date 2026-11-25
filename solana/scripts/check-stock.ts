@@ -27,7 +27,7 @@ import { authorityPda, mantleTokenOf } from "./lib/core.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
 import { registeredPool } from "./lib/mantle.ts";
 
-const args = parseArgs();
+const args = parseArgs(["mint"]);
 if (!config || !NETWORK) throw new Error("set NETWORK=mainnet|testnet: check-stock compares against the network config");
 const mint = address(required(args, "mint"));
 const ROOT = fileURLToPath(new URL("..", import.meta.url));

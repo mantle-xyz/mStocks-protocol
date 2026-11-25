@@ -11,7 +11,7 @@ import { loadKeypair, parseArgs, required, rpc, send } from "./lib/env.ts";
 
 const BATCH = 8;
 
-const args = parseArgs();
+const args = parseArgs(["operator", "mints", "dry-run"]);
 const operator = await loadKeypair(required(args, "operator"));
 
 async function registeredMints(): Promise<Address[]> {

@@ -7,7 +7,7 @@ import { adminAddress, optionalPayer, resolveAdmin, revokeRoleIx, roleAdminSetti
 import { assertRoleAdmin } from "./lib/core.ts";
 import { parseArgs, required } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["admin", "payer", "role", "member"]);
 const role = required(args, "role");
 const admin = await resolveAdmin(roleAdminSetting(role, args.admin));
 const payer = await optionalPayer(args.payer, admin);

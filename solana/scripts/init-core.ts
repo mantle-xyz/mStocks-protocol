@@ -10,7 +10,7 @@ import { setting } from "./lib/config.ts";
 import { authorityPda, configPda, coreInstruction, concat, CORE_PROGRAM_ID, encodePubkey, programDataPda } from "./lib/core.ts";
 import { deployerKey, loadSigner, parseArgs, send } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["upgrade-authority", "admin", "compliance-admin", "hook-authority"]);
 // The upgrade authority is the deployer until program.ts handoff: --upgrade-authority, else DEPLOYER
 // (a keypair file or a private key).
 const upgradeAuthority = await loadSigner(deployerKey(args, "upgrade-authority"));

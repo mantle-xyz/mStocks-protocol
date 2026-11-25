@@ -15,7 +15,7 @@ import { config, setting } from "./lib/config.ts";
 import { COMPLIANCE_ROLES, fetchConfig, ROLE_NAMES_IN_ORDER, roleHolders } from "./lib/core.ts";
 import { parseArgs, RPC_URL } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["admin", "compliance-admin", "roles-rpc", "dry-run"]);
 if (!config) throw new Error("set NETWORK=mainnet|testnet: sync-roles works from the network config");
 const admins: Record<"admin" | "compliance", Admin> = {
   admin: await resolveAdmin(setting(args.admin, "admins.admin", "admin")),

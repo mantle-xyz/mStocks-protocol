@@ -4,7 +4,7 @@ import { address, fetchEncodedAccount } from "@solana/kit";
 import { AccountState, getTokenDecoder } from "@solana-program/token-2022";
 import { parseArgs, required, rpc } from "./lib/env.ts";
 
-const account = address(required(parseArgs(), "account"));
+const account = address(required(parseArgs(["account"]), "account"));
 const data = await fetchEncodedAccount(rpc, account);
 if (!data.exists) throw new Error(`account ${account} not found`);
 const token = getTokenDecoder().decode(data.data);

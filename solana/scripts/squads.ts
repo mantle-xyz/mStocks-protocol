@@ -24,7 +24,7 @@ import { parseArgs, required } from "./lib/env.ts";
 import { connection, decodeImport, loadWeb3Keypair, multisigFromConfig, propose, sendWeb3, vaultOf } from "./lib/squads.ts";
 
 const [command, ...rest] = process.argv.slice(2);
-const args = parseArgs(rest);
+const args = parseArgs(["multisig", "member", "members", "creator", "threshold", "time-lock", "base58", "index", "memo", "text"], rest);
 const { Multisig, Proposal, ProgramConfig } = multisig.accounts;
 
 const msArg = () => multisigFromConfig(required(args, "multisig"));

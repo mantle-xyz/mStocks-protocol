@@ -64,7 +64,7 @@ import { ccipAdmin, setting } from "./lib/config.ts";
 import { TOKEN_2022_PROGRAM_ID, concat, encodeEvmAddress, encodeU64 } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, rpc, send, withRetry } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["authority", "mint", "remote-token", "remote-pool", "remote-selector", "remote-decimals", "rate-capacity", "rate-per-second", "no-rate-limit", "handoff-to", "handoff-mint-authority", "mint-authority-admin", "router", "pool-program", "fee-quoter"]);
 const authority = await loadKeypair(required(args, "authority"));
 const mint = address(required(args, "mint"));
 const remoteSelector = BigInt(setting(args["remote-selector"], "mantle.chain_selector", "remote-selector"));

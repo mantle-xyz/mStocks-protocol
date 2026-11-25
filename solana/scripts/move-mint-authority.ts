@@ -15,7 +15,7 @@ import { setting } from "./lib/config.ts";
 import { TOKEN_2022_PROGRAM_ID } from "./lib/core.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["mint", "to", "admin", "payer"]);
 const admin = await resolveAdmin(setting(args.admin, "admins.admin", "admin"));
 const payer = await optionalPayer(args.payer, admin);
 const vault = adminAddress(admin);

@@ -6,7 +6,7 @@ import { getTransferSolInstruction } from "@solana-program/system";
 import { coreInstruction, concat, encodeMetadataField, encodeString, mintOpAccounts } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, rpc, send } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["operator", "mint", "field", "value"]);
 const operator = await loadKeypair(required(args, "operator"));
 const mint = address(required(args, "mint"));
 const field = required(args, "field");

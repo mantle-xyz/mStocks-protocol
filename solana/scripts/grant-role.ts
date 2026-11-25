@@ -8,7 +8,7 @@ import { adminAddress, grantRoleIx, optionalPayer, resolveAdmin, roleAdminSettin
 import { assertRoleAdmin } from "./lib/core.ts";
 import { parseArgs, required } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["admin", "payer", "role", "member"]);
 const role = required(args, "role");
 // Core rejects it too, but for a multisig only when the proposal executes, after its time lock.
 if (role === "Clawback") throw new Error("Clawback is retired and cannot be granted; clawback.ts is signed by the compliance admin");

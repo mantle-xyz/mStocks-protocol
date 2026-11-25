@@ -25,7 +25,7 @@ const OFFRAMP = address("offqSMQWgQud6WJz694LRzkeN5kMYpCHTpXQr3Rkcjm");
 // offramp, allowed_offramp, authority, ...
 const AUTHORITY_INDEX = 6;
 
-const args = parseArgs();
+const args = parseArgs(["failed-tx", "payer", "compute-units"]);
 const payer = await loadKeypair(required(args, "payer"));
 const failedTx = toSignature(required(args, "failed-tx"));
 

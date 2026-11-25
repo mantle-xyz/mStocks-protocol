@@ -86,6 +86,13 @@ Commands that work from the config alone:
 
 ## Scripts
 
+Every script refuses an option it does not take, or one given twice, before doing anything: a
+mistyped `--dry-run`, `--thaw`, `--resume` or `--frozen` would otherwise be ignored and the script
+would do the opposite. RPC requests are retried on rate limits, gateway errors (502–504) and
+failed connections. After another failure, the setup and role scripts can simply be rerun (they
+skip what is already done on chain); scripts that move tokens (`clawback.ts`, `ccip-send.ts`,
+`ccip-send-evm.sh`, `dev-mint-to.ts`) move them again on every run, so check the chain first.
+
 Admin and multisig-held steps (`--admin`, `--compliance-admin`, `--operator` of a multisig role,
 ccip-handoff's `--to`) accept:
 

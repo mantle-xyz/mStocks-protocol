@@ -19,7 +19,7 @@ import { loadKeypair, parseArgs, required, rpc, send, transactionSize } from "./
 import { scaledToken } from "./lib/mantle.ts";
 import { createMintInstructions, evmAddressBytes, mintSizes } from "./lib/mint.ts";
 
-const args = parseArgs();
+const args = parseArgs(["payer", "registrar", "mint-keypair", "mantle-token", "name", "symbol", "isin", "uri", "hook-authority", "initial-multiplier-1e18", "dry-run"]);
 const payer = await loadKeypair(required(args, "payer"));
 const registrarKey = args.registrar ? await loadKeypair(args.registrar) : payer;
 // The same key loaded twice is two signer objects, which @solana/kit rejects.

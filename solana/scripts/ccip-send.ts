@@ -27,7 +27,7 @@ const TOKEN_PROGRAM = address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const NATIVE_MINT = address("So11111111111111111111111111111111111111112");
 const ZERO = address("11111111111111111111111111111111");
 
-const args = parseArgs();
+const args = parseArgs(["sender", "mint", "amount", "receiver", "dest-selector", "router", "compute-units", "gas-limit"]);
 const sender = await loadKeypair(required(args, "sender"));
 const mint = address(required(args, "mint"));
 const amount = BigInt(required(args, "amount"));

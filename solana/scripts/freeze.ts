@@ -9,7 +9,7 @@ import { loadKeypair, parseArgs, required, rpc, send } from "./lib/env.ts";
 /** Token accounts per transaction; keeps the transaction well under the size limit. */
 const BATCH = 20;
 
-const args = parseArgs();
+const args = parseArgs(["operator", "mint", "owner", "accounts", "thaw"]);
 const operator = await loadKeypair(required(args, "operator"));
 const mint = address(required(args, "mint"));
 const thaw = args.thaw === "true";

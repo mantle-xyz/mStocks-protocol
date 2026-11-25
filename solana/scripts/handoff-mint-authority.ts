@@ -20,7 +20,7 @@ import {
 import { setting } from "./lib/config.ts";
 import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["mint-authority", "mint", "mint-authority-admin", "pool-program", "yes"]);
 const mintAuthority = await loadKeypair(required(args, "mint-authority"));
 const mint = address(required(args, "mint"));
 const admin = adminAddress(await resolveAdmin(setting(args["mint-authority-admin"], "admins.admin", "mint-authority-admin")));

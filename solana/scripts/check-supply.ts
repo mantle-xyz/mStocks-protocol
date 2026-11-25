@@ -20,7 +20,7 @@ import { config, setting } from "./lib/config.ts";
 import { parseArgs, required, rpc, withRetry } from "./lib/env.ts";
 import { ethCall as mantleCall, registeredPool, SELECTORS, word } from "./lib/mantle.ts";
 
-const args = parseArgs();
+const args = parseArgs(["mints", "registry", "mantle-rpc"]);
 const mantleRpc = process.env.MANTLE_RPC_URL || config?.mantle.rpc || required(args, "mantle-rpc");
 const registry = setting(args.registry, "mantle.token_admin_registry", "registry");
 const mints: Address[] = required(args, "mints")

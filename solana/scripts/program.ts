@@ -37,7 +37,7 @@ import { multisigFromConfig, upgradeIx } from "./lib/squads.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const [command, ...rest] = process.argv.slice(2);
-const args = parseArgs(rest);
+const args = parseArgs(["deployer", "so", "idl", "to"], rest);
 const SO = args.so ?? `${ROOT}target/deploy/mstocks_core.so`;
 const PROGRAM_KEYPAIR = `${ROOT}target/deploy/mstocks_core-keypair.json`;
 /** The committed IDL: what the scripts encode instructions with and what is published on chain. */

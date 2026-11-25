@@ -6,7 +6,7 @@ import {
 } from "./lib/core.ts";
 import { loadKeypair, parseArgs, required, send } from "./lib/env.ts";
 
-const args = parseArgs();
+const args = parseArgs(["scheduler", "mint", "multiplier-1e18", "effective-at"]);
 const scheduler = await loadKeypair(required(args, "scheduler"));
 const mint = address(required(args, "mint"));
 const multiplier = BigInt(required(args, "multiplier-1e18"));
